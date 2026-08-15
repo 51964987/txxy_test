@@ -1,0 +1,209 @@
+# txxy 抓取与下载工具
+
+从 txxy（本地代理 `127.0.0.1:1024`）批量抓取版块帖子列表，写入 SQLite 数据库与 CSV；并支持下载帖子页内的图片（GIF/JPG 分类存放）、视频、种子，以及导出磁力链接与云盘链接清单。
+
+## 环境要求
+
+- Python 3.10+
+- 安装依赖：
+
+```bash
+pip install -r requirements.txt
+```
+
+## 目录结构
+
+```
+txxy_test/
+├── scraper.py          # 单版块抓取器（写入 CSV + SQLite，断点续写、请求重试、连续失败保护、权限拦截检测）
+├── run_batch.py        # 多版块并发调度器（并发启动 scraper.py 子进程；1024 端口开关[可选入参] + web.exe 端口守护）
+├── file_logger.py      # 统一日志模块（输出带时间戳，执行汇总不加）
+├── download_files.py   # 帖子页下载主流程（页面访问 + 下载编排 + 执行汇总）
+├── extract_images.py   # 图片专属模块（提取 / 请求头 / 内容校验 / 下载 / 分目录与命名）
+├── extract_videos.py   # 视频专属模块（提取 / 请求头 / 内容校验 / 下载 / 命名）
+├── extract_torrents.py # torrent/种子专属模块（rmdown 中转解析 / 直链下载 / 标题解析）
+├── extract_magnets.py  # 磁力链接专属模块（magnet 地址提取 / TXT 清单导出）
+├── extract_clouds.py   # 云盘链接专属模块（redircdn 中转还原 / TXT 清单导出）
+├── media_download.py   # 通用下载核心（Referer 降级重试 / 内容校验 / 断点续传）
+├── init_db.py          # SQLite 数据库一次性初始化
+├── run_daily.bat       # Windows 计划任务批处理入口（固定工作目录）
+├── requirements.txt
+├── db/posts.db         # SQLite 数据库（title 主键去重）
+├── outputs/日期/        # 抓取结果 CSV 与进度文件
+└── downloads/标题/      # 帖子页下载的图片 / 视频 / 种子及磁力·云盘清单
+```
+
+下载相关模块职责划分（依赖单向、无循环导入）：
+
+```
+extract_images.py ──┐
+extract_videos.py ──┼─► media_download.py   # 图片/视频共用的通用下载核心
+extract_torrents.py ┘
+extract_magnets.py   # 磁力链接提取 + TXT 导出（无需网络下载）
+extract_clouds.py    # 云盘链接提取 + TXT 导出（无需网络下载）
+download_files.py ──► 调用各 extract 模块（页面访问 + 下载编排，无循环依赖）
+```
+
+- `download_files.py`：页面访问（HTML 获取、标题提取、自动重试）与下载编排，调用下方各 extract 模块；
+- `extract_images.py`：图片一切相关——地址提取（懒加载属性兼容、占位图过滤）、`IMG_HEADERS`、magic bytes 校验、`download_image`、`gifs/jpgs` 分目录与命名规则（`needs_split_dirs` / `image_save_path`）；
+- `extract_videos.py`：视频一切相关——地址提取（video/source/a/正则兜底）、`VIDEO_HEADERS`、magic bytes 校验、`download_video`、`videos` 目录与命名规则（`video_save_path`）；
+- `extract_torrents.py`：种子一切相关——`extract_other_urls` 提取（rmdown 中转 + .torrent 直链）、rmdown 表单解析、torrent 头校验、bencode 标题解析、`download_torrent`、`sanitize_title`（标题清理共用）；
+- `extract_magnets.py`：磁力链接一切相关——匹配全部 `magnet:` 地址（去重保序、还原 `&amp;`）、`save_magnets_txt` 导出 `magnets.txt`；
+- `extract_clouds.py`：云盘链接一切相关——匹配 `/2023.redircdn.com/?` 中转地址并还原真实链接（去前缀、`______`→`.`、还原 `&amp;`、过滤 `action=image&url=` 图片中转占位页）、`save_clouds_txt` 导出 `clouds.txt`；
+- `media_download.py`：`download_media()` 通用下载核心，被图片/视频模块共用。
+
+## 使用说明
+
+### 1. 初始化数据库（一次性）
+
+```bash
+python init_db.py
+```
+
+在 `db/` 下创建共享数据库 `posts.db`，`title` 为主键，重复标题自动忽略（`INSERT OR IGNORE`）。所有日期批次的抓取共用此库。
+
+### 2. 批量抓取版块列表（推荐）
+
+```bash
+python run_batch.py            # 默认：USE_LOCAL_PROXY 取配置区默认值（开启本地代理）
+python run_batch.py false      # 可选入参：本次关闭本地代理，直接访问 REMOTE_ROOT_URL 域名
+python run_batch.py true       # 可选入参：本次强制开启本地代理（即使配置区已改为 False）
+```
+
+- 遍历 `run_batch.py` 顶部的 `SECTIONS`，每个版块启动一个独立进程执行 `scraper.py`；
+- `MAX_WORKERS` 控制并发数（默认 3），`STAGGER_DELAY` 错开启动时间（默认 5 秒），降低反爬风险；
+- 结果输出到 `outputs/YYYYMMDD/`，数据写入 `db/posts.db`；
+- 执行汇总同时展示 **CSV 写入量**与 **SQLite 实际入库量**（按标题去重），如 `数据总量: CSV 12898 条 / SQLite 入库 20 条`，逐版块明细同步显示两项数据。
+
+**1024 端口开关（`USE_LOCAL_PROXY`，默认开启）**：既可改顶部配置区，也可作为**可选命令行入参**（传入时按实际值执行，优先于配置区）：
+
+- 命令行：`python run_batch.py [true|false]`（接受 `true/1/yes/on` 与 `false/0/no/off`，大小写不敏感），如 `python run_batch.py false`；不传时取配置区默认值；
+- `USE_LOCAL_PROXY = True`（默认）：开启本地代理监控，`run_batch.py` 自动探测/启动/关闭 1024 端口 web 服务，`scraper.py` 使用 `http://127.0.0.1:1024` 作为根地址（命令行不传第 4 参）；
+- `USE_LOCAL_PROXY = False`：**1024 端口启不起来时的备选方案**——手工关闭端口监控，并在 `REMOTE_ROOT_URL`（默认示例 `https://xx.com`）配置实际可访问的域名根地址；`run_batch.py` 不再探测/启停端口，自动将该域名作为第 4 参传给 `scraper.py`，抓取直接访问该域名。
+
+**端口守护（web 服务自动启停，仅 `USE_LOCAL_PROXY=True` 时生效）**：抓取目标由本机 `web.exe` 提供（`127.0.0.1:1024`），`run_batch.py` 自动管理该服务：
+
+- 运行前先探测 1024 端口：**未监听**则启动 `WEB_APP_EXE`（默认 `D:\Tools\1024app_win10_2025_1.02\web.exe`）并等待端口就绪（最长 `WEB_APP_START_TIMEOUT`=15 秒），启动失败直接终止本次抓取，并提示改用 `USE_LOCAL_PROXY=False` + `REMOTE_ROOT_URL`；
+- 端口**已监听**：视为外部进程占用，跳过启动，任务结束后也不关闭（不干扰外部进程）；
+- 全部任务结束后：关闭本脚本启动的 web.exe 并等待端口释放（最长 `WEB_APP_SHUTDOWN_TIMEOUT`=10 秒）；`terminate` 失效时按端口定位 PID 强制结束进程树，确保无残留；
+- 启动、就绪、关闭、释放每个环节均打印 `[服务]` 前缀日志。
+
+### 3. 单版块抓取
+
+```bash
+python scraper.py <版块ID> [起始页] [结束页]
+```
+
+示例：
+
+```bash
+python scraper.py 2                 # 抓取版块 2（第 1 页 ~ 配置的 END_PAGE）
+python scraper.py 7 1 50            # 抓取版块 7，第 1 ~ 50 页
+python scraper.py 2 https://xx.com  # 仅指定实际域名（根地址），页数取默认值
+python scraper.py 2 1 100 https://xx.com  # 指定实际域名（根地址）+ 抓取范围，绕过本地 1024 端口
+```
+
+- 版块 ID 为**必填**参数，`[起始页]` / `[结束页]` 可选（数字参数依次识别），缺省取顶部配置区 `START_PAGE` / `END_PAGE`；`[根地址]` 可选且**位置不限**（http/https 开头即识别为根地址），传入实际域名（如 `https://xx.com`）时覆盖默认的本地代理根地址，`BASE_URL` 与页面链接拼接均基于该域名（`run_batch.py` 关闭本地代理开关后会自动以 `python scraper.py <版块ID> <根地址>` 的形式传入）；
+- 顶部配置区可调整 `REQUEST_INTERVAL`（请求间隔）、`AUTO_DETECT_END_PAGE`（动态获取末页）等；
+- 断点续写：进度写入 `*_progress.txt`，重新运行会从上次完成的页码继续；
+- 请求重试：网络异常（连接拒绝/超时）与 `408/429/5xx` 状态码按退避递增重试，第 N 次重试等待 `RETRY_BASE_DELAY`×N 秒，最多 `REQUEST_MAX_RETRIES` 次（默认 3）；其它 `4xx` 确定性失败不重试直接跳过；
+- 失败页不推进进度：重试后仍失败的页保留在断点进度之外，下次运行会重抓该页，避免漏数据；
+- 连续失败保护：连续 `MAX_CONSECUTIVE_FAILURES`（默认 3）页失败视为站点不可用，停止本次抓取避免空转；
+- 检测到页面权限拦截文本时自动终止（`sys.exit(1)`）。
+
+输出目录结构：
+
+```
+outputs/
+└── 20260812/
+    ├── 2_output_20260812.csv   # 抓取结果
+    ├── 2_progress.txt          # 进度文件（断点续写）
+    ├── 2_output_20260812.log   # 日志文件（带时间戳）
+    └── ...
+```
+
+### 4. 下载帖子页面的图片、视频与资源清单
+
+```bash
+python download_files.py "帖子URL1"            # URL 为必填入参，至少传一个
+python download_files.py "帖子URL1" "帖子URL2"  # 支持多个 URL 逐个处理
+python download_files.py "https://www.rmdown.com/link.php?hash=xxx"  # 直接下载种子 → downloads/<种子标题或日期>
+python download_files.py "https://xxx.com/a.jpg"  # 图片/视频直链 → downloads/<文件名(不含扩展名)>/
+```
+
+- 入参必须为 `http://` / `https://` 开头的**完整链接**；漏写协议前缀（如相对路径）的入参**不会自动拼接根地址**，直接跳过并提示，绝不发起请求访问；
+- **唯一例外（第 1 个入参为媒体文件时）**：无论带不带协议前缀，均以文件名（不含扩展名）作为媒体直链统一下载目录 `downloads/<文件名>/`；带协议前缀则照常下载该文件，不带协议前缀（如 `a.jpg`）仅作目录名使用、不发起请求，后续有效链接全部下载到该目录，其余逻辑保持不变。
+
+按页面标题创建目录：
+
+```
+downloads/帖子标题/
+├── gifs/          # 仅当页面同时存在 gif 和 jpg 时创建
+│   └── 001.gif
+├── jpgs/
+│   └── 001.jpg
+├── videos/        # 仅当页面存在视频时创建
+│   └── 001.mp4
+├── magnets.txt    # 仅当页面存在磁力链接时导出（每行一条 magnet: 地址）
+└── clouds.txt     # 仅当页面存在云盘链接时导出（每行一条还原后的网盘地址）
+```
+
+- 图片目录策略：页面**同时存在 gif 与 jpg** 时分 `gifs/`、`jpgs/` 两个子目录；只有单一类型（全 gif 或全 jpg）时图片直接存标题根目录；`videos/` 仅在提取到视频时创建；
+- 每个子目录内独立连续编号；磁力/云盘为纯文本清单（UTF-8 含 BOM，记事本可直接查看），无需网络下载；
+- **媒体直链**：入参为 `.jpg/.mp4` 等图片/视频直链时，直接下载到 `downloads/<第一个文件名(不含扩展名)>/`（多个直链同目录）；`rmdown` 中转或 `.torrent` 直链则直接下载种子到 `downloads/<种子标题或日期>/`。
+
+关键实现（模块归属见上方"目录结构"）：
+
+- **页面请求自动重试**：`fetch_page` 对限流 `429`、网关/源站 `5xx`（含 `520` 等 Cloudflare 临时错误）与网络层异常（超时/连接重置）自动重试，最多 `MAX_RETRIES`（默认 3）次、递增等待；429 优先尊重 `Retry-After` 响应头；`4xx`（404/403/410 等）重试无意义，直接失败；
+- **图床反广告页**：23img.com（EasyImage 图床）只要请求头 `Accept` 含 `text/html` 就 302 到广告查看页，因此图片/视频下载使用纯类型 `Accept`（不含 `text/html`），分别定义在 `extract_images.IMG_HEADERS` 与 `extract_videos.VIDEO_HEADERS`；
+- **Referer 降级重试**：先带 Referer 下载，遇 `403/401/429`、返回内容非图片/视频或网络层异常（超时等）时，降级为无 Referer 重试一次（`media_download.download_media`）；
+- **内容校验**：按文件头 magic bytes 校验（JPEG/PNG/GIF/WebP/BMP/AVIF/SVG、MP4/WebM/FLV），拒绝把 HTML 广告页存成图片；
+- **占位图过滤**：自动跳过 `adblo_ck`、`blank.gif`、`spacer.gif` 等占位/广告拦截图；
+- **云盘链接过滤**：`extract_clouds.py` 还原链接时，含 `action=image&url=` 的图片中转占位链接（如整页图床中转页）会被剔除，不计入 `clouds.txt`（`&amp;` 形态同样命中）；
+- **断点续传**：目标文件已存在且非空时跳过，中断后重跑不重复下载。
+
+扩展新媒体类型（如音频/压缩包）：在 `extract_torrents.extract_other_urls()` 中追加提取规则，并在 `download_files.process_page()` 的"其他媒体类型"区块追加下载循环（可参考 `extract_torrents.download_torrent` 或复用 `media_download.download_media`）。
+
+## 定时任务（Windows）
+
+已注册计划任务 `txxy_daily_batch`，每天 01:00 以 SYSTEM 身份运行 `run_daily.bat`（未登录也会执行）：
+
+```bash
+# 查看任务状态
+schtasks /Query /TN "txxy_daily_batch" /V /FO LIST
+
+# 手动触发一次
+schtasks /Run /TN "txxy_daily_batch"
+
+# 删除任务
+schtasks /Delete /TN "txxy_daily_batch" /F
+```
+
+`run_daily.bat` 内容为切换到项目根目录后执行 `python run_batch.py`（使用绝对 Python 路径，不依赖 PATH）。
+
+## 日志输出
+
+所有脚本的日志统一由 `file_logger.py` 处理（各脚本 `import file_logger` 后在打印前调用一次 `file_logger.setup("<程序名>")`）：
+
+- **双写输出**：控制台与日志文件同步写入，日志文件位于 `outputs/日期/<程序名>_<日期>.log`（UTF-8、追加模式、每行立即落盘）；子进程输出（run_batch → scraper）由调度器实时转发，同样落盘；
+- **时间戳与服务标签**：非空日志行自动添加 `[YYYY-MM-DD HH:MM:SS] [<服务名>]` 前缀（`<服务名>` 即 `setup()` 传入的程序名，如 `run_batch`、`scraper_2`、`download_files`、`init_db`），终端控制台与日志文件均生效，**每条日志一眼可辨所属服务**；
+- **run_batch 汇总日志的子进程标识**：`run_batch_<日期>.log` 中，调度器自身行带 `[run_batch]` 标签；转发的子进程行额外带 `[scraper_<版块ID>]` 前缀（如 `[scraper_2]`），并发抓取时能区分该行来自哪个版块的 scraper；
+- **执行汇总不加时间戳**：汇总块、机器可读行（如 `__SUMMARY__`）用 `with file_logger.raw():` 包裹，保持原样输出（也不加服务标签）；非终端管道（子进程转发）也保持原样，保证机器解析不被破坏。
+
+## 常见问题
+
+| 现象 | 原因与解决 |
+|---|---|
+| 请求报 `WinError 10061 连接拒绝` | 本地 web 服务（127.0.0.1:1024）未运行：先执行 `python run_batch.py`（自动启动 web.exe），或手动启动 `D:\Tools\1024app_win10_2025_1.02\web.exe`；若 web.exe 无法启动，可执行 `python run_batch.py false`（或将配置区 `USE_LOCAL_PROXY` 改为 `False`），并在 `REMOTE_ROOT_URL` 配置实际域名（如 `https://xx.com`）后抓取（或 `python scraper.py 版块ID 1 100 https://xx.com` 直接指定） |
+| `[终止] 检测到权限拦截` | 当前账号无权访问该版块，脚本自动停止，检查代理/账号 |
+| `内容非图片` | 图床返回广告 HTML 页：确认使用纯图片 `Accept` 头（已内置 `extract_images.IMG_HEADERS`） |
+| 下载失败提示 `ConnectionError / Read timed out` | 网络暂时性超时，脚本已自动降级重试一次；仍失败可稍后重跑（断点续传） |
+| 数据库重复数据 | `posts` 表以 `title` 为主键自动忽略，无需清理 |
+| 日志在哪里 | `outputs/日期/<程序名>_<日期>.log`（与 CSV 同目录），如 `outputs/20260812/run_batch_20260812.log` |
+
+## 数据说明
+
+- `db/posts.db` 表结构：`posts(title PRIMARY KEY, fid, date, url, created_at)`，附带 `fid`、`date`、`fid+date` 索引；
+- CSV 与数据库同步写入：每 `BATCH_SIZE` 页刷新一次 CSV，每 `SQLITE_BATCH_ROWS` 行批量提交一次；
+- 运行结束时输出 `版块 SQLite 实际入库 N 条（标题去重后）` 与机器汇总行 `__SUMMARY__ fid=.. rows=.. db_rows=.. pages=..`，供调度器解析展示；
+- **入库量口径**：`db_rows` 统计的是本次运行**实际新增**条数（`INSERT OR IGNORE` 按 `title` 去重，已存在标题不计入），而非数据库累计总量；如需查询累计总量可执行 `SELECT COUNT(*) FROM posts`。
