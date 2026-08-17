@@ -19,7 +19,7 @@ ROOT_URL = "http://127.0.0.1:1024"
 BASE_URL = ROOT_URL + "/thread0806.php"  # 基础地址
 FID = "2"                                # 版块ID
 START_PAGE = 1                           # 起始页码
-END_PAGE = 10                            # 结束页码（可自行修改）
+END_PAGE = 50                            # 结束页码（可自行修改）
 AUTO_DETECT_END_PAGE = False             # 是否动态获取末页页码（False 时使用 END_PAGE 配置值）
 
 # 输出目录 & 文件（统一放在 outputs/日期/ 下：最外层 outputs，再到日期目录）
@@ -280,6 +280,7 @@ def main() -> None:
                     # SQLite 批量写入：积累到阈值时一次性提交
                     if len(sqlite_buffer) >= SQLITE_BATCH_ROWS:
                         db_rows += save_to_sqlite(db_conn, FID, today_str, sqlite_buffer)
+                        print(f"[FID={FID}] 版块[已保存] 前 {page} 页数据SQLite 实际入库 {db_rows} 条（标题去重后）\n")
                         sqlite_buffer.clear()
 
                     # 数据已写入 CSV 缓冲区，更新已保存页码
