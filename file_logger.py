@@ -5,8 +5,8 @@
 文件名形如 <程序名>_<日期>.log，UTF-8 编码、追加模式、每行立即落盘。
 
 日志保留策略：cleanup_old_logs() 删除 outputs/ 下超过 RETENTION_DAYS
-（默认 3 天）的旧日志文件，避免日志无限累积；过期目录内若已无任何文件则
-一并删除。仅清理 *.log，不影响同目录下的 CSV/progress 等数据文件。
+（默认 3 天）天的过期日期目录——连同目录内的 *.log、CSV、progress 等
+文件整体删除（超出保留期的历史数据不再保留），避免日志与数据无限累积。
 清理时机由调用方控制：建议在批次任务成功完成后调用（如 run_batch 在全部
 版块抓取正常结束后执行），异常退出（中断/崩溃）时不清理，保留现场便于排查。
 
@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import sys
 from collections.abc import Generator
 from contextlib import contextmanager
@@ -179,12 +180,13 @@ _installed: set[str] = set()
 
 
 def cleanup_old_logs(retention_days: int = RETENTION_DAYS) -> int:
-    """清理 outputs/<日期>/ 下超过 retention_days 天的 *.log 日志文件。
+    """清理 outputs/<日期>/ 下超过 retention_days 天的过期日期目录。
 
-    目录名必须为 YYYYMMDD 格式（避免误删非日期目录）；删除过期 .log 后
-    若目录已空则一并删除。仅清理日志文件，不影响同目录的 CSV/progress。
-    返回删除的文件数。单个文件删除失败（如被其他进程占用）时静默跳过，
-    留待下次启动再清，不影响当前程序运行。
+    目录名必须为 YYYYMMDD 格式（避免误删非日期目录）；过期目录连同其中
+    的 *.log、CSV/progress 等数据文件整体删除（超出保留期的历史数据不再
+    保留）。每次删除操作都会输出日志留痕（记录于当前进程的日志文件）。
+    返回删除的日志文件数。目录整体删除失败（如文件被占用）时回退为仅删除
+    其中的日志文件，数据文件留待下次启动再清，不影响当前程序运行。
     """
     if retention_days < 0:
         return 0
@@ -201,7 +203,9 @@ def cleanup_old_logs(retention_days: int = RETENTION_DAYS) -> int:
             dir_date = datetime.strptime(name, "%Y%m%d").date()
         except ValueError:
             continue
-        if (today - dir_date).days < retention_days:
+        # 保留"最近 N 天"：目录距今 ≤ retention_days 天都保留（含正好 N 天前），
+        # 只删除严格超过 N 天的，避免 off-by-one 误删最近一天的历史日志
+        if (today - dir_date).days <= retention_days:
             continue
         # 保护：跳过当天及未来日期目录，避免 retention_days=0 或系统时钟
         # 异常时误删当前正在写入的日志
@@ -212,19 +216,34 @@ def cleanup_old_logs(retention_days: int = RETENTION_DAYS) -> int:
             files = os.listdir(dir_path)
         except OSError:
             continue
-        for fn in files:
-            if fn.lower().endswith(".log"):
-                try:
-                    os.remove(os.path.join(dir_path, fn))
-                    removed += 1
-                except OSError:
-                    pass
-        # 目录已空则删除目录（避免残留空壳目录）
+        # 统计日志数（用于返回值），随后整个目录一并删除（含 CSV/progress 等数据）
+        log_count = sum(1 for fn in files if fn.lower().endswith(".log"))
         try:
-            if not os.listdir(dir_path):
-                os.rmdir(dir_path)
+            shutil.rmtree(dir_path)
+            removed += log_count
+            print(
+                "[日志清理] 已删除过期目录: " + dir_path
+                + f"（共 {len(files)} 个文件，其中日志 {log_count} 个）"
+            )
         except OSError:
-            pass
+            # 目录删除失败（如文件被占用）：回退为仅删除日志文件，
+            # 数据文件保留，留待下次启动再清
+            deleted_in_dir = 0
+            for fn in files:
+                if fn.lower().endswith(".log"):
+                    file_path = os.path.join(dir_path, fn)
+                    try:
+                        os.remove(file_path)
+                        removed += 1
+                        deleted_in_dir += 1
+                        print(f"[日志清理] 已删除过期日志文件: {file_path}")
+                    except OSError:
+                        pass
+            if deleted_in_dir:
+                print(
+                    f"[日志清理] 目录 {dir_path} 整体删除失败（可能被占用），"
+                    + f"已删除其中 {deleted_in_dir} 个日志文件"
+                )
     return removed
 
 
