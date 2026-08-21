@@ -1,0 +1,1876 @@
+
+===== 会话开始 2026-08-19 03:16:49 =====
+[2026-08-19 03:16:50] [run_batch] [1024服务] 端口 127.0.0.1:1024 未被监听，正在启动: D:\Tools\1024app_win10_2025_1.02\web.exe
+[2026-08-19 03:17:21] [run_batch] [1024服务] web 服务启动失败，终止本次抓取: web.exe 启动后 15s 内端口 1024 仍未就绪，请确认 D:\Tools\1024app_win10_2025_1.02\web.exe 可正常运行
+[2026-08-19 03:17:21] [run_batch] [提示] 1024 端口启不起来时，可执行 python run_batch.py false（或把 run_batch.py 顶部 USE_LOCAL_PROXY 改为 False）关闭端口监控，并在 REMOTE_ROOT_URL 配置实际域名（如 https://xx.com）后重试
+
+===== 会话开始 2026-08-19 06:02:29 =====
+[2026-08-19 06:02:30] [run_batch] [1024服务] 端口 127.0.0.1:1024 未被监听，正在启动: D:\Tools\1024app_win10_2025_1.02\web.exe
+[2026-08-19 06:02:31] [run_batch] [1024服务] web.exe 已启动，端口 127.0.0.1:1024 就绪（PID: 26508）
+[2026-08-19 06:02:32] [run_batch] 共 13 个版块，并发数: 3，启动间隔: 5s
+
+[2026-08-19 06:02:32] [run_batch] 启动 [2] 版块2（访问根地址: http://127.0.0.1:1024）
+
+[2026-08-19 06:02:32] [run_batch] [scraper_2] ===== 会话开始 2026-08-19 06:02:32 =====
+[2026-08-19 06:02:32] [run_batch] [scraper_2] [FID=2] 版块1-50页 开始抓取
+[2026-08-19 06:02:32] [run_batch] [scraper_2] [FID=2] 版块使用配置末页: 50
+[2026-08-19 06:02:32] [run_batch] [scraper_2] 开始抓取[FID=2] 版块，共 50 页（第 1 ~ 50 页）
+
+[2026-08-19 06:02:32] [run_batch] [scraper_2] [FID=2] 正在请求 版块第 1 页: http://127.0.0.1:1024/thread0806.php?fid=2&search=&page=1
+[2026-08-19 06:02:34] [run_batch] [scraper_2] [FID=2] 版块 第 1 页提取到 100 条数据
+[2026-08-19 06:02:37] [run_batch] 启动 [4] 版块4（访问根地址: http://127.0.0.1:1024）
+[2026-08-19 06:02:37] [run_batch] [scraper_2] [FID=2] 正在请求 版块第 2 页: http://127.0.0.1:1024/thread0806.php?fid=2&search=&page=2
+
+[2026-08-19 06:02:37] [run_batch] [scraper_4] ===== 会话开始 2026-08-19 06:02:37 =====
+[2026-08-19 06:02:37] [run_batch] [scraper_4] [FID=4] 版块1-50页 开始抓取
+[2026-08-19 06:02:37] [run_batch] [scraper_4] [FID=4] 版块使用配置末页: 50
+[2026-08-19 06:02:37] [run_batch] [scraper_4] 开始抓取[FID=4] 版块，共 50 页（第 1 ~ 50 页）
+
+[2026-08-19 06:02:37] [run_batch] [scraper_4] [FID=4] 正在请求 版块第 1 页: http://127.0.0.1:1024/thread0806.php?fid=4&search=&page=1
+[2026-08-19 06:02:38] [run_batch] [scraper_2] [FID=2] 版块 第 2 页提取到 100 条数据
+[2026-08-19 06:02:38] [run_batch] [scraper_4] [FID=4] 版块 第 1 页提取到 100 条数据
+[2026-08-19 06:02:41] [run_batch] [scraper_2] [FID=2] 正在请求 版块第 3 页: http://127.0.0.1:1024/thread0806.php?fid=2&search=&page=3
+[2026-08-19 06:02:41] [run_batch] [scraper_4] [FID=4] 正在请求 版块第 2 页: http://127.0.0.1:1024/thread0806.php?fid=4&search=&page=2
+[2026-08-19 06:02:42] [run_batch] 启动 [5] 版块5（访问根地址: http://127.0.0.1:1024）
+
+[2026-08-19 06:02:42] [run_batch] [scraper_5] ===== 会话开始 2026-08-19 06:02:42 =====
+[2026-08-19 06:02:42] [run_batch] [scraper_5] [FID=5] 版块1-50页 开始抓取
+[2026-08-19 06:02:42] [run_batch] [scraper_5] [FID=5] 版块使用配置末页: 50
+[2026-08-19 06:02:42] [run_batch] [scraper_5] 开始抓取[FID=5] 版块，共 50 页（第 1 ~ 50 页）
+
+[2026-08-19 06:02:42] [run_batch] [scraper_5] [FID=5] 正在请求 版块第 1 页: http://127.0.0.1:1024/thread0806.php?fid=5&search=&page=1
+[2026-08-19 06:02:42] [run_batch] [scraper_2] [FID=2] 版块 第 3 页提取到 100 条数据
+[2026-08-19 06:02:43] [run_batch] [scraper_4] [FID=4] 版块 第 2 页提取到 100 条数据
+[2026-08-19 06:02:43] [run_batch] [scraper_5] [FID=5] 版块 第 1 页提取到 100 条数据
+[2026-08-19 06:02:45] [run_batch] [scraper_2] [FID=2] 正在请求 版块第 4 页: http://127.0.0.1:1024/thread0806.php?fid=2&search=&page=4
+[2026-08-19 06:02:46] [run_batch] [scraper_4] [FID=4] 正在请求 版块第 3 页: http://127.0.0.1:1024/thread0806.php?fid=4&search=&page=3
+[2026-08-19 06:02:46] [run_batch] [scraper_5] [FID=5] 正在请求 版块第 2 页: http://127.0.0.1:1024/thread0806.php?fid=5&search=&page=2
+[2026-08-19 06:02:47] [run_batch] [scraper_2] [FID=2] 版块 第 4 页提取到 100 条数据
+[2026-08-19 06:02:47] [run_batch] [scraper_4] [FID=4] 版块 第 3 页提取到 100 条数据
+[2026-08-19 06:02:47] [run_batch] [scraper_5] [FID=5] 版块 第 2 页提取到 100 条数据
+[2026-08-19 06:02:50] [run_batch] [scraper_2] [FID=2] 正在请求 版块第 5 页: http://127.0.0.1:1024/thread0806.php?fid=2&search=&page=5
+[2026-08-19 06:02:50] [run_batch] [scraper_4] [FID=4] 正在请求 版块第 4 页: http://127.0.0.1:1024/thread0806.php?fid=4&search=&page=4
+[2026-08-19 06:02:50] [run_batch] [scraper_5] [FID=5] 正在请求 版块第 3 页: http://127.0.0.1:1024/thread0806.php?fid=5&search=&page=3
+[2026-08-19 06:02:51] [run_batch] [scraper_2] [FID=2] 版块 第 5 页提取到 100 条数据
+[2026-08-19 06:02:51] [run_batch] [scraper_4] [FID=4] 版块 第 4 页提取到 100 条数据
+[2026-08-19 06:02:51] [run_batch] [scraper_2] [FID=2] 版块[已保存] 前 5 页数据SQLite 实际入库 79 条（标题去重后）
+
+[2026-08-19 06:02:52] [run_batch] [scraper_5] [FID=5] 版块 第 3 页提取到 100 条数据
+[2026-08-19 06:02:54] [run_batch] [scraper_4] [FID=4] 正在请求 版块第 5 页: http://127.0.0.1:1024/thread0806.php?fid=4&search=&page=5
+[2026-08-19 06:02:54] [run_batch] [scraper_2] [FID=2] 正在请求 版块第 6 页: http://127.0.0.1:1024/thread0806.php?fid=2&search=&page=6
+[2026-08-19 06:02:55] [run_batch] [scraper_5] [FID=5] 正在请求 版块第 4 页: http://127.0.0.1:1024/thread0806.php?fid=5&search=&page=4
+[2026-08-19 06:02:56] [run_batch] [scraper_4] [FID=4] 版块 第 5 页提取到 100 条数据
+[2026-08-19 06:02:56] [run_batch] [scraper_2] [FID=2] 版块 第 6 页提取到 100 条数据
+[2026-08-19 06:02:56] [run_batch] [scraper_4] [FID=4] 版块[已保存] 前 5 页数据SQLite 实际入库 47 条（标题去重后）
+
+[2026-08-19 06:02:56] [run_batch] [scraper_5] [FID=5] 版块 第 4 页提取到 100 条数据
+[2026-08-19 06:02:59] [run_batch] [scraper_2] [FID=2] 正在请求 版块第 7 页: http://127.0.0.1:1024/thread0806.php?fid=2&search=&page=7
+[2026-08-19 06:02:59] [run_batch] [scraper_4] [FID=4] 正在请求 版块第 6 页: http://127.0.0.1:1024/thread0806.php?fid=4&search=&page=6
+[2026-08-19 06:02:59] [run_batch] [scraper_5] [FID=5] 正在请求 版块第 5 页: http://127.0.0.1:1024/thread0806.php?fid=5&search=&page=5
+[2026-08-19 06:03:01] [run_batch] [scraper_4] [FID=4] 版块 第 6 页提取到 100 条数据
+[2026-08-19 06:03:01] [run_batch] [scraper_2] [FID=2] 版块 第 7 页提取到 100 条数据
+[2026-08-19 06:03:01] [run_batch] [scraper_5] [FID=5] 版块 第 5 页提取到 100 条数据
+[2026-08-19 06:03:01] [run_batch] [scraper_5] [FID=5] 版块[已保存] 前 5 页数据SQLite 实际入库 23 条（标题去重后）
+
+[2026-08-19 06:03:04] [run_batch] [scraper_4] [FID=4] 正在请求 版块第 7 页: http://127.0.0.1:1024/thread0806.php?fid=4&search=&page=7
+[2026-08-19 06:03:04] [run_batch] [scraper_2] [FID=2] 正在请求 版块第 8 页: http://127.0.0.1:1024/thread0806.php?fid=2&search=&page=8
+[2026-08-19 06:03:04] [run_batch] [scraper_5] [FID=5] 正在请求 版块第 6 页: http://127.0.0.1:1024/thread0806.php?fid=5&search=&page=6
+[2026-08-19 06:03:05] [run_batch] [scraper_2] [FID=2] 版块 第 8 页提取到 100 条数据
+[2026-08-19 06:03:05] [run_batch] [scraper_4] [FID=4] 版块 第 7 页提取到 100 条数据
+[2026-08-19 06:03:06] [run_batch] [scraper_5] [FID=5] 版块 第 6 页提取到 100 条数据
+[2026-08-19 06:03:08] [run_batch] [scraper_2] [FID=2] 正在请求 版块第 9 页: http://127.0.0.1:1024/thread0806.php?fid=2&search=&page=9
+[2026-08-19 06:03:08] [run_batch] [scraper_4] [FID=4] 正在请求 版块第 8 页: http://127.0.0.1:1024/thread0806.php?fid=4&search=&page=8
+[2026-08-19 06:03:09] [run_batch] [scraper_5] [FID=5] 正在请求 版块第 7 页: http://127.0.0.1:1024/thread0806.php?fid=5&search=&page=7
+[2026-08-19 06:03:10] [run_batch] [scraper_2] [FID=2] 版块 第 9 页提取到 100 条数据
+[2026-08-19 06:03:10] [run_batch] [scraper_4] [FID=4] 版块 第 8 页提取到 100 条数据
+[2026-08-19 06:03:10] [run_batch] [scraper_5] [FID=5] 版块 第 7 页提取到 100 条数据
+[2026-08-19 06:03:13] [run_batch] [scraper_2] [FID=2] 正在请求 版块第 10 页: http://127.0.0.1:1024/thread0806.php?fid=2&search=&page=10
+[2026-08-19 06:03:13] [run_batch] [scraper_4] [FID=4] 正在请求 版块第 9 页: http://127.0.0.1:1024/thread0806.php?fid=4&search=&page=9
+[2026-08-19 06:03:13] [run_batch] [scraper_5] [FID=5] 正在请求 版块第 8 页: http://127.0.0.1:1024/thread0806.php?fid=5&search=&page=8
+[2026-08-19 06:03:14] [run_batch] [scraper_2] [FID=2] 版块 第 10 页提取到 100 条数据
+[2026-08-19 06:03:14] [run_batch] [scraper_2] [FID=2] 版块[已保存] 前 10 页数据SQLite 实际入库 79 条（标题去重后）
+
+[2026-08-19 06:03:14] [run_batch] [scraper_2] [FID=2] 版块[已保存] 前 10 页数据已写入磁盘（累计 1000 条）
+
+[2026-08-19 06:03:14] [run_batch] [scraper_5] [FID=5] 版块 第 8 页提取到 100 条数据
+[2026-08-19 06:03:14] [run_batch] [scraper_4] [FID=4] 版块 第 9 页提取到 100 条数据
+[2026-08-19 06:03:17] [run_batch] [scraper_2] [FID=2] 正在请求 版块第 11 页: http://127.0.0.1:1024/thread0806.php?fid=2&search=&page=11
+[2026-08-19 06:03:17] [run_batch] [scraper_5] [FID=5] 正在请求 版块第 9 页: http://127.0.0.1:1024/thread0806.php?fid=5&search=&page=9
+[2026-08-19 06:03:17] [run_batch] [scraper_4] [FID=4] 正在请求 版块第 10 页: http://127.0.0.1:1024/thread0806.php?fid=4&search=&page=10
+[2026-08-19 06:03:18] [run_batch] [scraper_2] [FID=2] 版块 第 11 页提取到 100 条数据
+[2026-08-19 06:03:19] [run_batch] [scraper_5] [FID=5] 版块 第 9 页提取到 100 条数据
+[2026-08-19 06:03:19] [run_batch] [scraper_4] [FID=4] 版块 第 10 页提取到 100 条数据
+[2026-08-19 06:03:19] [run_batch] [scraper_4] [FID=4] 版块[已保存] 前 10 页数据SQLite 实际入库 47 条（标题去重后）
+
+[2026-08-19 06:03:19] [run_batch] [scraper_4] [FID=4] 版块[已保存] 前 10 页数据已写入磁盘（累计 1000 条）
+
+[2026-08-19 06:03:21] [run_batch] [scraper_2] [FID=2] 正在请求 版块第 12 页: http://127.0.0.1:1024/thread0806.php?fid=2&search=&page=12
+[2026-08-19 06:03:22] [run_batch] [scraper_5] [FID=5] 正在请求 版块第 10 页: http://127.0.0.1:1024/thread0806.php?fid=5&search=&page=10
+[2026-08-19 06:03:22] [run_batch] [scraper_4] [FID=4] 正在请求 版块第 11 页: http://127.0.0.1:1024/thread0806.php?fid=4&search=&page=11
+[2026-08-19 06:03:23] [run_batch] [scraper_2] [FID=2] 版块 第 12 页提取到 100 条数据
+[2026-08-19 06:03:23] [run_batch] [scraper_5] [FID=5] 版块 第 10 页提取到 100 条数据
+[2026-08-19 06:03:23] [run_batch] [scraper_5] [FID=5] 版块[已保存] 前 10 页数据SQLite 实际入库 23 条（标题去重后）
+
+[2026-08-19 06:03:23] [run_batch] [scraper_5] [FID=5] 版块[已保存] 前 10 页数据已写入磁盘（累计 1000 条）
+
+[2026-08-19 06:03:23] [run_batch] [scraper_4] [FID=4] 版块 第 11 页提取到 100 条数据
+[2026-08-19 06:03:26] [run_batch] [scraper_2] [FID=2] 正在请求 版块第 13 页: http://127.0.0.1:1024/thread0806.php?fid=2&search=&page=13
+[2026-08-19 06:03:26] [run_batch] [scraper_5] [FID=5] 正在请求 版块第 11 页: http://127.0.0.1:1024/thread0806.php?fid=5&search=&page=11
+[2026-08-19 06:03:26] [run_batch] [scraper_4] [FID=4] 正在请求 版块第 12 页: http://127.0.0.1:1024/thread0806.php?fid=4&search=&page=12
+[2026-08-19 06:03:27] [run_batch] [scraper_2] [FID=2] 版块 第 13 页提取到 100 条数据
+[2026-08-19 06:03:28] [run_batch] [scraper_4] [FID=4] 版块 第 12 页提取到 100 条数据
+[2026-08-19 06:03:28] [run_batch] [scraper_5] [FID=5] 版块 第 11 页提取到 100 条数据
+[2026-08-19 06:03:30] [run_batch] [scraper_2] [FID=2] 正在请求 版块第 14 页: http://127.0.0.1:1024/thread0806.php?fid=2&search=&page=14
+[2026-08-19 06:03:31] [run_batch] [scraper_4] [FID=4] 正在请求 版块第 13 页: http://127.0.0.1:1024/thread0806.php?fid=4&search=&page=13
+[2026-08-19 06:03:31] [run_batch] [scraper_5] [FID=5] 正在请求 版块第 12 页: http://127.0.0.1:1024/thread0806.php?fid=5&search=&page=12
+[2026-08-19 06:03:32] [run_batch] [scraper_2] [FID=2] 版块 第 14 页提取到 100 条数据
+[2026-08-19 06:03:32] [run_batch] [scraper_4] [FID=4] 版块 第 13 页提取到 100 条数据
+[2026-08-19 06:03:32] [run_batch] [scraper_5] [FID=5] 版块 第 12 页提取到 100 条数据
+[2026-08-19 06:03:35] [run_batch] [scraper_2] [FID=2] 正在请求 版块第 15 页: http://127.0.0.1:1024/thread0806.php?fid=2&search=&page=15
+[2026-08-19 06:03:35] [run_batch] [scraper_4] [FID=4] 正在请求 版块第 14 页: http://127.0.0.1:1024/thread0806.php?fid=4&search=&page=14
+[2026-08-19 06:03:35] [run_batch] [scraper_5] [FID=5] 正在请求 版块第 13 页: http://127.0.0.1:1024/thread0806.php?fid=5&search=&page=13
+[2026-08-19 06:03:36] [run_batch] [scraper_2] [FID=2] 版块 第 15 页提取到 100 条数据
+[2026-08-19 06:03:37] [run_batch] [scraper_2] [FID=2] 版块[已保存] 前 15 页数据SQLite 实际入库 79 条（标题去重后）
+
+[2026-08-19 06:03:37] [run_batch] [scraper_4] [FID=4] 版块 第 14 页提取到 100 条数据
+[2026-08-19 06:03:37] [run_batch] [scraper_5] [FID=5] 版块 第 13 页提取到 100 条数据
+[2026-08-19 06:03:40] [run_batch] [scraper_2] [FID=2] 正在请求 版块第 16 页: http://127.0.0.1:1024/thread0806.php?fid=2&search=&page=16
+[2026-08-19 06:03:40] [run_batch] [scraper_4] [FID=4] 正在请求 版块第 15 页: http://127.0.0.1:1024/thread0806.php?fid=4&search=&page=15
+[2026-08-19 06:03:40] [run_batch] [scraper_5] [FID=5] 正在请求 版块第 14 页: http://127.0.0.1:1024/thread0806.php?fid=5&search=&page=14
+[2026-08-19 06:03:41] [run_batch] [scraper_4] [FID=4] 版块 第 15 页提取到 100 条数据
+[2026-08-19 06:03:41] [run_batch] [scraper_4] [FID=4] 版块[已保存] 前 15 页数据SQLite 实际入库 47 条（标题去重后）
+
+[2026-08-19 06:03:41] [run_batch] [scraper_2] [FID=2] 版块 第 16 页提取到 100 条数据
+[2026-08-19 06:03:42] [run_batch] [scraper_5] [FID=5] 版块 第 14 页提取到 100 条数据
+[2026-08-19 06:03:44] [run_batch] [scraper_4] [FID=4] 正在请求 版块第 16 页: http://127.0.0.1:1024/thread0806.php?fid=4&search=&page=16
+[2026-08-19 06:03:44] [run_batch] [scraper_2] [FID=2] 正在请求 版块第 17 页: http://127.0.0.1:1024/thread0806.php?fid=2&search=&page=17
+[2026-08-19 06:03:45] [run_batch] [scraper_5] [FID=5] 正在请求 版块第 15 页: http://127.0.0.1:1024/thread0806.php?fid=5&search=&page=15
+[2026-08-19 06:03:45] [run_batch] [scraper_4] [FID=4] 版块 第 16 页提取到 100 条数据
+[2026-08-19 06:03:46] [run_batch] [scraper_5] [FID=5] 版块 第 15 页提取到 100 条数据
+[2026-08-19 06:03:46] [run_batch] [scraper_5] [FID=5] 版块[已保存] 前 15 页数据SQLite 实际入库 23 条（标题去重后）
+
+[2026-08-19 06:03:46] [run_batch] [scraper_2] [FID=2] 版块 第 17 页提取到 100 条数据
+[2026-08-19 06:03:48] [run_batch] [scraper_4] [FID=4] 正在请求 版块第 17 页: http://127.0.0.1:1024/thread0806.php?fid=4&search=&page=17
+[2026-08-19 06:03:49] [run_batch] [scraper_5] [FID=5] 正在请求 版块第 16 页: http://127.0.0.1:1024/thread0806.php?fid=5&search=&page=16
+[2026-08-19 06:03:49] [run_batch] [scraper_2] [FID=2] 正在请求 版块第 18 页: http://127.0.0.1:1024/thread0806.php?fid=2&search=&page=18
+[2026-08-19 06:03:50] [run_batch] [scraper_4] [FID=4] 版块 第 17 页提取到 100 条数据
+[2026-08-19 06:03:50] [run_batch] [scraper_5] [FID=5] 版块 第 16 页提取到 100 条数据
+[2026-08-19 06:03:50] [run_batch] [scraper_2] [FID=2] 版块 第 18 页提取到 100 条数据
+[2026-08-19 06:03:53] [run_batch] [scraper_4] [FID=4] 正在请求 版块第 18 页: http://127.0.0.1:1024/thread0806.php?fid=4&search=&page=18
+[2026-08-19 06:03:53] [run_batch] [scraper_5] [FID=5] 正在请求 版块第 17 页: http://127.0.0.1:1024/thread0806.php?fid=5&search=&page=17
+[2026-08-19 06:03:53] [run_batch] [scraper_2] [FID=2] 正在请求 版块第 19 页: http://127.0.0.1:1024/thread0806.php?fid=2&search=&page=19
+[2026-08-19 06:03:54] [run_batch] [scraper_5] [FID=5] 版块 第 17 页提取到 100 条数据
+[2026-08-19 06:03:55] [run_batch] [scraper_4] [FID=4] 版块 第 18 页提取到 100 条数据
+[2026-08-19 06:03:55] [run_batch] [scraper_2] [FID=2] 版块 第 19 页提取到 100 条数据
+[2026-08-19 06:03:57] [run_batch] [scraper_5] [FID=5] 正在请求 版块第 18 页: http://127.0.0.1:1024/thread0806.php?fid=5&search=&page=18
+[2026-08-19 06:03:58] [run_batch] [scraper_4] [FID=4] 正在请求 版块第 19 页: http://127.0.0.1:1024/thread0806.php?fid=4&search=&page=19
+[2026-08-19 06:03:58] [run_batch] [scraper_2] [FID=2] 正在请求 版块第 20 页: http://127.0.0.1:1024/thread0806.php?fid=2&search=&page=20
+[2026-08-19 06:03:58] [run_batch] [scraper_5] [FID=5] 版块 第 18 页提取到 100 条数据
+[2026-08-19 06:03:59] [run_batch] [scraper_4] [FID=4] 版块 第 19 页提取到 100 条数据
+[2026-08-19 06:04:00] [run_batch] [scraper_2] [FID=2] 版块 第 20 页提取到 100 条数据
+[2026-08-19 06:04:00] [run_batch] [scraper_2] [FID=2] 版块[已保存] 前 20 页数据SQLite 实际入库 79 条（标题去重后）
+
+[2026-08-19 06:04:00] [run_batch] [scraper_2] [FID=2] 版块[已保存] 前 20 页数据已写入磁盘（累计 2000 条）
+
+[2026-08-19 06:04:01] [run_batch] [scraper_5] [FID=5] 正在请求 版块第 19 页: http://127.0.0.1:1024/thread0806.php?fid=5&search=&page=19
+[2026-08-19 06:04:02] [run_batch] [scraper_4] [FID=4] 正在请求 版块第 20 页: http://127.0.0.1:1024/thread0806.php?fid=4&search=&page=20
+[2026-08-19 06:04:03] [run_batch] [scraper_2] [FID=2] 正在请求 版块第 21 页: http://127.0.0.1:1024/thread0806.php?fid=2&search=&page=21
+[2026-08-19 06:04:03] [run_batch] [scraper_5] [FID=5] 版块 第 19 页提取到 100 条数据
+[2026-08-19 06:04:04] [run_batch] [scraper_4] [FID=4] 版块 第 20 页提取到 100 条数据
+[2026-08-19 06:04:04] [run_batch] [scraper_4] [FID=4] 版块[已保存] 前 20 页数据SQLite 实际入库 47 条（标题去重后）
+
+[2026-08-19 06:04:04] [run_batch] [scraper_4] [FID=4] 版块[已保存] 前 20 页数据已写入磁盘（累计 2000 条）
+
+[2026-08-19 06:04:04] [run_batch] [scraper_2] [FID=2] 版块 第 21 页提取到 100 条数据
+[2026-08-19 06:04:06] [run_batch] [scraper_5] [FID=5] 正在请求 版块第 20 页: http://127.0.0.1:1024/thread0806.php?fid=5&search=&page=20
+[2026-08-19 06:04:07] [run_batch] [scraper_4] [FID=4] 正在请求 版块第 21 页: http://127.0.0.1:1024/thread0806.php?fid=4&search=&page=21
+[2026-08-19 06:04:07] [run_batch] [scraper_2] [FID=2] 正在请求 版块第 22 页: http://127.0.0.1:1024/thread0806.php?fid=2&search=&page=22
+[2026-08-19 06:04:07] [run_batch] [scraper_5] [FID=5] 版块 第 20 页提取到 100 条数据
+[2026-08-19 06:04:07] [run_batch] [scraper_5] [FID=5] 版块[已保存] 前 20 页数据SQLite 实际入库 23 条（标题去重后）
+
+[2026-08-19 06:04:07] [run_batch] [scraper_5] [FID=5] 版块[已保存] 前 20 页数据已写入磁盘（累计 2000 条）
+
+[2026-08-19 06:04:08] [run_batch] [scraper_4] [FID=4] 版块 第 21 页提取到 100 条数据
+[2026-08-19 06:04:09] [run_batch] [scraper_2] [FID=2] 版块 第 22 页提取到 100 条数据
+[2026-08-19 06:04:10] [run_batch] [scraper_5] [FID=5] 正在请求 版块第 21 页: http://127.0.0.1:1024/thread0806.php?fid=5&search=&page=21
+[2026-08-19 06:04:11] [run_batch] [scraper_4] [FID=4] 正在请求 版块第 22 页: http://127.0.0.1:1024/thread0806.php?fid=4&search=&page=22
+[2026-08-19 06:04:12] [run_batch] [scraper_2] [FID=2] 正在请求 版块第 23 页: http://127.0.0.1:1024/thread0806.php?fid=2&search=&page=23
+[2026-08-19 06:04:12] [run_batch] [scraper_5] [FID=5] 版块 第 21 页提取到 100 条数据
+[2026-08-19 06:04:13] [run_batch] [scraper_4] [FID=4] 版块 第 22 页提取到 100 条数据
+[2026-08-19 06:04:13] [run_batch] [scraper_2] [FID=2] 版块 第 23 页提取到 100 条数据
+[2026-08-19 06:04:15] [run_batch] [scraper_5] [FID=5] 正在请求 版块第 22 页: http://127.0.0.1:1024/thread0806.php?fid=5&search=&page=22
+[2026-08-19 06:04:16] [run_batch] [scraper_4] [FID=4] 正在请求 版块第 23 页: http://127.0.0.1:1024/thread0806.php?fid=4&search=&page=23
+[2026-08-19 06:04:16] [run_batch] [scraper_2] [FID=2] 正在请求 版块第 24 页: http://127.0.0.1:1024/thread0806.php?fid=2&search=&page=24
+[2026-08-19 06:04:16] [run_batch] [scraper_5] [FID=5] 版块 第 22 页提取到 100 条数据
+[2026-08-19 06:04:17] [run_batch] [scraper_4] [FID=4] 版块 第 23 页提取到 100 条数据
+[2026-08-19 06:04:18] [run_batch] [scraper_2] [FID=2] 版块 第 24 页提取到 100 条数据
+[2026-08-19 06:04:19] [run_batch] [scraper_5] [FID=5] 正在请求 版块第 23 页: http://127.0.0.1:1024/thread0806.php?fid=5&search=&page=23
+[2026-08-19 06:04:20] [run_batch] [scraper_4] [FID=4] 正在请求 版块第 24 页: http://127.0.0.1:1024/thread0806.php?fid=4&search=&page=24
+[2026-08-19 06:04:21] [run_batch] [scraper_2] [FID=2] 正在请求 版块第 25 页: http://127.0.0.1:1024/thread0806.php?fid=2&search=&page=25
+[2026-08-19 06:04:21] [run_batch] [scraper_5] [FID=5] 版块 第 23 页提取到 100 条数据
+[2026-08-19 06:04:21] [run_batch] [scraper_4] [FID=4] 版块 第 24 页提取到 100 条数据
+[2026-08-19 06:04:23] [run_batch] [scraper_2] [FID=2] 版块 第 25 页提取到 100 条数据
+[2026-08-19 06:04:23] [run_batch] [scraper_2] [FID=2] 版块[已保存] 前 25 页数据SQLite 实际入库 79 条（标题去重后）
+
+[2026-08-19 06:04:24] [run_batch] [scraper_5] [FID=5] 正在请求 版块第 24 页: http://127.0.0.1:1024/thread0806.php?fid=5&search=&page=24
+[2026-08-19 06:04:24] [run_batch] [scraper_4] [FID=4] 正在请求 版块第 25 页: http://127.0.0.1:1024/thread0806.php?fid=4&search=&page=25
+[2026-08-19 06:04:25] [run_batch] [scraper_5] [FID=5] 版块 第 24 页提取到 100 条数据
+[2026-08-19 06:04:26] [run_batch] [scraper_4] [FID=4] 版块 第 25 页提取到 100 条数据
+[2026-08-19 06:04:26] [run_batch] [scraper_4] [FID=4] 版块[已保存] 前 25 页数据SQLite 实际入库 47 条（标题去重后）
+
+[2026-08-19 06:04:26] [run_batch] [scraper_2] [FID=2] 正在请求 版块第 26 页: http://127.0.0.1:1024/thread0806.php?fid=2&search=&page=26
+[2026-08-19 06:04:28] [run_batch] [scraper_2] [FID=2] 版块 第 26 页提取到 100 条数据
+[2026-08-19 06:04:28] [run_batch] [scraper_5] [FID=5] 正在请求 版块第 25 页: http://127.0.0.1:1024/thread0806.php?fid=5&search=&page=25
+[2026-08-19 06:04:29] [run_batch] [scraper_4] [FID=4] 正在请求 版块第 26 页: http://127.0.0.1:1024/thread0806.php?fid=4&search=&page=26
+[2026-08-19 06:04:29] [run_batch] [scraper_5] [FID=5] 版块 第 25 页提取到 100 条数据
+[2026-08-19 06:04:30] [run_batch] [scraper_5] [FID=5] 版块[已保存] 前 25 页数据SQLite 实际入库 23 条（标题去重后）
+
+[2026-08-19 06:04:30] [run_batch] [scraper_4] [FID=4] 版块 第 26 页提取到 100 条数据
+[2026-08-19 06:04:31] [run_batch] [scraper_2] [FID=2] 正在请求 版块第 27 页: http://127.0.0.1:1024/thread0806.php?fid=2&search=&page=27
+[2026-08-19 06:04:32] [run_batch] [scraper_2] [FID=2] 版块 第 27 页提取到 100 条数据
+[2026-08-19 06:04:33] [run_batch] [scraper_5] [FID=5] 正在请求 版块第 26 页: http://127.0.0.1:1024/thread0806.php?fid=5&search=&page=26
+[2026-08-19 06:04:33] [run_batch] [scraper_4] [FID=4] 正在请求 版块第 27 页: http://127.0.0.1:1024/thread0806.php?fid=4&search=&page=27
+[2026-08-19 06:04:34] [run_batch] [scraper_5] [FID=5] 版块 第 26 页提取到 100 条数据
+[2026-08-19 06:04:35] [run_batch] [scraper_4] [FID=4] 版块 第 27 页提取到 100 条数据
+[2026-08-19 06:04:35] [run_batch] [scraper_2] [FID=2] 正在请求 版块第 28 页: http://127.0.0.1:1024/thread0806.php?fid=2&search=&page=28
+[2026-08-19 06:04:36] [run_batch] [scraper_2] [FID=2] 版块 第 28 页提取到 100 条数据
+[2026-08-19 06:04:37] [run_batch] [scraper_5] [FID=5] 正在请求 版块第 27 页: http://127.0.0.1:1024/thread0806.php?fid=5&search=&page=27
+[2026-08-19 06:04:38] [run_batch] [scraper_4] [FID=4] 正在请求 版块第 28 页: http://127.0.0.1:1024/thread0806.php?fid=4&search=&page=28
+[2026-08-19 06:04:38] [run_batch] [scraper_5] [FID=5] 版块 第 27 页提取到 100 条数据
+[2026-08-19 06:04:39] [run_batch] [scraper_4] [FID=4] 版块 第 28 页提取到 100 条数据
+[2026-08-19 06:04:39] [run_batch] [scraper_2] [FID=2] 正在请求 版块第 29 页: http://127.0.0.1:1024/thread0806.php?fid=2&search=&page=29
+[2026-08-19 06:04:41] [run_batch] [scraper_2] [FID=2] 版块 第 29 页提取到 100 条数据
+[2026-08-19 06:04:41] [run_batch] [scraper_5] [FID=5] 正在请求 版块第 28 页: http://127.0.0.1:1024/thread0806.php?fid=5&search=&page=28
+[2026-08-19 06:04:42] [run_batch] [scraper_4] [FID=4] 正在请求 版块第 29 页: http://127.0.0.1:1024/thread0806.php?fid=4&search=&page=29
+[2026-08-19 06:04:43] [run_batch] [scraper_5] [FID=5] 版块 第 28 页提取到 100 条数据
+[2026-08-19 06:04:44] [run_batch] [scraper_2] [FID=2] 正在请求 版块第 30 页: http://127.0.0.1:1024/thread0806.php?fid=2&search=&page=30
+[2026-08-19 06:04:44] [run_batch] [scraper_4] [FID=4] 版块 第 29 页提取到 100 条数据
+[2026-08-19 06:04:45] [run_batch] [scraper_2] [FID=2] 版块 第 30 页提取到 100 条数据
+[2026-08-19 06:04:45] [run_batch] [scraper_2] [FID=2] 版块[已保存] 前 30 页数据SQLite 实际入库 79 条（标题去重后）
+
+[2026-08-19 06:04:45] [run_batch] [scraper_2] [FID=2] 版块[已保存] 前 30 页数据已写入磁盘（累计 3000 条）
+
+[2026-08-19 06:04:46] [run_batch] [scraper_5] [FID=5] 正在请求 版块第 29 页: http://127.0.0.1:1024/thread0806.php?fid=5&search=&page=29
+[2026-08-19 06:04:47] [run_batch] [scraper_4] [FID=4] 正在请求 版块第 30 页: http://127.0.0.1:1024/thread0806.php?fid=4&search=&page=30
+[2026-08-19 06:04:47] [run_batch] [scraper_5] [FID=5] 版块 第 29 页提取到 100 条数据
+[2026-08-19 06:04:48] [run_batch] [scraper_4] [FID=4] 版块 第 30 页提取到 100 条数据
+[2026-08-19 06:04:48] [run_batch] [scraper_4] [FID=4] 版块[已保存] 前 30 页数据SQLite 实际入库 47 条（标题去重后）
+
+[2026-08-19 06:04:48] [run_batch] [scraper_4] [FID=4] 版块[已保存] 前 30 页数据已写入磁盘（累计 3000 条）
+
+[2026-08-19 06:04:48] [run_batch] [scraper_2] [FID=2] 正在请求 版块第 31 页: http://127.0.0.1:1024/thread0806.php?fid=2&search=&page=31
+[2026-08-19 06:04:50] [run_batch] [scraper_2] [FID=2] 版块 第 31 页提取到 100 条数据
+[2026-08-19 06:04:50] [run_batch] [scraper_5] [FID=5] 正在请求 版块第 30 页: http://127.0.0.1:1024/thread0806.php?fid=5&search=&page=30
+[2026-08-19 06:04:51] [run_batch] [scraper_4] [FID=4] 正在请求 版块第 31 页: http://127.0.0.1:1024/thread0806.php?fid=4&search=&page=31
+[2026-08-19 06:04:52] [run_batch] [scraper_5] [FID=5] 版块 第 30 页提取到 100 条数据
+[2026-08-19 06:04:52] [run_batch] [scraper_5] [FID=5] 版块[已保存] 前 30 页数据SQLite 实际入库 23 条（标题去重后）
+
+[2026-08-19 06:04:52] [run_batch] [scraper_5] [FID=5] 版块[已保存] 前 30 页数据已写入磁盘（累计 3000 条）
+
+[2026-08-19 06:04:53] [run_batch] [scraper_4] [FID=4] 版块 第 31 页提取到 100 条数据
+[2026-08-19 06:04:53] [run_batch] [scraper_2] [FID=2] 正在请求 版块第 32 页: http://127.0.0.1:1024/thread0806.php?fid=2&search=&page=32
+[2026-08-19 06:04:54] [run_batch] [scraper_2] [FID=2] 版块 第 32 页提取到 100 条数据
+[2026-08-19 06:04:55] [run_batch] [scraper_5] [FID=5] 正在请求 版块第 31 页: http://127.0.0.1:1024/thread0806.php?fid=5&search=&page=31
+[2026-08-19 06:04:56] [run_batch] [scraper_4] [FID=4] 正在请求 版块第 32 页: http://127.0.0.1:1024/thread0806.php?fid=4&search=&page=32
+[2026-08-19 06:04:56] [run_batch] [scraper_5] [FID=5] 版块 第 31 页提取到 100 条数据
+[2026-08-19 06:04:57] [run_batch] [scraper_4] [FID=4] 版块 第 32 页提取到 100 条数据
+[2026-08-19 06:04:57] [run_batch] [scraper_2] [FID=2] 正在请求 版块第 33 页: http://127.0.0.1:1024/thread0806.php?fid=2&search=&page=33
+[2026-08-19 06:04:59] [run_batch] [scraper_5] [FID=5] 正在请求 版块第 32 页: http://127.0.0.1:1024/thread0806.php?fid=5&search=&page=32
+[2026-08-19 06:04:59] [run_batch] [scraper_2] [FID=2] 版块 第 33 页提取到 100 条数据
+[2026-08-19 06:05:00] [run_batch] [scraper_4] [FID=4] 正在请求 版块第 33 页: http://127.0.0.1:1024/thread0806.php?fid=4&search=&page=33
+[2026-08-19 06:05:01] [run_batch] [scraper_5] [FID=5] 版块 第 32 页提取到 100 条数据
+[2026-08-19 06:05:02] [run_batch] [scraper_4] [FID=4] 版块 第 33 页提取到 100 条数据
+[2026-08-19 06:05:02] [run_batch] [scraper_2] [FID=2] 正在请求 版块第 34 页: http://127.0.0.1:1024/thread0806.php?fid=2&search=&page=34
+[2026-08-19 06:05:04] [run_batch] [scraper_5] [FID=5] 正在请求 版块第 33 页: http://127.0.0.1:1024/thread0806.php?fid=5&search=&page=33
+[2026-08-19 06:05:05] [run_batch] [scraper_2] [FID=2] 版块 第 34 页提取到 100 条数据
+[2026-08-19 06:05:05] [run_batch] [scraper_4] [FID=4] 正在请求 版块第 34 页: http://127.0.0.1:1024/thread0806.php?fid=4&search=&page=34
+[2026-08-19 06:05:05] [run_batch] [scraper_5] [FID=5] 版块 第 33 页提取到 100 条数据
+[2026-08-19 06:05:06] [run_batch] [scraper_4] [FID=4] 版块 第 34 页提取到 100 条数据
+[2026-08-19 06:05:08] [run_batch] [scraper_2] [FID=2] 正在请求 版块第 35 页: http://127.0.0.1:1024/thread0806.php?fid=2&search=&page=35
+[2026-08-19 06:05:08] [run_batch] [scraper_5] [FID=5] 正在请求 版块第 34 页: http://127.0.0.1:1024/thread0806.php?fid=5&search=&page=34
+[2026-08-19 06:05:09] [run_batch] [scraper_2] [FID=2] 版块 第 35 页提取到 100 条数据
+[2026-08-19 06:05:09] [run_batch] [scraper_2] [FID=2] 版块[已保存] 前 35 页数据SQLite 实际入库 79 条（标题去重后）
+
+[2026-08-19 06:05:09] [run_batch] [scraper_4] [FID=4] 正在请求 版块第 35 页: http://127.0.0.1:1024/thread0806.php?fid=4&search=&page=35
+[2026-08-19 06:05:09] [run_batch] [scraper_5] [FID=5] 版块 第 34 页提取到 100 条数据
+[2026-08-19 06:05:11] [run_batch] [scraper_4] [FID=4] 版块 第 35 页提取到 100 条数据
+[2026-08-19 06:05:11] [run_batch] [scraper_4] [FID=4] 版块[已保存] 前 35 页数据SQLite 实际入库 47 条（标题去重后）
+
+[2026-08-19 06:05:12] [run_batch] [scraper_2] [FID=2] 正在请求 版块第 36 页: http://127.0.0.1:1024/thread0806.php?fid=2&search=&page=36
+[2026-08-19 06:05:12] [run_batch] [scraper_5] [FID=5] 正在请求 版块第 35 页: http://127.0.0.1:1024/thread0806.php?fid=5&search=&page=35
+[2026-08-19 06:05:14] [run_batch] [scraper_5] [FID=5] 版块 第 35 页提取到 100 条数据
+[2026-08-19 06:05:14] [run_batch] [scraper_5] [FID=5] 版块[已保存] 前 35 页数据SQLite 实际入库 23 条（标题去重后）
+
+[2026-08-19 06:05:14] [run_batch] [scraper_4] [FID=4] 正在请求 版块第 36 页: http://127.0.0.1:1024/thread0806.php?fid=4&search=&page=36
+[2026-08-19 06:05:14] [run_batch] [scraper_2] [FID=2] 版块 第 36 页提取到 100 条数据
+[2026-08-19 06:05:16] [run_batch] [scraper_4] [FID=4] 版块 第 36 页提取到 100 条数据
+[2026-08-19 06:05:17] [run_batch] [scraper_5] [FID=5] 正在请求 版块第 36 页: http://127.0.0.1:1024/thread0806.php?fid=5&search=&page=36
+[2026-08-19 06:05:17] [run_batch] [scraper_2] [FID=2] 正在请求 版块第 37 页: http://127.0.0.1:1024/thread0806.php?fid=2&search=&page=37
+[2026-08-19 06:05:18] [run_batch] [scraper_5] [FID=5] 版块 第 36 页提取到 100 条数据
+[2026-08-19 06:05:19] [run_batch] [scraper_2] [FID=2] 版块 第 37 页提取到 100 条数据
+[2026-08-19 06:05:19] [run_batch] [scraper_4] [FID=4] 正在请求 版块第 37 页: http://127.0.0.1:1024/thread0806.php?fid=4&search=&page=37
+[2026-08-19 06:05:20] [run_batch] [scraper_4] [FID=4] 版块 第 37 页提取到 100 条数据
+[2026-08-19 06:05:21] [run_batch] [scraper_5] [FID=5] 正在请求 版块第 37 页: http://127.0.0.1:1024/thread0806.php?fid=5&search=&page=37
+[2026-08-19 06:05:22] [run_batch] [scraper_2] [FID=2] 正在请求 版块第 38 页: http://127.0.0.1:1024/thread0806.php?fid=2&search=&page=38
+[2026-08-19 06:05:23] [run_batch] [scraper_5] [FID=5] 版块 第 37 页提取到 100 条数据
+[2026-08-19 06:05:23] [run_batch] [scraper_4] [FID=4] 正在请求 版块第 38 页: http://127.0.0.1:1024/thread0806.php?fid=4&search=&page=38
+[2026-08-19 06:05:23] [run_batch] [scraper_2] [FID=2] 版块 第 38 页提取到 100 条数据
+[2026-08-19 06:05:25] [run_batch] [scraper_4] [FID=4] 版块 第 38 页提取到 100 条数据
+[2026-08-19 06:05:26] [run_batch] [scraper_5] [FID=5] 正在请求 版块第 38 页: http://127.0.0.1:1024/thread0806.php?fid=5&search=&page=38
+[2026-08-19 06:05:26] [run_batch] [scraper_2] [FID=2] 正在请求 版块第 39 页: http://127.0.0.1:1024/thread0806.php?fid=2&search=&page=39
+[2026-08-19 06:05:27] [run_batch] [scraper_5] [FID=5] 版块 第 38 页提取到 100 条数据
+[2026-08-19 06:05:28] [run_batch] [scraper_2] [FID=2] 版块 第 39 页提取到 100 条数据
+[2026-08-19 06:05:28] [run_batch] [scraper_4] [FID=4] 正在请求 版块第 39 页: http://127.0.0.1:1024/thread0806.php?fid=4&search=&page=39
+[2026-08-19 06:05:30] [run_batch] [scraper_4] [FID=4] 版块 第 39 页提取到 100 条数据
+[2026-08-19 06:05:30] [run_batch] [scraper_5] [FID=5] 正在请求 版块第 39 页: http://127.0.0.1:1024/thread0806.php?fid=5&search=&page=39
+[2026-08-19 06:05:31] [run_batch] [scraper_2] [FID=2] 正在请求 版块第 40 页: http://127.0.0.1:1024/thread0806.php?fid=2&search=&page=40
+[2026-08-19 06:05:32] [run_batch] [scraper_5] [FID=5] 版块 第 39 页提取到 100 条数据
+[2026-08-19 06:05:32] [run_batch] [scraper_2] [FID=2] 版块 第 40 页提取到 100 条数据
+[2026-08-19 06:05:32] [run_batch] [scraper_2] [FID=2] 版块[已保存] 前 40 页数据SQLite 实际入库 79 条（标题去重后）
+
+[2026-08-19 06:05:32] [run_batch] [scraper_2] [FID=2] 版块[已保存] 前 40 页数据已写入磁盘（累计 4000 条）
+
+[2026-08-19 06:05:33] [run_batch] [scraper_4] [FID=4] 正在请求 版块第 40 页: http://127.0.0.1:1024/thread0806.php?fid=4&search=&page=40
+[2026-08-19 06:05:34] [run_batch] [scraper_4] [FID=4] 版块 第 40 页提取到 100 条数据
+[2026-08-19 06:05:34] [run_batch] [scraper_4] [FID=4] 版块[已保存] 前 40 页数据SQLite 实际入库 47 条（标题去重后）
+
+[2026-08-19 06:05:34] [run_batch] [scraper_4] [FID=4] 版块[已保存] 前 40 页数据已写入磁盘（累计 4000 条）
+
+[2026-08-19 06:05:35] [run_batch] [scraper_5] [FID=5] 正在请求 版块第 40 页: http://127.0.0.1:1024/thread0806.php?fid=5&search=&page=40
+[2026-08-19 06:05:35] [run_batch] [scraper_2] [FID=2] 正在请求 版块第 41 页: http://127.0.0.1:1024/thread0806.php?fid=2&search=&page=41
+[2026-08-19 06:05:36] [run_batch] [scraper_5] [FID=5] 版块 第 40 页提取到 100 条数据
+[2026-08-19 06:05:36] [run_batch] [scraper_5] [FID=5] 版块[已保存] 前 40 页数据SQLite 实际入库 23 条（标题去重后）
+
+[2026-08-19 06:05:36] [run_batch] [scraper_5] [FID=5] 版块[已保存] 前 40 页数据已写入磁盘（累计 4000 条）
+
+[2026-08-19 06:05:37] [run_batch] [scraper_2] [FID=2] 版块 第 41 页提取到 100 条数据
+[2026-08-19 06:05:37] [run_batch] [scraper_4] [FID=4] 正在请求 版块第 41 页: http://127.0.0.1:1024/thread0806.php?fid=4&search=&page=41
+[2026-08-19 06:05:39] [run_batch] [scraper_4] [FID=4] 版块 第 41 页提取到 100 条数据
+[2026-08-19 06:05:39] [run_batch] [scraper_5] [FID=5] 正在请求 版块第 41 页: http://127.0.0.1:1024/thread0806.php?fid=5&search=&page=41
+[2026-08-19 06:05:40] [run_batch] [scraper_2] [FID=2] 正在请求 版块第 42 页: http://127.0.0.1:1024/thread0806.php?fid=2&search=&page=42
+[2026-08-19 06:05:41] [run_batch] [scraper_5] [FID=5] 版块 第 41 页提取到 100 条数据
+[2026-08-19 06:05:42] [run_batch] [scraper_4] [FID=4] 正在请求 版块第 42 页: http://127.0.0.1:1024/thread0806.php?fid=4&search=&page=42
+[2026-08-19 06:05:42] [run_batch] [scraper_2] [FID=2] 版块 第 42 页提取到 100 条数据
+[2026-08-19 06:05:43] [run_batch] [scraper_4] [FID=4] 版块 第 42 页提取到 100 条数据
+[2026-08-19 06:05:44] [run_batch] [scraper_5] [FID=5] 正在请求 版块第 42 页: http://127.0.0.1:1024/thread0806.php?fid=5&search=&page=42
+[2026-08-19 06:05:45] [run_batch] [scraper_2] [FID=2] 正在请求 版块第 43 页: http://127.0.0.1:1024/thread0806.php?fid=2&search=&page=43
+[2026-08-19 06:05:45] [run_batch] [scraper_5] [FID=5] 版块 第 42 页提取到 100 条数据
+[2026-08-19 06:05:46] [run_batch] [scraper_4] [FID=4] 正在请求 版块第 43 页: http://127.0.0.1:1024/thread0806.php?fid=4&search=&page=43
+[2026-08-19 06:05:46] [run_batch] [scraper_2] [FID=2] 版块 第 43 页提取到 100 条数据
+[2026-08-19 06:05:48] [run_batch] [scraper_4] [FID=4] 版块 第 43 页提取到 100 条数据
+[2026-08-19 06:05:48] [run_batch] [scraper_5] [FID=5] 正在请求 版块第 43 页: http://127.0.0.1:1024/thread0806.php?fid=5&search=&page=43
+[2026-08-19 06:05:49] [run_batch] [scraper_2] [FID=2] 正在请求 版块第 44 页: http://127.0.0.1:1024/thread0806.php?fid=2&search=&page=44
+[2026-08-19 06:05:50] [run_batch] [scraper_5] [FID=5] 版块 第 43 页提取到 100 条数据
+[2026-08-19 06:05:51] [run_batch] [scraper_2] [FID=2] 版块 第 44 页提取到 100 条数据
+[2026-08-19 06:05:51] [run_batch] [scraper_4] [FID=4] 正在请求 版块第 44 页: http://127.0.0.1:1024/thread0806.php?fid=4&search=&page=44
+[2026-08-19 06:05:52] [run_batch] [scraper_4] [FID=4] 版块 第 44 页提取到 100 条数据
+[2026-08-19 06:05:53] [run_batch] [scraper_5] [FID=5] 正在请求 版块第 44 页: http://127.0.0.1:1024/thread0806.php?fid=5&search=&page=44
+[2026-08-19 06:05:54] [run_batch] [scraper_2] [FID=2] 正在请求 版块第 45 页: http://127.0.0.1:1024/thread0806.php?fid=2&search=&page=45
+[2026-08-19 06:05:55] [run_batch] [scraper_4] [FID=4] 正在请求 版块第 45 页: http://127.0.0.1:1024/thread0806.php?fid=4&search=&page=45
+[2026-08-19 06:05:58] [run_batch] [scraper_4] [FID=4] 版块 第 45 页提取到 100 条数据
+[2026-08-19 06:05:58] [run_batch] [scraper_4] [FID=4] 版块[已保存] 前 45 页数据SQLite 实际入库 47 条（标题去重后）
+
+[2026-08-19 06:05:58] [run_batch] [scraper_2] [FID=2] 版块 第 45 页提取到 100 条数据
+[2026-08-19 06:05:58] [run_batch] [scraper_2] [FID=2] 版块[已保存] 前 45 页数据SQLite 实际入库 79 条（标题去重后）
+
+[2026-08-19 06:05:58] [run_batch] [scraper_5] [FID=5] 版块 第 44 页提取到 100 条数据
+[2026-08-19 06:06:01] [run_batch] [scraper_4] [FID=4] 正在请求 版块第 46 页: http://127.0.0.1:1024/thread0806.php?fid=4&search=&page=46
+[2026-08-19 06:06:01] [run_batch] [scraper_2] [FID=2] 正在请求 版块第 46 页: http://127.0.0.1:1024/thread0806.php?fid=2&search=&page=46
+[2026-08-19 06:06:01] [run_batch] [scraper_5] [FID=5] 正在请求 版块第 45 页: http://127.0.0.1:1024/thread0806.php?fid=5&search=&page=45
+[2026-08-19 06:06:02] [run_batch] [scraper_4] [FID=4] 版块 第 46 页提取到 100 条数据
+[2026-08-19 06:06:02] [run_batch] [scraper_2] [FID=2] 版块 第 46 页提取到 100 条数据
+[2026-08-19 06:06:02] [run_batch] [scraper_5] [FID=5] 版块 第 45 页提取到 100 条数据
+[2026-08-19 06:06:02] [run_batch] [scraper_5] [FID=5] 版块[已保存] 前 45 页数据SQLite 实际入库 23 条（标题去重后）
+
+[2026-08-19 06:06:05] [run_batch] [scraper_4] [FID=4] 正在请求 版块第 47 页: http://127.0.0.1:1024/thread0806.php?fid=4&search=&page=47
+[2026-08-19 06:06:05] [run_batch] [scraper_2] [FID=2] 正在请求 版块第 47 页: http://127.0.0.1:1024/thread0806.php?fid=2&search=&page=47
+[2026-08-19 06:06:05] [run_batch] [scraper_5] [FID=5] 正在请求 版块第 46 页: http://127.0.0.1:1024/thread0806.php?fid=5&search=&page=46
+[2026-08-19 06:06:06] [run_batch] [scraper_4] [FID=4] 版块 第 47 页提取到 100 条数据
+[2026-08-19 06:06:07] [run_batch] [scraper_5] [FID=5] 版块 第 46 页提取到 100 条数据
+[2026-08-19 06:06:07] [run_batch] [scraper_2] [FID=2] 版块 第 47 页提取到 100 条数据
+[2026-08-19 06:06:09] [run_batch] [scraper_4] [FID=4] 正在请求 版块第 48 页: http://127.0.0.1:1024/thread0806.php?fid=4&search=&page=48
+[2026-08-19 06:06:10] [run_batch] [scraper_5] [FID=5] 正在请求 版块第 47 页: http://127.0.0.1:1024/thread0806.php?fid=5&search=&page=47
+[2026-08-19 06:06:10] [run_batch] [scraper_2] [FID=2] 正在请求 版块第 48 页: http://127.0.0.1:1024/thread0806.php?fid=2&search=&page=48
+[2026-08-19 06:06:11] [run_batch] [scraper_4] [FID=4] 版块 第 48 页提取到 100 条数据
+[2026-08-19 06:06:11] [run_batch] [scraper_5] [FID=5] 版块 第 47 页提取到 100 条数据
+[2026-08-19 06:06:11] [run_batch] [scraper_2] [FID=2] 版块 第 48 页提取到 100 条数据
+[2026-08-19 06:06:14] [run_batch] [scraper_4] [FID=4] 正在请求 版块第 49 页: http://127.0.0.1:1024/thread0806.php?fid=4&search=&page=49
+[2026-08-19 06:06:14] [run_batch] [scraper_5] [FID=5] 正在请求 版块第 48 页: http://127.0.0.1:1024/thread0806.php?fid=5&search=&page=48
+[2026-08-19 06:06:14] [run_batch] [scraper_2] [FID=2] 正在请求 版块第 49 页: http://127.0.0.1:1024/thread0806.php?fid=2&search=&page=49
+[2026-08-19 06:06:16] [run_batch] [scraper_4] [FID=4] 版块 第 49 页提取到 100 条数据
+[2026-08-19 06:06:16] [run_batch] [scraper_5] [FID=5] 版块 第 48 页提取到 100 条数据
+[2026-08-19 06:06:16] [run_batch] [scraper_2] [FID=2] 版块 第 49 页提取到 100 条数据
+[2026-08-19 06:06:19] [run_batch] [scraper_4] [FID=4] 正在请求 版块第 50 页: http://127.0.0.1:1024/thread0806.php?fid=4&search=&page=50
+[2026-08-19 06:06:19] [run_batch] [scraper_5] [FID=5] 正在请求 版块第 49 页: http://127.0.0.1:1024/thread0806.php?fid=5&search=&page=49
+[2026-08-19 06:06:19] [run_batch] [scraper_2] [FID=2] 正在请求 版块第 50 页: http://127.0.0.1:1024/thread0806.php?fid=2&search=&page=50
+[2026-08-19 06:06:20] [run_batch] [scraper_4] [FID=4] 版块 第 50 页提取到 100 条数据
+[2026-08-19 06:06:20] [run_batch] [scraper_4] [FID=4] 版块[已保存] 前 50 页数据SQLite 实际入库 47 条（标题去重后）
+
+[2026-08-19 06:06:20] [run_batch] [scraper_4] [FID=4] 版块[已保存] 前 50 页数据已写入磁盘（累计 5000 条）
+
+
+[2026-08-19 06:06:20] [run_batch] [scraper_4] [FID=4] 版块[已保存] 共写入 5000 条数据到 outputs/20260819/4_output_20260819.csv（进度至第 50 页）
+[2026-08-19 06:06:20] [run_batch] [scraper_4] [FID=4] 版块 SQLite 实际入库 47 条（标题去重后）
+[2026-08-19 06:06:20] [run_batch] __SUMMARY__ fid=4 rows=5000 db_rows=47 pages=50
+[2026-08-19 06:06:20] [run_batch] [scraper_5] [FID=5] 版块 第 49 页提取到 100 条数据
+[2026-08-19 06:06:20] [run_batch] 完成 [4] 版块4（CSV 5000 条 / SQLite 47 条）
+[2026-08-19 06:06:20] [run_batch] 启动 [7] 版块7（访问根地址: http://127.0.0.1:1024）
+
+[2026-08-19 06:06:21] [run_batch] [scraper_7] ===== 会话开始 2026-08-19 06:06:21 =====
+[2026-08-19 06:06:21] [run_batch] [scraper_7] [FID=7] 版块1-50页 开始抓取
+[2026-08-19 06:06:21] [run_batch] [scraper_7] [FID=7] 版块使用配置末页: 50
+[2026-08-19 06:06:21] [run_batch] [scraper_7] 开始抓取[FID=7] 版块，共 50 页（第 1 ~ 50 页）
+
+[2026-08-19 06:06:21] [run_batch] [scraper_7] [FID=7] 正在请求 版块第 1 页: http://127.0.0.1:1024/thread0806.php?fid=7&search=&page=1
+[2026-08-19 06:06:21] [run_batch] [scraper_2] [FID=2] 版块 第 50 页提取到 100 条数据
+[2026-08-19 06:06:21] [run_batch] [scraper_2] [FID=2] 版块[已保存] 前 50 页数据SQLite 实际入库 79 条（标题去重后）
+
+[2026-08-19 06:06:21] [run_batch] [scraper_2] [FID=2] 版块[已保存] 前 50 页数据已写入磁盘（累计 5000 条）
+
+
+[2026-08-19 06:06:21] [run_batch] [scraper_2] [FID=2] 版块[已保存] 共写入 5000 条数据到 outputs/20260819/2_output_20260819.csv（进度至第 50 页）
+[2026-08-19 06:06:21] [run_batch] [scraper_2] [FID=2] 版块 SQLite 实际入库 79 条（标题去重后）
+[2026-08-19 06:06:21] [run_batch] __SUMMARY__ fid=2 rows=5000 db_rows=79 pages=50
+[2026-08-19 06:06:21] [run_batch] 完成 [2] 版块2（CSV 5000 条 / SQLite 79 条）
+[2026-08-19 06:06:21] [run_batch] 启动 [8] 版块8（访问根地址: http://127.0.0.1:1024）
+[2026-08-19 06:06:22] [run_batch] [scraper_7] [FID=7] 版块 第 1 页提取到 99 条数据
+
+[2026-08-19 06:06:22] [run_batch] [scraper_8] ===== 会话开始 2026-08-19 06:06:22 =====
+[2026-08-19 06:06:22] [run_batch] [scraper_8] [FID=8] 版块1-50页 开始抓取
+[2026-08-19 06:06:22] [run_batch] [scraper_8] [FID=8] 版块使用配置末页: 50
+[2026-08-19 06:06:22] [run_batch] [scraper_8] 开始抓取[FID=8] 版块，共 50 页（第 1 ~ 50 页）
+
+[2026-08-19 06:06:22] [run_batch] [scraper_8] [FID=8] 正在请求 版块第 1 页: http://127.0.0.1:1024/thread0806.php?fid=8&search=&page=1
+[2026-08-19 06:06:23] [run_batch] [scraper_5] [FID=5] 正在请求 版块第 50 页: http://127.0.0.1:1024/thread0806.php?fid=5&search=&page=50
+[2026-08-19 06:06:23] [run_batch] [scraper_8] [FID=8] 版块 第 1 页提取到 100 条数据
+[2026-08-19 06:06:24] [run_batch] [scraper_5] [FID=5] 版块 第 50 页提取到 100 条数据
+[2026-08-19 06:06:24] [run_batch] [scraper_5] [FID=5] 版块[已保存] 前 50 页数据SQLite 实际入库 23 条（标题去重后）
+
+[2026-08-19 06:06:24] [run_batch] [scraper_5] [FID=5] 版块[已保存] 前 50 页数据已写入磁盘（累计 5000 条）
+
+
+[2026-08-19 06:06:24] [run_batch] [scraper_5] [FID=5] 版块[已保存] 共写入 5000 条数据到 outputs/20260819/5_output_20260819.csv（进度至第 50 页）
+[2026-08-19 06:06:24] [run_batch] [scraper_5] [FID=5] 版块 SQLite 实际入库 23 条（标题去重后）
+[2026-08-19 06:06:24] [run_batch] __SUMMARY__ fid=5 rows=5000 db_rows=23 pages=50
+[2026-08-19 06:06:25] [run_batch] 完成 [5] 版块5（CSV 5000 条 / SQLite 23 条）
+[2026-08-19 06:06:25] [run_batch] 启动 [15] 版块15（访问根地址: http://127.0.0.1:1024）
+[2026-08-19 06:06:25] [run_batch] [scraper_7] [FID=7] 正在请求 版块第 2 页: http://127.0.0.1:1024/thread0806.php?fid=7&search=&page=2
+
+[2026-08-19 06:06:25] [run_batch] [scraper_15] ===== 会话开始 2026-08-19 06:06:25 =====
+[2026-08-19 06:06:25] [run_batch] [scraper_15] [FID=15] 版块1-50页 开始抓取
+[2026-08-19 06:06:25] [run_batch] [scraper_15] [FID=15] 版块使用配置末页: 50
+[2026-08-19 06:06:25] [run_batch] [scraper_15] 开始抓取[FID=15] 版块，共 50 页（第 1 ~ 50 页）
+
+[2026-08-19 06:06:25] [run_batch] [scraper_15] [FID=15] 正在请求 版块第 1 页: http://127.0.0.1:1024/thread0806.php?fid=15&search=&page=1
+[2026-08-19 06:06:26] [run_batch] [scraper_7] [FID=7] 版块 第 2 页提取到 100 条数据
+[2026-08-19 06:06:26] [run_batch] [scraper_8] [FID=8] 正在请求 版块第 2 页: http://127.0.0.1:1024/thread0806.php?fid=8&search=&page=2
+[2026-08-19 06:06:26] [run_batch] [scraper_15] [FID=15] 版块 第 1 页提取到 100 条数据
+[2026-08-19 06:06:28] [run_batch] [scraper_8] [FID=8] 版块 第 2 页提取到 100 条数据
+[2026-08-19 06:06:29] [run_batch] [scraper_7] [FID=7] 正在请求 版块第 3 页: http://127.0.0.1:1024/thread0806.php?fid=7&search=&page=3
+[2026-08-19 06:06:29] [run_batch] [scraper_15] [FID=15] 正在请求 版块第 2 页: http://127.0.0.1:1024/thread0806.php?fid=15&search=&page=2
+[2026-08-19 06:06:30] [run_batch] [scraper_7] [FID=7] 版块 第 3 页提取到 100 条数据
+[2026-08-19 06:06:31] [run_batch] [scraper_15] [FID=15] 版块 第 2 页提取到 100 条数据
+[2026-08-19 06:06:31] [run_batch] [scraper_8] [FID=8] 正在请求 版块第 3 页: http://127.0.0.1:1024/thread0806.php?fid=8&search=&page=3
+[2026-08-19 06:06:32] [run_batch] [scraper_8] [FID=8] 版块 第 3 页提取到 100 条数据
+[2026-08-19 06:06:33] [run_batch] [scraper_7] [FID=7] 正在请求 版块第 4 页: http://127.0.0.1:1024/thread0806.php?fid=7&search=&page=4
+[2026-08-19 06:06:34] [run_batch] [scraper_15] [FID=15] 正在请求 版块第 3 页: http://127.0.0.1:1024/thread0806.php?fid=15&search=&page=3
+[2026-08-19 06:06:35] [run_batch] [scraper_7] [FID=7] 版块 第 4 页提取到 100 条数据
+[2026-08-19 06:06:35] [run_batch] [scraper_8] [FID=8] 正在请求 版块第 4 页: http://127.0.0.1:1024/thread0806.php?fid=8&search=&page=4
+[2026-08-19 06:06:35] [run_batch] [scraper_15] [FID=15] 版块 第 3 页提取到 100 条数据
+[2026-08-19 06:06:36] [run_batch] [scraper_8] [FID=8] 版块 第 4 页提取到 100 条数据
+[2026-08-19 06:06:38] [run_batch] [scraper_7] [FID=7] 正在请求 版块第 5 页: http://127.0.0.1:1024/thread0806.php?fid=7&search=&page=5
+[2026-08-19 06:06:38] [run_batch] [scraper_15] [FID=15] 正在请求 版块第 4 页: http://127.0.0.1:1024/thread0806.php?fid=15&search=&page=4
+[2026-08-19 06:06:39] [run_batch] [scraper_7] [FID=7] 版块 第 5 页提取到 100 条数据
+[2026-08-19 06:06:39] [run_batch] [scraper_8] [FID=8] 正在请求 版块第 5 页: http://127.0.0.1:1024/thread0806.php?fid=8&search=&page=5
+[2026-08-19 06:06:40] [run_batch] [scraper_15] [FID=15] 版块 第 4 页提取到 100 条数据
+[2026-08-19 06:06:41] [run_batch] [scraper_8] [FID=8] 版块 第 5 页提取到 100 条数据
+[2026-08-19 06:06:41] [run_batch] [scraper_8] [FID=8] 版块[已保存] 前 5 页数据SQLite 实际入库 24 条（标题去重后）
+
+[2026-08-19 06:06:42] [run_batch] [scraper_7] [FID=7] 正在请求 版块第 6 页: http://127.0.0.1:1024/thread0806.php?fid=7&search=&page=6
+[2026-08-19 06:06:43] [run_batch] [scraper_15] [FID=15] 正在请求 版块第 5 页: http://127.0.0.1:1024/thread0806.php?fid=15&search=&page=5
+[2026-08-19 06:06:44] [run_batch] [scraper_7] [FID=7] 版块 第 6 页提取到 100 条数据
+[2026-08-19 06:06:44] [run_batch] [scraper_7] [FID=7] 版块[已保存] 前 6 页数据SQLite 实际入库 64 条（标题去重后）
+
+[2026-08-19 06:06:44] [run_batch] [scraper_15] [FID=15] 版块 第 5 页提取到 100 条数据
+[2026-08-19 06:06:44] [run_batch] [scraper_15] [FID=15] 版块[已保存] 前 5 页数据SQLite 实际入库 95 条（标题去重后）
+
+[2026-08-19 06:06:44] [run_batch] [scraper_8] [FID=8] 正在请求 版块第 6 页: http://127.0.0.1:1024/thread0806.php?fid=8&search=&page=6
+[2026-08-19 06:06:46] [run_batch] [scraper_8] [FID=8] 版块 第 6 页提取到 100 条数据
+[2026-08-19 06:06:47] [run_batch] [scraper_7] [FID=7] 正在请求 版块第 7 页: http://127.0.0.1:1024/thread0806.php?fid=7&search=&page=7
+[2026-08-19 06:06:47] [run_batch] [scraper_15] [FID=15] 正在请求 版块第 6 页: http://127.0.0.1:1024/thread0806.php?fid=15&search=&page=6
+[2026-08-19 06:06:48] [run_batch] [scraper_7] [FID=7] 版块 第 7 页提取到 100 条数据
+[2026-08-19 06:06:49] [run_batch] [scraper_8] [FID=8] 正在请求 版块第 7 页: http://127.0.0.1:1024/thread0806.php?fid=8&search=&page=7
+[2026-08-19 06:06:49] [run_batch] [scraper_15] [FID=15] 版块 第 6 页提取到 100 条数据
+[2026-08-19 06:06:50] [run_batch] [scraper_8] [FID=8] 版块 第 7 页提取到 100 条数据
+[2026-08-19 06:06:51] [run_batch] [scraper_7] [FID=7] 正在请求 版块第 8 页: http://127.0.0.1:1024/thread0806.php?fid=7&search=&page=8
+[2026-08-19 06:06:52] [run_batch] [scraper_15] [FID=15] 正在请求 版块第 7 页: http://127.0.0.1:1024/thread0806.php?fid=15&search=&page=7
+[2026-08-19 06:06:53] [run_batch] [scraper_8] [FID=8] 正在请求 版块第 8 页: http://127.0.0.1:1024/thread0806.php?fid=8&search=&page=8
+[2026-08-19 06:06:54] [run_batch] [scraper_15] [FID=15] 版块 第 7 页提取到 100 条数据
+[2026-08-19 06:06:54] [run_batch] [scraper_7] [FID=7] 版块 第 8 页提取到 100 条数据
+[2026-08-19 06:06:55] [run_batch] [scraper_8] [FID=8] 版块 第 8 页提取到 100 条数据
+[2026-08-19 06:06:57] [run_batch] [scraper_15] [FID=15] 正在请求 版块第 8 页: http://127.0.0.1:1024/thread0806.php?fid=15&search=&page=8
+[2026-08-19 06:06:57] [run_batch] [scraper_7] [FID=7] 正在请求 版块第 9 页: http://127.0.0.1:1024/thread0806.php?fid=7&search=&page=9
+[2026-08-19 06:06:58] [run_batch] [scraper_8] [FID=8] 正在请求 版块第 9 页: http://127.0.0.1:1024/thread0806.php?fid=8&search=&page=9
+[2026-08-19 06:06:58] [run_batch] [scraper_7] [FID=7] 版块 第 9 页提取到 100 条数据
+[2026-08-19 06:06:58] [run_batch] [scraper_15] [FID=15] 版块 第 8 页提取到 100 条数据
+[2026-08-19 06:06:59] [run_batch] [scraper_8] [FID=8] 版块 第 9 页提取到 100 条数据
+[2026-08-19 06:07:01] [run_batch] [scraper_7] [FID=7] 正在请求 版块第 10 页: http://127.0.0.1:1024/thread0806.php?fid=7&search=&page=10
+[2026-08-19 06:07:01] [run_batch] [scraper_15] [FID=15] 正在请求 版块第 9 页: http://127.0.0.1:1024/thread0806.php?fid=15&search=&page=9
+[2026-08-19 06:07:02] [run_batch] [scraper_8] [FID=8] 正在请求 版块第 10 页: http://127.0.0.1:1024/thread0806.php?fid=8&search=&page=10
+[2026-08-19 06:07:03] [run_batch] [scraper_15] [FID=15] 版块 第 9 页提取到 100 条数据
+[2026-08-19 06:07:03] [run_batch] [scraper_7] [FID=7] 版块 第 10 页提取到 100 条数据
+[2026-08-19 06:07:03] [run_batch] [scraper_7] [FID=7] 版块[已保存] 前 10 页数据已写入磁盘（累计 999 条）
+
+[2026-08-19 06:07:05] [run_batch] [scraper_8] [FID=8] 版块 第 10 页提取到 100 条数据
+[2026-08-19 06:07:05] [run_batch] [scraper_8] [FID=8] 版块[已保存] 前 10 页数据SQLite 实际入库 24 条（标题去重后）
+
+[2026-08-19 06:07:05] [run_batch] [scraper_8] [FID=8] 版块[已保存] 前 10 页数据已写入磁盘（累计 1000 条）
+
+[2026-08-19 06:07:06] [run_batch] [scraper_15] [FID=15] 正在请求 版块第 10 页: http://127.0.0.1:1024/thread0806.php?fid=15&search=&page=10
+[2026-08-19 06:07:06] [run_batch] [scraper_7] [FID=7] 正在请求 版块第 11 页: http://127.0.0.1:1024/thread0806.php?fid=7&search=&page=11
+[2026-08-19 06:07:07] [run_batch] [scraper_15] [FID=15] 版块 第 10 页提取到 100 条数据
+[2026-08-19 06:07:07] [run_batch] [scraper_15] [FID=15] 版块[已保存] 前 10 页数据SQLite 实际入库 95 条（标题去重后）
+
+[2026-08-19 06:07:07] [run_batch] [scraper_15] [FID=15] 版块[已保存] 前 10 页数据已写入磁盘（累计 1000 条）
+
+[2026-08-19 06:07:08] [run_batch] [scraper_7] [FID=7] 版块 第 11 页提取到 100 条数据
+[2026-08-19 06:07:08] [run_batch] [scraper_7] [FID=7] 版块[已保存] 前 11 页数据SQLite 实际入库 64 条（标题去重后）
+
+[2026-08-19 06:07:08] [run_batch] [scraper_8] [FID=8] 正在请求 版块第 11 页: http://127.0.0.1:1024/thread0806.php?fid=8&search=&page=11
+[2026-08-19 06:07:09] [run_batch] [scraper_8] [FID=8] 版块 第 11 页提取到 100 条数据
+[2026-08-19 06:07:10] [run_batch] [scraper_15] [FID=15] 正在请求 版块第 11 页: http://127.0.0.1:1024/thread0806.php?fid=15&search=&page=11
+[2026-08-19 06:07:11] [run_batch] [scraper_7] [FID=7] 正在请求 版块第 12 页: http://127.0.0.1:1024/thread0806.php?fid=7&search=&page=12
+[2026-08-19 06:07:12] [run_batch] [scraper_15] [FID=15] 版块 第 11 页提取到 100 条数据
+[2026-08-19 06:07:12] [run_batch] [scraper_7] [FID=7] 版块 第 12 页提取到 100 条数据
+[2026-08-19 06:07:12] [run_batch] [scraper_8] [FID=8] 正在请求 版块第 12 页: http://127.0.0.1:1024/thread0806.php?fid=8&search=&page=12
+[2026-08-19 06:07:14] [run_batch] [scraper_8] [FID=8] 版块 第 12 页提取到 100 条数据
+[2026-08-19 06:07:15] [run_batch] [scraper_15] [FID=15] 正在请求 版块第 12 页: http://127.0.0.1:1024/thread0806.php?fid=15&search=&page=12
+[2026-08-19 06:07:15] [run_batch] [scraper_7] [FID=7] 正在请求 版块第 13 页: http://127.0.0.1:1024/thread0806.php?fid=7&search=&page=13
+[2026-08-19 06:07:17] [run_batch] [scraper_7] [FID=7] 版块 第 13 页提取到 100 条数据
+[2026-08-19 06:07:17] [run_batch] [scraper_8] [FID=8] 正在请求 版块第 13 页: http://127.0.0.1:1024/thread0806.php?fid=8&search=&page=13
+[2026-08-19 06:07:17] [run_batch] [scraper_15] [FID=15] 版块 第 12 页提取到 100 条数据
+[2026-08-19 06:07:19] [run_batch] [scraper_8] [FID=8] 版块 第 13 页提取到 100 条数据
+[2026-08-19 06:07:20] [run_batch] [scraper_7] [FID=7] 正在请求 版块第 14 页: http://127.0.0.1:1024/thread0806.php?fid=7&search=&page=14
+[2026-08-19 06:07:20] [run_batch] [scraper_15] [FID=15] 正在请求 版块第 13 页: http://127.0.0.1:1024/thread0806.php?fid=15&search=&page=13
+[2026-08-19 06:07:21] [run_batch] [scraper_7] [FID=7] 版块 第 14 页提取到 100 条数据
+[2026-08-19 06:07:22] [run_batch] [scraper_15] [FID=15] 版块 第 13 页提取到 100 条数据
+[2026-08-19 06:07:22] [run_batch] [scraper_8] [FID=8] 正在请求 版块第 14 页: http://127.0.0.1:1024/thread0806.php?fid=8&search=&page=14
+[2026-08-19 06:07:23] [run_batch] [scraper_8] [FID=8] 版块 第 14 页提取到 100 条数据
+[2026-08-19 06:07:24] [run_batch] [scraper_7] [FID=7] 正在请求 版块第 15 页: http://127.0.0.1:1024/thread0806.php?fid=7&search=&page=15
+[2026-08-19 06:07:25] [run_batch] [scraper_15] [FID=15] 正在请求 版块第 14 页: http://127.0.0.1:1024/thread0806.php?fid=15&search=&page=14
+[2026-08-19 06:07:26] [run_batch] [scraper_8] [FID=8] 正在请求 版块第 15 页: http://127.0.0.1:1024/thread0806.php?fid=8&search=&page=15
+[2026-08-19 06:07:27] [run_batch] [scraper_7] [FID=7] 版块 第 15 页提取到 100 条数据
+[2026-08-19 06:07:27] [run_batch] [scraper_15] [FID=15] 版块 第 14 页提取到 100 条数据
+[2026-08-19 06:07:28] [run_batch] [scraper_8] [FID=8] 版块 第 15 页提取到 100 条数据
+[2026-08-19 06:07:28] [run_batch] [scraper_8] [FID=8] 版块[已保存] 前 15 页数据SQLite 实际入库 24 条（标题去重后）
+
+[2026-08-19 06:07:30] [run_batch] [scraper_7] [FID=7] 正在请求 版块第 16 页: http://127.0.0.1:1024/thread0806.php?fid=7&search=&page=16
+[2026-08-19 06:07:30] [run_batch] [scraper_15] [FID=15] 正在请求 版块第 15 页: http://127.0.0.1:1024/thread0806.php?fid=15&search=&page=15
+[2026-08-19 06:07:31] [run_batch] [scraper_8] [FID=8] 正在请求 版块第 16 页: http://127.0.0.1:1024/thread0806.php?fid=8&search=&page=16
+[2026-08-19 06:07:31] [run_batch] [scraper_7] [FID=7] 版块 第 16 页提取到 100 条数据
+[2026-08-19 06:07:31] [run_batch] [scraper_7] [FID=7] 版块[已保存] 前 16 页数据SQLite 实际入库 64 条（标题去重后）
+
+[2026-08-19 06:07:32] [run_batch] [scraper_15] [FID=15] 版块 第 15 页提取到 100 条数据
+[2026-08-19 06:07:32] [run_batch] [scraper_15] [FID=15] 版块[已保存] 前 15 页数据SQLite 实际入库 95 条（标题去重后）
+
+[2026-08-19 06:07:32] [run_batch] [scraper_8] [FID=8] 版块 第 16 页提取到 100 条数据
+[2026-08-19 06:07:34] [run_batch] [scraper_7] [FID=7] 正在请求 版块第 17 页: http://127.0.0.1:1024/thread0806.php?fid=7&search=&page=17
+[2026-08-19 06:07:35] [run_batch] [scraper_15] [FID=15] 正在请求 版块第 16 页: http://127.0.0.1:1024/thread0806.php?fid=15&search=&page=16
+[2026-08-19 06:07:35] [run_batch] [scraper_8] [FID=8] 正在请求 版块第 17 页: http://127.0.0.1:1024/thread0806.php?fid=8&search=&page=17
+[2026-08-19 06:07:36] [run_batch] [scraper_7] [FID=7] 版块 第 17 页提取到 100 条数据
+[2026-08-19 06:07:37] [run_batch] [scraper_8] [FID=8] 版块 第 17 页提取到 100 条数据
+[2026-08-19 06:07:37] [run_batch] [scraper_15] [FID=15] 版块 第 16 页提取到 100 条数据
+[2026-08-19 06:07:39] [run_batch] [scraper_7] [FID=7] 正在请求 版块第 18 页: http://127.0.0.1:1024/thread0806.php?fid=7&search=&page=18
+[2026-08-19 06:07:40] [run_batch] [scraper_8] [FID=8] 正在请求 版块第 18 页: http://127.0.0.1:1024/thread0806.php?fid=8&search=&page=18
+[2026-08-19 06:07:40] [run_batch] [scraper_15] [FID=15] 正在请求 版块第 17 页: http://127.0.0.1:1024/thread0806.php?fid=15&search=&page=17
+[2026-08-19 06:07:41] [run_batch] [scraper_7] [FID=7] 版块 第 18 页提取到 100 条数据
+[2026-08-19 06:07:41] [run_batch] [scraper_15] [FID=15] 版块 第 17 页提取到 100 条数据
+[2026-08-19 06:07:42] [run_batch] [scraper_8] [FID=8] 版块 第 18 页提取到 100 条数据
+[2026-08-19 06:07:44] [run_batch] [scraper_7] [FID=7] 正在请求 版块第 19 页: http://127.0.0.1:1024/thread0806.php?fid=7&search=&page=19
+[2026-08-19 06:07:44] [run_batch] [scraper_15] [FID=15] 正在请求 版块第 18 页: http://127.0.0.1:1024/thread0806.php?fid=15&search=&page=18
+[2026-08-19 06:07:45] [run_batch] [scraper_8] [FID=8] 正在请求 版块第 19 页: http://127.0.0.1:1024/thread0806.php?fid=8&search=&page=19
+[2026-08-19 06:07:45] [run_batch] [scraper_7] [FID=7] 版块 第 19 页提取到 100 条数据
+[2026-08-19 06:07:46] [run_batch] [scraper_15] [FID=15] 版块 第 18 页提取到 100 条数据
+[2026-08-19 06:07:46] [run_batch] [scraper_8] [FID=8] 版块 第 19 页提取到 100 条数据
+[2026-08-19 06:07:48] [run_batch] [scraper_7] [FID=7] 正在请求 版块第 20 页: http://127.0.0.1:1024/thread0806.php?fid=7&search=&page=20
+[2026-08-19 06:07:49] [run_batch] [scraper_15] [FID=15] 正在请求 版块第 19 页: http://127.0.0.1:1024/thread0806.php?fid=15&search=&page=19
+[2026-08-19 06:07:49] [run_batch] [scraper_8] [FID=8] 正在请求 版块第 20 页: http://127.0.0.1:1024/thread0806.php?fid=8&search=&page=20
+[2026-08-19 06:07:50] [run_batch] [scraper_15] [FID=15] 版块 第 19 页提取到 100 条数据
+[2026-08-19 06:07:51] [run_batch] [scraper_7] [FID=7] 版块 第 20 页提取到 100 条数据
+[2026-08-19 06:07:51] [run_batch] [scraper_7] [FID=7] 版块[已保存] 前 20 页数据已写入磁盘（累计 1999 条）
+
+[2026-08-19 06:07:51] [run_batch] [scraper_8] [FID=8] 版块 第 20 页提取到 100 条数据
+[2026-08-19 06:07:51] [run_batch] [scraper_8] [FID=8] 版块[已保存] 前 20 页数据SQLite 实际入库 24 条（标题去重后）
+
+[2026-08-19 06:07:51] [run_batch] [scraper_8] [FID=8] 版块[已保存] 前 20 页数据已写入磁盘（累计 2000 条）
+
+[2026-08-19 06:07:53] [run_batch] [scraper_15] [FID=15] 正在请求 版块第 20 页: http://127.0.0.1:1024/thread0806.php?fid=15&search=&page=20
+[2026-08-19 06:07:54] [run_batch] [scraper_7] [FID=7] 正在请求 版块第 21 页: http://127.0.0.1:1024/thread0806.php?fid=7&search=&page=21
+[2026-08-19 06:07:54] [run_batch] [scraper_8] [FID=8] 正在请求 版块第 21 页: http://127.0.0.1:1024/thread0806.php?fid=8&search=&page=21
+[2026-08-19 06:07:55] [run_batch] [scraper_8] [FID=8] 版块 第 21 页提取到 100 条数据
+[2026-08-19 06:07:55] [run_batch] [scraper_15] [FID=15] 版块 第 20 页提取到 100 条数据
+[2026-08-19 06:07:55] [run_batch] [scraper_15] [FID=15] 版块[已保存] 前 20 页数据SQLite 实际入库 95 条（标题去重后）
+
+[2026-08-19 06:07:55] [run_batch] [scraper_15] [FID=15] 版块[已保存] 前 20 页数据已写入磁盘（累计 2000 条）
+
+[2026-08-19 06:07:55] [run_batch] [scraper_7] [FID=7] 版块 第 21 页提取到 100 条数据
+[2026-08-19 06:07:56] [run_batch] [scraper_7] [FID=7] 版块[已保存] 前 21 页数据SQLite 实际入库 64 条（标题去重后）
+
+[2026-08-19 06:07:58] [run_batch] [scraper_8] [FID=8] 正在请求 版块第 22 页: http://127.0.0.1:1024/thread0806.php?fid=8&search=&page=22
+[2026-08-19 06:07:58] [run_batch] [scraper_15] [FID=15] 正在请求 版块第 21 页: http://127.0.0.1:1024/thread0806.php?fid=15&search=&page=21
+[2026-08-19 06:07:59] [run_batch] [scraper_7] [FID=7] 正在请求 版块第 22 页: http://127.0.0.1:1024/thread0806.php?fid=7&search=&page=22
+[2026-08-19 06:07:59] [run_batch] [scraper_8] [FID=8] 版块 第 22 页提取到 100 条数据
+[2026-08-19 06:08:00] [run_batch] [scraper_15] [FID=15] 版块 第 21 页提取到 100 条数据
+[2026-08-19 06:08:00] [run_batch] [scraper_7] [FID=7] 版块 第 22 页提取到 100 条数据
+[2026-08-19 06:08:02] [run_batch] [scraper_8] [FID=8] 正在请求 版块第 23 页: http://127.0.0.1:1024/thread0806.php?fid=8&search=&page=23
+[2026-08-19 06:08:03] [run_batch] [scraper_15] [FID=15] 正在请求 版块第 22 页: http://127.0.0.1:1024/thread0806.php?fid=15&search=&page=22
+[2026-08-19 06:08:03] [run_batch] [scraper_7] [FID=7] 正在请求 版块第 23 页: http://127.0.0.1:1024/thread0806.php?fid=7&search=&page=23
+[2026-08-19 06:08:04] [run_batch] [scraper_8] [FID=8] 版块 第 23 页提取到 100 条数据
+[2026-08-19 06:08:04] [run_batch] [scraper_15] [FID=15] 版块 第 22 页提取到 100 条数据
+[2026-08-19 06:08:05] [run_batch] [scraper_7] [FID=7] 版块 第 23 页提取到 100 条数据
+[2026-08-19 06:08:07] [run_batch] [scraper_8] [FID=8] 正在请求 版块第 24 页: http://127.0.0.1:1024/thread0806.php?fid=8&search=&page=24
+[2026-08-19 06:08:07] [run_batch] [scraper_15] [FID=15] 正在请求 版块第 23 页: http://127.0.0.1:1024/thread0806.php?fid=15&search=&page=23
+[2026-08-19 06:08:08] [run_batch] [scraper_7] [FID=7] 正在请求 版块第 24 页: http://127.0.0.1:1024/thread0806.php?fid=7&search=&page=24
+[2026-08-19 06:08:08] [run_batch] [scraper_8] [FID=8] 版块 第 24 页提取到 100 条数据
+[2026-08-19 06:08:09] [run_batch] [scraper_15] [FID=15] 版块 第 23 页提取到 100 条数据
+[2026-08-19 06:08:10] [run_batch] [scraper_7] [FID=7] 版块 第 24 页提取到 100 条数据
+[2026-08-19 06:08:11] [run_batch] [scraper_8] [FID=8] 正在请求 版块第 25 页: http://127.0.0.1:1024/thread0806.php?fid=8&search=&page=25
+[2026-08-19 06:08:12] [run_batch] [scraper_15] [FID=15] 正在请求 版块第 24 页: http://127.0.0.1:1024/thread0806.php?fid=15&search=&page=24
+[2026-08-19 06:08:13] [run_batch] [scraper_8] [FID=8] 版块 第 25 页提取到 100 条数据
+[2026-08-19 06:08:13] [run_batch] [scraper_8] [FID=8] 版块[已保存] 前 25 页数据SQLite 实际入库 24 条（标题去重后）
+
+[2026-08-19 06:08:13] [run_batch] [scraper_7] [FID=7] 正在请求 版块第 25 页: http://127.0.0.1:1024/thread0806.php?fid=7&search=&page=25
+[2026-08-19 06:08:14] [run_batch] [scraper_15] [FID=15] 版块 第 24 页提取到 100 条数据
+[2026-08-19 06:08:15] [run_batch] [scraper_7] [FID=7] 版块 第 25 页提取到 100 条数据
+[2026-08-19 06:08:16] [run_batch] [scraper_8] [FID=8] 正在请求 版块第 26 页: http://127.0.0.1:1024/thread0806.php?fid=8&search=&page=26
+[2026-08-19 06:08:17] [run_batch] [scraper_15] [FID=15] 正在请求 版块第 25 页: http://127.0.0.1:1024/thread0806.php?fid=15&search=&page=25
+[2026-08-19 06:08:17] [run_batch] [scraper_8] [FID=8] 版块 第 26 页提取到 100 条数据
+[2026-08-19 06:08:18] [run_batch] [scraper_7] [FID=7] 正在请求 版块第 26 页: http://127.0.0.1:1024/thread0806.php?fid=7&search=&page=26
+[2026-08-19 06:08:18] [run_batch] [scraper_15] [FID=15] 版块 第 25 页提取到 100 条数据
+[2026-08-19 06:08:18] [run_batch] [scraper_15] [FID=15] 版块[已保存] 前 25 页数据SQLite 实际入库 95 条（标题去重后）
+
+[2026-08-19 06:08:19] [run_batch] [scraper_7] [FID=7] 版块 第 26 页提取到 100 条数据
+[2026-08-19 06:08:19] [run_batch] [scraper_7] [FID=7] 版块[已保存] 前 26 页数据SQLite 实际入库 64 条（标题去重后）
+
+[2026-08-19 06:08:20] [run_batch] [scraper_8] [FID=8] 正在请求 版块第 27 页: http://127.0.0.1:1024/thread0806.php?fid=8&search=&page=27
+[2026-08-19 06:08:21] [run_batch] [scraper_15] [FID=15] 正在请求 版块第 26 页: http://127.0.0.1:1024/thread0806.php?fid=15&search=&page=26
+[2026-08-19 06:08:22] [run_batch] [scraper_8] [FID=8] 版块 第 27 页提取到 100 条数据
+[2026-08-19 06:08:22] [run_batch] [scraper_7] [FID=7] 正在请求 版块第 27 页: http://127.0.0.1:1024/thread0806.php?fid=7&search=&page=27
+[2026-08-19 06:08:23] [run_batch] [scraper_15] [FID=15] 版块 第 26 页提取到 100 条数据
+[2026-08-19 06:08:24] [run_batch] [scraper_7] [FID=7] 版块 第 27 页提取到 100 条数据
+[2026-08-19 06:08:25] [run_batch] [scraper_8] [FID=8] 正在请求 版块第 28 页: http://127.0.0.1:1024/thread0806.php?fid=8&search=&page=28
+[2026-08-19 06:08:26] [run_batch] [scraper_15] [FID=15] 正在请求 版块第 27 页: http://127.0.0.1:1024/thread0806.php?fid=15&search=&page=27
+[2026-08-19 06:08:27] [run_batch] [scraper_8] [FID=8] 版块 第 28 页提取到 100 条数据
+[2026-08-19 06:08:27] [run_batch] [scraper_7] [FID=7] 正在请求 版块第 28 页: http://127.0.0.1:1024/thread0806.php?fid=7&search=&page=28
+[2026-08-19 06:08:27] [run_batch] [scraper_15] [FID=15] 版块 第 27 页提取到 100 条数据
+[2026-08-19 06:08:28] [run_batch] [scraper_7] [FID=7] 版块 第 28 页提取到 100 条数据
+[2026-08-19 06:08:30] [run_batch] [scraper_8] [FID=8] 正在请求 版块第 29 页: http://127.0.0.1:1024/thread0806.php?fid=8&search=&page=29
+[2026-08-19 06:08:30] [run_batch] [scraper_15] [FID=15] 正在请求 版块第 28 页: http://127.0.0.1:1024/thread0806.php?fid=15&search=&page=28
+[2026-08-19 06:08:31] [run_batch] [scraper_8] [FID=8] 版块 第 29 页提取到 100 条数据
+[2026-08-19 06:08:31] [run_batch] [scraper_7] [FID=7] 正在请求 版块第 29 页: http://127.0.0.1:1024/thread0806.php?fid=7&search=&page=29
+[2026-08-19 06:08:32] [run_batch] [scraper_15] [FID=15] 版块 第 28 页提取到 100 条数据
+[2026-08-19 06:08:33] [run_batch] [scraper_7] [FID=7] 版块 第 29 页提取到 100 条数据
+[2026-08-19 06:08:34] [run_batch] [scraper_8] [FID=8] 正在请求 版块第 30 页: http://127.0.0.1:1024/thread0806.php?fid=8&search=&page=30
+[2026-08-19 06:08:35] [run_batch] [scraper_15] [FID=15] 正在请求 版块第 29 页: http://127.0.0.1:1024/thread0806.php?fid=15&search=&page=29
+[2026-08-19 06:08:35] [run_batch] [scraper_8] [FID=8] 版块 第 30 页提取到 100 条数据
+[2026-08-19 06:08:35] [run_batch] [scraper_8] [FID=8] 版块[已保存] 前 30 页数据SQLite 实际入库 24 条（标题去重后）
+
+[2026-08-19 06:08:35] [run_batch] [scraper_8] [FID=8] 版块[已保存] 前 30 页数据已写入磁盘（累计 3000 条）
+
+[2026-08-19 06:08:36] [run_batch] [scraper_7] [FID=7] 正在请求 版块第 30 页: http://127.0.0.1:1024/thread0806.php?fid=7&search=&page=30
+[2026-08-19 06:08:36] [run_batch] [scraper_15] [FID=15] 版块 第 29 页提取到 100 条数据
+[2026-08-19 06:08:37] [run_batch] [scraper_7] [FID=7] 版块 第 30 页提取到 100 条数据
+[2026-08-19 06:08:37] [run_batch] [scraper_7] [FID=7] 版块[已保存] 前 30 页数据已写入磁盘（累计 2999 条）
+
+[2026-08-19 06:08:38] [run_batch] [scraper_8] [FID=8] 正在请求 版块第 31 页: http://127.0.0.1:1024/thread0806.php?fid=8&search=&page=31
+[2026-08-19 06:08:39] [run_batch] [scraper_15] [FID=15] 正在请求 版块第 30 页: http://127.0.0.1:1024/thread0806.php?fid=15&search=&page=30
+[2026-08-19 06:08:40] [run_batch] [scraper_8] [FID=8] 版块 第 31 页提取到 100 条数据
+[2026-08-19 06:08:40] [run_batch] [scraper_7] [FID=7] 正在请求 版块第 31 页: http://127.0.0.1:1024/thread0806.php?fid=7&search=&page=31
+[2026-08-19 06:08:41] [run_batch] [scraper_15] [FID=15] 版块 第 30 页提取到 100 条数据
+[2026-08-19 06:08:41] [run_batch] [scraper_15] [FID=15] 版块[已保存] 前 30 页数据SQLite 实际入库 95 条（标题去重后）
+
+[2026-08-19 06:08:41] [run_batch] [scraper_15] [FID=15] 版块[已保存] 前 30 页数据已写入磁盘（累计 3000 条）
+
+[2026-08-19 06:08:42] [run_batch] [scraper_7] [FID=7] 版块 第 31 页提取到 100 条数据
+[2026-08-19 06:08:42] [run_batch] [scraper_7] [FID=7] 版块[已保存] 前 31 页数据SQLite 实际入库 64 条（标题去重后）
+
+[2026-08-19 06:08:43] [run_batch] [scraper_8] [FID=8] 正在请求 版块第 32 页: http://127.0.0.1:1024/thread0806.php?fid=8&search=&page=32
+[2026-08-19 06:08:44] [run_batch] [scraper_15] [FID=15] 正在请求 版块第 31 页: http://127.0.0.1:1024/thread0806.php?fid=15&search=&page=31
+[2026-08-19 06:08:44] [run_batch] [scraper_8] [FID=8] 版块 第 32 页提取到 100 条数据
+[2026-08-19 06:08:45] [run_batch] [scraper_7] [FID=7] 正在请求 版块第 32 页: http://127.0.0.1:1024/thread0806.php?fid=7&search=&page=32
+[2026-08-19 06:08:45] [run_batch] [scraper_15] [FID=15] 版块 第 31 页提取到 100 条数据
+[2026-08-19 06:08:47] [run_batch] [scraper_8] [FID=8] 正在请求 版块第 33 页: http://127.0.0.1:1024/thread0806.php?fid=8&search=&page=33
+[2026-08-19 06:08:47] [run_batch] [scraper_7] [FID=7] 版块 第 32 页提取到 100 条数据
+[2026-08-19 06:08:48] [run_batch] [scraper_8] [FID=8] 版块 第 33 页提取到 100 条数据
+[2026-08-19 06:08:48] [run_batch] [scraper_15] [FID=15] 正在请求 版块第 32 页: http://127.0.0.1:1024/thread0806.php?fid=15&search=&page=32
+[2026-08-19 06:08:50] [run_batch] [scraper_7] [FID=7] 正在请求 版块第 33 页: http://127.0.0.1:1024/thread0806.php?fid=7&search=&page=33
+[2026-08-19 06:08:50] [run_batch] [scraper_15] [FID=15] 版块 第 32 页提取到 100 条数据
+[2026-08-19 06:08:51] [run_batch] [scraper_8] [FID=8] 正在请求 版块第 34 页: http://127.0.0.1:1024/thread0806.php?fid=8&search=&page=34
+[2026-08-19 06:08:52] [run_batch] [scraper_7] [FID=7] 版块 第 33 页提取到 100 条数据
+[2026-08-19 06:08:53] [run_batch] [scraper_8] [FID=8] 版块 第 34 页提取到 100 条数据
+[2026-08-19 06:08:53] [run_batch] [scraper_15] [FID=15] 正在请求 版块第 33 页: http://127.0.0.1:1024/thread0806.php?fid=15&search=&page=33
+[2026-08-19 06:08:55] [run_batch] [scraper_15] [FID=15] 版块 第 33 页提取到 100 条数据
+[2026-08-19 06:08:55] [run_batch] [scraper_7] [FID=7] 正在请求 版块第 34 页: http://127.0.0.1:1024/thread0806.php?fid=7&search=&page=34
+[2026-08-19 06:08:56] [run_batch] [scraper_8] [FID=8] 正在请求 版块第 35 页: http://127.0.0.1:1024/thread0806.php?fid=8&search=&page=35
+[2026-08-19 06:08:57] [run_batch] [scraper_7] [FID=7] 版块 第 34 页提取到 100 条数据
+[2026-08-19 06:08:57] [run_batch] [scraper_8] [FID=8] 版块 第 35 页提取到 100 条数据
+[2026-08-19 06:08:57] [run_batch] [scraper_8] [FID=8] 版块[已保存] 前 35 页数据SQLite 实际入库 24 条（标题去重后）
+
+[2026-08-19 06:08:58] [run_batch] [scraper_15] [FID=15] 正在请求 版块第 34 页: http://127.0.0.1:1024/thread0806.php?fid=15&search=&page=34
+[2026-08-19 06:08:59] [run_batch] [scraper_15] [FID=15] 版块 第 34 页提取到 100 条数据
+[2026-08-19 06:09:00] [run_batch] [scraper_7] [FID=7] 正在请求 版块第 35 页: http://127.0.0.1:1024/thread0806.php?fid=7&search=&page=35
+[2026-08-19 06:09:00] [run_batch] [scraper_8] [FID=8] 正在请求 版块第 36 页: http://127.0.0.1:1024/thread0806.php?fid=8&search=&page=36
+[2026-08-19 06:09:02] [run_batch] [scraper_8] [FID=8] 版块 第 36 页提取到 100 条数据
+[2026-08-19 06:09:02] [run_batch] [scraper_15] [FID=15] 正在请求 版块第 35 页: http://127.0.0.1:1024/thread0806.php?fid=15&search=&page=35
+[2026-08-19 06:09:02] [run_batch] [scraper_7] [FID=7] 版块 第 35 页提取到 100 条数据
+[2026-08-19 06:09:03] [run_batch] [scraper_15] [FID=15] 版块 第 35 页提取到 100 条数据
+[2026-08-19 06:09:04] [run_batch] [scraper_15] [FID=15] 版块[已保存] 前 35 页数据SQLite 实际入库 95 条（标题去重后）
+
+[2026-08-19 06:09:05] [run_batch] [scraper_8] [FID=8] 正在请求 版块第 37 页: http://127.0.0.1:1024/thread0806.php?fid=8&search=&page=37
+[2026-08-19 06:09:05] [run_batch] [scraper_7] [FID=7] 正在请求 版块第 36 页: http://127.0.0.1:1024/thread0806.php?fid=7&search=&page=36
+[2026-08-19 06:09:06] [run_batch] [scraper_8] [FID=8] 版块 第 37 页提取到 100 条数据
+[2026-08-19 06:09:07] [run_batch] [scraper_15] [FID=15] 正在请求 版块第 36 页: http://127.0.0.1:1024/thread0806.php?fid=15&search=&page=36
+[2026-08-19 06:09:07] [run_batch] [scraper_7] [FID=7] 版块 第 36 页提取到 100 条数据
+[2026-08-19 06:09:07] [run_batch] [scraper_7] [FID=7] 版块[已保存] 前 36 页数据SQLite 实际入库 64 条（标题去重后）
+
+[2026-08-19 06:09:08] [run_batch] [scraper_15] [FID=15] 版块 第 36 页提取到 100 条数据
+[2026-08-19 06:09:09] [run_batch] [scraper_8] [FID=8] 正在请求 版块第 38 页: http://127.0.0.1:1024/thread0806.php?fid=8&search=&page=38
+[2026-08-19 06:09:10] [run_batch] [scraper_7] [FID=7] 正在请求 版块第 37 页: http://127.0.0.1:1024/thread0806.php?fid=7&search=&page=37
+[2026-08-19 06:09:11] [run_batch] [scraper_8] [FID=8] 版块 第 38 页提取到 100 条数据
+[2026-08-19 06:09:11] [run_batch] [scraper_15] [FID=15] 正在请求 版块第 37 页: http://127.0.0.1:1024/thread0806.php?fid=15&search=&page=37
+[2026-08-19 06:09:12] [run_batch] [scraper_7] [FID=7] 版块 第 37 页提取到 100 条数据
+[2026-08-19 06:09:12] [run_batch] [scraper_15] [FID=15] 版块 第 37 页提取到 100 条数据
+[2026-08-19 06:09:14] [run_batch] [scraper_8] [FID=8] 正在请求 版块第 39 页: http://127.0.0.1:1024/thread0806.php?fid=8&search=&page=39
+[2026-08-19 06:09:15] [run_batch] [scraper_7] [FID=7] 正在请求 版块第 38 页: http://127.0.0.1:1024/thread0806.php?fid=7&search=&page=38
+[2026-08-19 06:09:15] [run_batch] [scraper_8] [FID=8] 版块 第 39 页提取到 100 条数据
+[2026-08-19 06:09:15] [run_batch] [scraper_15] [FID=15] 正在请求 版块第 38 页: http://127.0.0.1:1024/thread0806.php?fid=15&search=&page=38
+[2026-08-19 06:09:17] [run_batch] [scraper_7] [FID=7] 版块 第 38 页提取到 100 条数据
+[2026-08-19 06:09:17] [run_batch] [scraper_15] [FID=15] 版块 第 38 页提取到 100 条数据
+[2026-08-19 06:09:18] [run_batch] [scraper_8] [FID=8] 正在请求 版块第 40 页: http://127.0.0.1:1024/thread0806.php?fid=8&search=&page=40
+[2026-08-19 06:09:20] [run_batch] [scraper_8] [FID=8] 版块 第 40 页提取到 100 条数据
+[2026-08-19 06:09:20] [run_batch] [scraper_8] [FID=8] 版块[已保存] 前 40 页数据SQLite 实际入库 24 条（标题去重后）
+
+[2026-08-19 06:09:20] [run_batch] [scraper_8] [FID=8] 版块[已保存] 前 40 页数据已写入磁盘（累计 4000 条）
+
+[2026-08-19 06:09:20] [run_batch] [scraper_7] [FID=7] 正在请求 版块第 39 页: http://127.0.0.1:1024/thread0806.php?fid=7&search=&page=39
+[2026-08-19 06:09:20] [run_batch] [scraper_15] [FID=15] 正在请求 版块第 39 页: http://127.0.0.1:1024/thread0806.php?fid=15&search=&page=39
+[2026-08-19 06:09:21] [run_batch] [scraper_15] [FID=15] 版块 第 39 页提取到 100 条数据
+[2026-08-19 06:09:22] [run_batch] [scraper_7] [FID=7] 版块 第 39 页提取到 100 条数据
+[2026-08-19 06:09:23] [run_batch] [scraper_8] [FID=8] 正在请求 版块第 41 页: http://127.0.0.1:1024/thread0806.php?fid=8&search=&page=41
+[2026-08-19 06:09:24] [run_batch] [scraper_8] [FID=8] 版块 第 41 页提取到 100 条数据
+[2026-08-19 06:09:24] [run_batch] [scraper_15] [FID=15] 正在请求 版块第 40 页: http://127.0.0.1:1024/thread0806.php?fid=15&search=&page=40
+[2026-08-19 06:09:25] [run_batch] [scraper_7] [FID=7] 正在请求 版块第 40 页: http://127.0.0.1:1024/thread0806.php?fid=7&search=&page=40
+[2026-08-19 06:09:26] [run_batch] [scraper_15] [FID=15] 版块 第 40 页提取到 100 条数据
+[2026-08-19 06:09:26] [run_batch] [scraper_15] [FID=15] 版块[已保存] 前 40 页数据SQLite 实际入库 95 条（标题去重后）
+
+[2026-08-19 06:09:26] [run_batch] [scraper_15] [FID=15] 版块[已保存] 前 40 页数据已写入磁盘（累计 4000 条）
+
+[2026-08-19 06:09:27] [run_batch] [scraper_8] [FID=8] 正在请求 版块第 42 页: http://127.0.0.1:1024/thread0806.php?fid=8&search=&page=42
+[2026-08-19 06:09:27] [run_batch] [scraper_7] [FID=7] 版块 第 40 页提取到 100 条数据
+[2026-08-19 06:09:27] [run_batch] [scraper_7] [FID=7] 版块[已保存] 前 40 页数据已写入磁盘（累计 3999 条）
+
+[2026-08-19 06:09:28] [run_batch] [scraper_8] [FID=8] 版块 第 42 页提取到 100 条数据
+[2026-08-19 06:09:29] [run_batch] [scraper_15] [FID=15] 正在请求 版块第 41 页: http://127.0.0.1:1024/thread0806.php?fid=15&search=&page=41
+[2026-08-19 06:09:31] [run_batch] [scraper_7] [FID=7] 正在请求 版块第 41 页: http://127.0.0.1:1024/thread0806.php?fid=7&search=&page=41
+[2026-08-19 06:09:31] [run_batch] [scraper_15] [FID=15] 版块 第 41 页提取到 100 条数据
+[2026-08-19 06:09:31] [run_batch] [scraper_8] [FID=8] 正在请求 版块第 43 页: http://127.0.0.1:1024/thread0806.php?fid=8&search=&page=43
+[2026-08-19 06:09:32] [run_batch] [scraper_7] [FID=7] 版块 第 41 页提取到 100 条数据
+[2026-08-19 06:09:32] [run_batch] [scraper_7] [FID=7] 版块[已保存] 前 41 页数据SQLite 实际入库 64 条（标题去重后）
+
+[2026-08-19 06:09:33] [run_batch] [scraper_8] [FID=8] 版块 第 43 页提取到 100 条数据
+[2026-08-19 06:09:34] [run_batch] [scraper_15] [FID=15] 正在请求 版块第 42 页: http://127.0.0.1:1024/thread0806.php?fid=15&search=&page=42
+[2026-08-19 06:09:35] [run_batch] [scraper_15] [FID=15] 版块 第 42 页提取到 100 条数据
+[2026-08-19 06:09:35] [run_batch] [scraper_7] [FID=7] 正在请求 版块第 42 页: http://127.0.0.1:1024/thread0806.php?fid=7&search=&page=42
+[2026-08-19 06:09:36] [run_batch] [scraper_8] [FID=8] 正在请求 版块第 44 页: http://127.0.0.1:1024/thread0806.php?fid=8&search=&page=44
+[2026-08-19 06:09:37] [run_batch] [scraper_7] [FID=7] 版块 第 42 页提取到 100 条数据
+[2026-08-19 06:09:37] [run_batch] [scraper_8] [FID=8] 版块 第 44 页提取到 100 条数据
+[2026-08-19 06:09:38] [run_batch] [scraper_15] [FID=15] 正在请求 版块第 43 页: http://127.0.0.1:1024/thread0806.php?fid=15&search=&page=43
+[2026-08-19 06:09:39] [run_batch] [scraper_15] [FID=15] 版块 第 43 页提取到 100 条数据
+[2026-08-19 06:09:40] [run_batch] [scraper_7] [FID=7] 正在请求 版块第 43 页: http://127.0.0.1:1024/thread0806.php?fid=7&search=&page=43
+[2026-08-19 06:09:40] [run_batch] [scraper_8] [FID=8] 正在请求 版块第 45 页: http://127.0.0.1:1024/thread0806.php?fid=8&search=&page=45
+[2026-08-19 06:09:42] [run_batch] [scraper_7] [FID=7] 版块 第 43 页提取到 100 条数据
+[2026-08-19 06:09:42] [run_batch] [scraper_8] [FID=8] 版块 第 45 页提取到 100 条数据
+[2026-08-19 06:09:42] [run_batch] [scraper_8] [FID=8] 版块[已保存] 前 45 页数据SQLite 实际入库 24 条（标题去重后）
+
+[2026-08-19 06:09:42] [run_batch] [scraper_15] [FID=15] 正在请求 版块第 44 页: http://127.0.0.1:1024/thread0806.php?fid=15&search=&page=44
+[2026-08-19 06:09:44] [run_batch] [scraper_15] [FID=15] 版块 第 44 页提取到 100 条数据
+[2026-08-19 06:09:45] [run_batch] [scraper_7] [FID=7] 正在请求 版块第 44 页: http://127.0.0.1:1024/thread0806.php?fid=7&search=&page=44
+[2026-08-19 06:09:45] [run_batch] [scraper_8] [FID=8] 正在请求 版块第 46 页: http://127.0.0.1:1024/thread0806.php?fid=8&search=&page=46
+[2026-08-19 06:09:46] [run_batch] [scraper_8] [FID=8] 版块 第 46 页提取到 100 条数据
+[2026-08-19 06:09:47] [run_batch] [scraper_7] [FID=7] 版块 第 44 页提取到 100 条数据
+[2026-08-19 06:09:47] [run_batch] [scraper_15] [FID=15] 正在请求 版块第 45 页: http://127.0.0.1:1024/thread0806.php?fid=15&search=&page=45
+[2026-08-19 06:09:48] [run_batch] [scraper_15] [FID=15] 版块 第 45 页提取到 100 条数据
+[2026-08-19 06:09:48] [run_batch] [scraper_15] [FID=15] 版块[已保存] 前 45 页数据SQLite 实际入库 95 条（标题去重后）
+
+[2026-08-19 06:09:49] [run_batch] [scraper_8] [FID=8] 正在请求 版块第 47 页: http://127.0.0.1:1024/thread0806.php?fid=8&search=&page=47
+[2026-08-19 06:09:50] [run_batch] [scraper_7] [FID=7] 正在请求 版块第 45 页: http://127.0.0.1:1024/thread0806.php?fid=7&search=&page=45
+[2026-08-19 06:09:51] [run_batch] [scraper_8] [FID=8] 版块 第 47 页提取到 100 条数据
+[2026-08-19 06:09:51] [run_batch] [scraper_15] [FID=15] 正在请求 版块第 46 页: http://127.0.0.1:1024/thread0806.php?fid=15&search=&page=46
+[2026-08-19 06:09:52] [run_batch] [scraper_7] [FID=7] 版块 第 45 页提取到 100 条数据
+[2026-08-19 06:09:54] [run_batch] [scraper_15] [FID=15] 版块 第 46 页提取到 100 条数据
+[2026-08-19 06:09:54] [run_batch] [scraper_8] [FID=8] 正在请求 版块第 48 页: http://127.0.0.1:1024/thread0806.php?fid=8&search=&page=48
+[2026-08-19 06:09:55] [run_batch] [scraper_8] [FID=8] 版块 第 48 页提取到 100 条数据
+[2026-08-19 06:09:55] [run_batch] [scraper_7] [FID=7] 正在请求 版块第 46 页: http://127.0.0.1:1024/thread0806.php?fid=7&search=&page=46
+[2026-08-19 06:09:57] [run_batch] [scraper_15] [FID=15] 正在请求 版块第 47 页: http://127.0.0.1:1024/thread0806.php?fid=15&search=&page=47
+[2026-08-19 06:09:58] [run_batch] [scraper_7] [FID=7] 版块 第 46 页提取到 100 条数据
+[2026-08-19 06:09:58] [run_batch] [scraper_7] [FID=7] 版块[已保存] 前 46 页数据SQLite 实际入库 64 条（标题去重后）
+
+[2026-08-19 06:09:58] [run_batch] [scraper_15] [FID=15] 版块 第 47 页提取到 100 条数据
+[2026-08-19 06:09:58] [run_batch] [scraper_8] [FID=8] 正在请求 版块第 49 页: http://127.0.0.1:1024/thread0806.php?fid=8&search=&page=49
+[2026-08-19 06:10:00] [run_batch] [scraper_8] [FID=8] 版块 第 49 页提取到 100 条数据
+[2026-08-19 06:10:01] [run_batch] [scraper_7] [FID=7] 正在请求 版块第 47 页: http://127.0.0.1:1024/thread0806.php?fid=7&search=&page=47
+[2026-08-19 06:10:01] [run_batch] [scraper_15] [FID=15] 正在请求 版块第 48 页: http://127.0.0.1:1024/thread0806.php?fid=15&search=&page=48
+[2026-08-19 06:10:02] [run_batch] [scraper_7] [FID=7] 版块 第 47 页提取到 100 条数据
+[2026-08-19 06:10:02] [run_batch] [scraper_15] [FID=15] 版块 第 48 页提取到 100 条数据
+[2026-08-19 06:10:03] [run_batch] [scraper_8] [FID=8] 正在请求 版块第 50 页: http://127.0.0.1:1024/thread0806.php?fid=8&search=&page=50
+[2026-08-19 06:10:05] [run_batch] [scraper_8] [FID=8] 版块 第 50 页提取到 100 条数据
+[2026-08-19 06:10:05] [run_batch] [scraper_8] [FID=8] 版块[已保存] 前 50 页数据SQLite 实际入库 24 条（标题去重后）
+
+[2026-08-19 06:10:05] [run_batch] [scraper_8] [FID=8] 版块[已保存] 前 50 页数据已写入磁盘（累计 5000 条）
+
+
+[2026-08-19 06:10:05] [run_batch] [scraper_8] [FID=8] 版块[已保存] 共写入 5000 条数据到 outputs/20260819/8_output_20260819.csv（进度至第 50 页）
+[2026-08-19 06:10:05] [run_batch] [scraper_8] [FID=8] 版块 SQLite 实际入库 24 条（标题去重后）
+[2026-08-19 06:10:05] [run_batch] __SUMMARY__ fid=8 rows=5000 db_rows=24 pages=50
+[2026-08-19 06:10:05] [run_batch] 完成 [8] 版块8（CSV 5000 条 / SQLite 24 条）
+[2026-08-19 06:10:05] [run_batch] 启动 [16] 版块16（访问根地址: http://127.0.0.1:1024）
+[2026-08-19 06:10:05] [run_batch] [scraper_7] [FID=7] 正在请求 版块第 48 页: http://127.0.0.1:1024/thread0806.php?fid=7&search=&page=48
+[2026-08-19 06:10:05] [run_batch] [scraper_15] [FID=15] 正在请求 版块第 49 页: http://127.0.0.1:1024/thread0806.php?fid=15&search=&page=49
+
+[2026-08-19 06:10:05] [run_batch] [scraper_16] ===== 会话开始 2026-08-19 06:10:05 =====
+[2026-08-19 06:10:05] [run_batch] [scraper_16] [FID=16] 版块1-50页 开始抓取
+[2026-08-19 06:10:05] [run_batch] [scraper_16] [FID=16] 版块使用配置末页: 50
+[2026-08-19 06:10:05] [run_batch] [scraper_16] 开始抓取[FID=16] 版块，共 50 页（第 1 ~ 50 页）
+
+[2026-08-19 06:10:05] [run_batch] [scraper_16] [FID=16] 正在请求 版块第 1 页: http://127.0.0.1:1024/thread0806.php?fid=16&search=&page=1
+[2026-08-19 06:10:07] [run_batch] [scraper_16] [FID=16] 版块 第 1 页提取到 100 条数据
+[2026-08-19 06:10:07] [run_batch] [scraper_7] [FID=7] 版块 第 48 页提取到 100 条数据
+[2026-08-19 06:10:07] [run_batch] [scraper_15] [FID=15] 版块 第 49 页提取到 100 条数据
+[2026-08-19 06:10:10] [run_batch] [scraper_16] [FID=16] 正在请求 版块第 2 页: http://127.0.0.1:1024/thread0806.php?fid=16&search=&page=2
+[2026-08-19 06:10:10] [run_batch] [scraper_7] [FID=7] 正在请求 版块第 49 页: http://127.0.0.1:1024/thread0806.php?fid=7&search=&page=49
+[2026-08-19 06:10:10] [run_batch] [scraper_15] [FID=15] 正在请求 版块第 50 页: http://127.0.0.1:1024/thread0806.php?fid=15&search=&page=50
+[2026-08-19 06:10:11] [run_batch] [scraper_16] [FID=16] 版块 第 2 页提取到 100 条数据
+[2026-08-19 06:10:12] [run_batch] [scraper_7] [FID=7] 版块 第 49 页提取到 100 条数据
+[2026-08-19 06:10:12] [run_batch] [scraper_15] [FID=15] 版块 第 50 页提取到 100 条数据
+[2026-08-19 06:10:12] [run_batch] [scraper_15] [FID=15] 版块[已保存] 前 50 页数据SQLite 实际入库 95 条（标题去重后）
+
+[2026-08-19 06:10:12] [run_batch] [scraper_15] [FID=15] 版块[已保存] 前 50 页数据已写入磁盘（累计 5000 条）
+
+
+[2026-08-19 06:10:12] [run_batch] [scraper_15] [FID=15] 版块[已保存] 共写入 5000 条数据到 outputs/20260819/15_output_20260819.csv（进度至第 50 页）
+[2026-08-19 06:10:12] [run_batch] [scraper_15] [FID=15] 版块 SQLite 实际入库 95 条（标题去重后）
+[2026-08-19 06:10:12] [run_batch] __SUMMARY__ fid=15 rows=5000 db_rows=95 pages=50
+[2026-08-19 06:10:12] [run_batch] 完成 [15] 版块15（CSV 5000 条 / SQLite 95 条）
+[2026-08-19 06:10:12] [run_batch] 启动 [20] 版块20（访问根地址: http://127.0.0.1:1024）
+
+[2026-08-19 06:10:12] [run_batch] [scraper_20] ===== 会话开始 2026-08-19 06:10:12 =====
+[2026-08-19 06:10:12] [run_batch] [scraper_20] [FID=20] 版块1-50页 开始抓取
+[2026-08-19 06:10:12] [run_batch] [scraper_20] [FID=20] 版块使用配置末页: 50
+[2026-08-19 06:10:12] [run_batch] [scraper_20] 开始抓取[FID=20] 版块，共 50 页（第 1 ~ 50 页）
+
+[2026-08-19 06:10:12] [run_batch] [scraper_20] [FID=20] 正在请求 版块第 1 页: http://127.0.0.1:1024/thread0806.php?fid=20&search=&page=1
+[2026-08-19 06:10:14] [run_batch] [scraper_20] [FID=20] 版块 第 1 页提取到 100 条数据
+[2026-08-19 06:10:14] [run_batch] [scraper_16] [FID=16] 正在请求 版块第 3 页: http://127.0.0.1:1024/thread0806.php?fid=16&search=&page=3
+[2026-08-19 06:10:15] [run_batch] [scraper_7] [FID=7] 正在请求 版块第 50 页: http://127.0.0.1:1024/thread0806.php?fid=7&search=&page=50
+[2026-08-19 06:10:16] [run_batch] [scraper_16] [FID=16] 版块 第 3 页提取到 100 条数据
+[2026-08-19 06:10:17] [run_batch] [scraper_20] [FID=20] 正在请求 版块第 2 页: http://127.0.0.1:1024/thread0806.php?fid=20&search=&page=2
+[2026-08-19 06:10:17] [run_batch] [scraper_7] [FID=7] 版块 第 50 页提取到 100 条数据
+[2026-08-19 06:10:17] [run_batch] [scraper_7] [FID=7] 版块[已保存] 前 50 页数据已写入磁盘（累计 4999 条）
+
+
+[2026-08-19 06:10:17] [run_batch] [scraper_7] [FID=7] 版块[已保存] 共写入 4999 条数据到 outputs/20260819/7_output_20260819.csv（进度至第 50 页）
+[2026-08-19 06:10:17] [run_batch] [scraper_7] [FID=7] 版块 SQLite 实际入库 64 条（标题去重后）
+[2026-08-19 06:10:17] [run_batch] __SUMMARY__ fid=7 rows=4999 db_rows=64 pages=50
+[2026-08-19 06:10:17] [run_batch] 完成 [7] 版块7（CSV 4999 条 / SQLite 64 条）
+[2026-08-19 06:10:17] [run_batch] 启动 [21] 版块21（访问根地址: http://127.0.0.1:1024）
+
+[2026-08-19 06:10:17] [run_batch] [scraper_21] ===== 会话开始 2026-08-19 06:10:17 =====
+[2026-08-19 06:10:17] [run_batch] [scraper_21] [FID=21] 版块1-50页 开始抓取
+[2026-08-19 06:10:17] [run_batch] [scraper_21] [FID=21] 版块使用配置末页: 50
+[2026-08-19 06:10:17] [run_batch] [scraper_21] 开始抓取[FID=21] 版块，共 50 页（第 1 ~ 50 页）
+
+[2026-08-19 06:10:17] [run_batch] [scraper_21] [FID=21] 正在请求 版块第 1 页: http://127.0.0.1:1024/thread0806.php?fid=21&search=&page=1
+[2026-08-19 06:10:18] [run_batch] [scraper_20] [FID=20] 版块 第 2 页提取到 100 条数据
+[2026-08-19 06:10:18] [run_batch] [scraper_21] [FID=21] 版块 第 1 页提取到 100 条数据
+[2026-08-19 06:10:19] [run_batch] [scraper_16] [FID=16] 正在请求 版块第 4 页: http://127.0.0.1:1024/thread0806.php?fid=16&search=&page=4
+[2026-08-19 06:10:20] [run_batch] [scraper_16] [FID=16] 版块 第 4 页提取到 100 条数据
+[2026-08-19 06:10:21] [run_batch] [scraper_20] [FID=20] 正在请求 版块第 3 页: http://127.0.0.1:1024/thread0806.php?fid=20&search=&page=3
+[2026-08-19 06:10:21] [run_batch] [scraper_21] [FID=21] 正在请求 版块第 2 页: http://127.0.0.1:1024/thread0806.php?fid=21&search=&page=2
+[2026-08-19 06:10:22] [run_batch] [scraper_20] [FID=20] 版块 第 3 页提取到 100 条数据
+[2026-08-19 06:10:23] [run_batch] [scraper_21] [FID=21] 版块 第 2 页提取到 100 条数据
+[2026-08-19 06:10:23] [run_batch] [scraper_16] [FID=16] 正在请求 版块第 5 页: http://127.0.0.1:1024/thread0806.php?fid=16&search=&page=5
+[2026-08-19 06:10:25] [run_batch] [scraper_16] [FID=16] 版块 第 5 页提取到 100 条数据
+[2026-08-19 06:10:25] [run_batch] [scraper_16] [FID=16] 版块[已保存] 前 5 页数据SQLite 实际入库 15 条（标题去重后）
+
+[2026-08-19 06:10:25] [run_batch] [scraper_20] [FID=20] 正在请求 版块第 4 页: http://127.0.0.1:1024/thread0806.php?fid=20&search=&page=4
+[2026-08-19 06:10:26] [run_batch] [scraper_21] [FID=21] 正在请求 版块第 3 页: http://127.0.0.1:1024/thread0806.php?fid=21&search=&page=3
+[2026-08-19 06:10:27] [run_batch] [scraper_20] [FID=20] 版块 第 4 页提取到 100 条数据
+[2026-08-19 06:10:27] [run_batch] [scraper_21] [FID=21] 版块 第 3 页提取到 100 条数据
+[2026-08-19 06:10:28] [run_batch] [scraper_16] [FID=16] 正在请求 版块第 6 页: http://127.0.0.1:1024/thread0806.php?fid=16&search=&page=6
+[2026-08-19 06:10:29] [run_batch] [scraper_16] [FID=16] 版块 第 6 页提取到 100 条数据
+[2026-08-19 06:10:30] [run_batch] [scraper_20] [FID=20] 正在请求 版块第 5 页: http://127.0.0.1:1024/thread0806.php?fid=20&search=&page=5
+[2026-08-19 06:10:30] [run_batch] [scraper_21] [FID=21] 正在请求 版块第 4 页: http://127.0.0.1:1024/thread0806.php?fid=21&search=&page=4
+[2026-08-19 06:10:31] [run_batch] [scraper_20] [FID=20] 版块 第 5 页提取到 100 条数据
+[2026-08-19 06:10:31] [run_batch] [scraper_20] [FID=20] 版块[已保存] 前 5 页数据SQLite 实际入库 1 条（标题去重后）
+
+[2026-08-19 06:10:32] [run_batch] [scraper_16] [FID=16] 正在请求 版块第 7 页: http://127.0.0.1:1024/thread0806.php?fid=16&search=&page=7
+[2026-08-19 06:10:32] [run_batch] [scraper_21] [FID=21] 版块 第 4 页提取到 100 条数据
+[2026-08-19 06:10:33] [run_batch] [scraper_16] [FID=16] 版块 第 7 页提取到 100 条数据
+[2026-08-19 06:10:34] [run_batch] [scraper_20] [FID=20] 正在请求 版块第 6 页: http://127.0.0.1:1024/thread0806.php?fid=20&search=&page=6
+[2026-08-19 06:10:35] [run_batch] [scraper_21] [FID=21] 正在请求 版块第 5 页: http://127.0.0.1:1024/thread0806.php?fid=21&search=&page=5
+[2026-08-19 06:10:36] [run_batch] [scraper_20] [FID=20] 版块 第 6 页提取到 100 条数据
+[2026-08-19 06:10:36] [run_batch] [scraper_16] [FID=16] 正在请求 版块第 8 页: http://127.0.0.1:1024/thread0806.php?fid=16&search=&page=8
+[2026-08-19 06:10:36] [run_batch] [scraper_21] [FID=21] 版块 第 5 页提取到 100 条数据
+[2026-08-19 06:10:36] [run_batch] [scraper_21] [FID=21] 版块[已保存] 前 5 页数据SQLite 实际入库 126 条（标题去重后）
+
+[2026-08-19 06:10:38] [run_batch] [scraper_16] [FID=16] 版块 第 8 页提取到 100 条数据
+[2026-08-19 06:10:39] [run_batch] [scraper_20] [FID=20] 正在请求 版块第 7 页: http://127.0.0.1:1024/thread0806.php?fid=20&search=&page=7
+[2026-08-19 06:10:39] [run_batch] [scraper_21] [FID=21] 正在请求 版块第 6 页: http://127.0.0.1:1024/thread0806.php?fid=21&search=&page=6
+[2026-08-19 06:10:40] [run_batch] [scraper_20] [FID=20] 版块 第 7 页提取到 100 条数据
+[2026-08-19 06:10:41] [run_batch] [scraper_21] [FID=21] 版块 第 6 页提取到 100 条数据
+[2026-08-19 06:10:41] [run_batch] [scraper_16] [FID=16] 正在请求 版块第 9 页: http://127.0.0.1:1024/thread0806.php?fid=16&search=&page=9
+[2026-08-19 06:10:43] [run_batch] [scraper_16] [FID=16] 版块 第 9 页提取到 100 条数据
+[2026-08-19 06:10:43] [run_batch] [scraper_20] [FID=20] 正在请求 版块第 8 页: http://127.0.0.1:1024/thread0806.php?fid=20&search=&page=8
+[2026-08-19 06:10:44] [run_batch] [scraper_21] [FID=21] 正在请求 版块第 7 页: http://127.0.0.1:1024/thread0806.php?fid=21&search=&page=7
+[2026-08-19 06:10:45] [run_batch] [scraper_20] [FID=20] 版块 第 8 页提取到 100 条数据
+[2026-08-19 06:10:45] [run_batch] [scraper_21] [FID=21] 版块 第 7 页提取到 100 条数据
+[2026-08-19 06:10:46] [run_batch] [scraper_16] [FID=16] 正在请求 版块第 10 页: http://127.0.0.1:1024/thread0806.php?fid=16&search=&page=10
+[2026-08-19 06:10:47] [run_batch] [scraper_16] [FID=16] 版块 第 10 页提取到 100 条数据
+[2026-08-19 06:10:47] [run_batch] [scraper_16] [FID=16] 版块[已保存] 前 10 页数据SQLite 实际入库 15 条（标题去重后）
+
+[2026-08-19 06:10:47] [run_batch] [scraper_16] [FID=16] 版块[已保存] 前 10 页数据已写入磁盘（累计 1000 条）
+
+[2026-08-19 06:10:48] [run_batch] [scraper_20] [FID=20] 正在请求 版块第 9 页: http://127.0.0.1:1024/thread0806.php?fid=20&search=&page=9
+[2026-08-19 06:10:48] [run_batch] [scraper_21] [FID=21] 正在请求 版块第 8 页: http://127.0.0.1:1024/thread0806.php?fid=21&search=&page=8
+[2026-08-19 06:10:49] [run_batch] [scraper_20] [FID=20] 版块 第 9 页提取到 100 条数据
+[2026-08-19 06:10:50] [run_batch] [scraper_21] [FID=21] 版块 第 8 页提取到 100 条数据
+[2026-08-19 06:10:50] [run_batch] [scraper_16] [FID=16] 正在请求 版块第 11 页: http://127.0.0.1:1024/thread0806.php?fid=16&search=&page=11
+[2026-08-19 06:10:52] [run_batch] [scraper_16] [FID=16] 版块 第 11 页提取到 100 条数据
+[2026-08-19 06:10:52] [run_batch] [scraper_20] [FID=20] 正在请求 版块第 10 页: http://127.0.0.1:1024/thread0806.php?fid=20&search=&page=10
+[2026-08-19 06:10:53] [run_batch] [scraper_21] [FID=21] 正在请求 版块第 9 页: http://127.0.0.1:1024/thread0806.php?fid=21&search=&page=9
+[2026-08-19 06:10:53] [run_batch] [scraper_20] [FID=20] 版块 第 10 页提取到 100 条数据
+[2026-08-19 06:10:53] [run_batch] [scraper_20] [FID=20] 版块[已保存] 前 10 页数据SQLite 实际入库 1 条（标题去重后）
+
+[2026-08-19 06:10:53] [run_batch] [scraper_20] [FID=20] 版块[已保存] 前 10 页数据已写入磁盘（累计 1000 条）
+
+[2026-08-19 06:10:54] [run_batch] [scraper_21] [FID=21] 版块 第 9 页提取到 100 条数据
+[2026-08-19 06:10:55] [run_batch] [scraper_16] [FID=16] 正在请求 版块第 12 页: http://127.0.0.1:1024/thread0806.php?fid=16&search=&page=12
+[2026-08-19 06:10:56] [run_batch] [scraper_16] [FID=16] 版块 第 12 页提取到 100 条数据
+[2026-08-19 06:10:56] [run_batch] [scraper_20] [FID=20] 正在请求 版块第 11 页: http://127.0.0.1:1024/thread0806.php?fid=20&search=&page=11
+[2026-08-19 06:10:57] [run_batch] [scraper_21] [FID=21] 正在请求 版块第 10 页: http://127.0.0.1:1024/thread0806.php?fid=21&search=&page=10
+[2026-08-19 06:10:58] [run_batch] [scraper_20] [FID=20] 版块 第 11 页提取到 100 条数据
+[2026-08-19 06:10:58] [run_batch] [scraper_21] [FID=21] 版块 第 10 页提取到 100 条数据
+[2026-08-19 06:10:58] [run_batch] [scraper_21] [FID=21] 版块[已保存] 前 10 页数据SQLite 实际入库 126 条（标题去重后）
+
+[2026-08-19 06:10:58] [run_batch] [scraper_21] [FID=21] 版块[已保存] 前 10 页数据已写入磁盘（累计 1000 条）
+
+[2026-08-19 06:10:59] [run_batch] [scraper_16] [FID=16] 正在请求 版块第 13 页: http://127.0.0.1:1024/thread0806.php?fid=16&search=&page=13
+[2026-08-19 06:11:01] [run_batch] [scraper_16] [FID=16] 版块 第 13 页提取到 100 条数据
+[2026-08-19 06:11:01] [run_batch] [scraper_20] [FID=20] 正在请求 版块第 12 页: http://127.0.0.1:1024/thread0806.php?fid=20&search=&page=12
+[2026-08-19 06:11:01] [run_batch] [scraper_21] [FID=21] 正在请求 版块第 11 页: http://127.0.0.1:1024/thread0806.php?fid=21&search=&page=11
+[2026-08-19 06:11:02] [run_batch] [scraper_20] [FID=20] 版块 第 12 页提取到 100 条数据
+[2026-08-19 06:11:03] [run_batch] [scraper_21] [FID=21] 版块 第 11 页提取到 100 条数据
+[2026-08-19 06:11:04] [run_batch] [scraper_16] [FID=16] 正在请求 版块第 14 页: http://127.0.0.1:1024/thread0806.php?fid=16&search=&page=14
+[2026-08-19 06:11:05] [run_batch] [scraper_16] [FID=16] 版块 第 14 页提取到 100 条数据
+[2026-08-19 06:11:05] [run_batch] [scraper_20] [FID=20] 正在请求 版块第 13 页: http://127.0.0.1:1024/thread0806.php?fid=20&search=&page=13
+[2026-08-19 06:11:06] [run_batch] [scraper_21] [FID=21] 正在请求 版块第 12 页: http://127.0.0.1:1024/thread0806.php?fid=21&search=&page=12
+[2026-08-19 06:11:07] [run_batch] [scraper_20] [FID=20] 版块 第 13 页提取到 100 条数据
+[2026-08-19 06:11:07] [run_batch] [scraper_21] [FID=21] 版块 第 12 页提取到 100 条数据
+[2026-08-19 06:11:08] [run_batch] [scraper_16] [FID=16] 正在请求 版块第 15 页: http://127.0.0.1:1024/thread0806.php?fid=16&search=&page=15
+[2026-08-19 06:11:09] [run_batch] [scraper_16] [FID=16] 版块 第 15 页提取到 100 条数据
+[2026-08-19 06:11:09] [run_batch] [scraper_16] [FID=16] 版块[已保存] 前 15 页数据SQLite 实际入库 15 条（标题去重后）
+
+[2026-08-19 06:11:10] [run_batch] [scraper_20] [FID=20] 正在请求 版块第 14 页: http://127.0.0.1:1024/thread0806.php?fid=20&search=&page=14
+[2026-08-19 06:11:10] [run_batch] [scraper_21] [FID=21] 正在请求 版块第 13 页: http://127.0.0.1:1024/thread0806.php?fid=21&search=&page=13
+[2026-08-19 06:11:11] [run_batch] [scraper_20] [FID=20] 版块 第 14 页提取到 100 条数据
+[2026-08-19 06:11:12] [run_batch] [scraper_21] [FID=21] 版块 第 13 页提取到 100 条数据
+[2026-08-19 06:11:12] [run_batch] [scraper_16] [FID=16] 正在请求 版块第 16 页: http://127.0.0.1:1024/thread0806.php?fid=16&search=&page=16
+[2026-08-19 06:11:14] [run_batch] [scraper_16] [FID=16] 版块 第 16 页提取到 100 条数据
+[2026-08-19 06:11:14] [run_batch] [scraper_20] [FID=20] 正在请求 版块第 15 页: http://127.0.0.1:1024/thread0806.php?fid=20&search=&page=15
+[2026-08-19 06:11:15] [run_batch] [scraper_21] [FID=21] 正在请求 版块第 14 页: http://127.0.0.1:1024/thread0806.php?fid=21&search=&page=14
+[2026-08-19 06:11:16] [run_batch] [scraper_20] [FID=20] 版块 第 15 页提取到 100 条数据
+[2026-08-19 06:11:16] [run_batch] [scraper_20] [FID=20] 版块[已保存] 前 15 页数据SQLite 实际入库 1 条（标题去重后）
+
+[2026-08-19 06:11:16] [run_batch] [scraper_21] [FID=21] 版块 第 14 页提取到 100 条数据
+[2026-08-19 06:11:17] [run_batch] [scraper_16] [FID=16] 正在请求 版块第 17 页: http://127.0.0.1:1024/thread0806.php?fid=16&search=&page=17
+[2026-08-19 06:11:18] [run_batch] [scraper_16] [FID=16] 版块 第 17 页提取到 100 条数据
+[2026-08-19 06:11:19] [run_batch] [scraper_20] [FID=20] 正在请求 版块第 16 页: http://127.0.0.1:1024/thread0806.php?fid=20&search=&page=16
+[2026-08-19 06:11:19] [run_batch] [scraper_21] [FID=21] 正在请求 版块第 15 页: http://127.0.0.1:1024/thread0806.php?fid=21&search=&page=15
+[2026-08-19 06:11:20] [run_batch] [scraper_20] [FID=20] 版块 第 16 页提取到 100 条数据
+[2026-08-19 06:11:21] [run_batch] [scraper_21] [FID=21] 版块 第 15 页提取到 100 条数据
+[2026-08-19 06:11:21] [run_batch] [scraper_21] [FID=21] 版块[已保存] 前 15 页数据SQLite 实际入库 126 条（标题去重后）
+
+[2026-08-19 06:11:21] [run_batch] [scraper_16] [FID=16] 正在请求 版块第 18 页: http://127.0.0.1:1024/thread0806.php?fid=16&search=&page=18
+[2026-08-19 06:11:23] [run_batch] [scraper_16] [FID=16] 版块 第 18 页提取到 100 条数据
+[2026-08-19 06:11:23] [run_batch] [scraper_20] [FID=20] 正在请求 版块第 17 页: http://127.0.0.1:1024/thread0806.php?fid=20&search=&page=17
+[2026-08-19 06:11:24] [run_batch] [scraper_21] [FID=21] 正在请求 版块第 16 页: http://127.0.0.1:1024/thread0806.php?fid=21&search=&page=16
+[2026-08-19 06:11:25] [run_batch] [scraper_21] [FID=21] 版块 第 16 页提取到 100 条数据
+[2026-08-19 06:11:25] [run_batch] [scraper_20] [FID=20] 版块 第 17 页提取到 100 条数据
+[2026-08-19 06:11:26] [run_batch] [scraper_16] [FID=16] 正在请求 版块第 19 页: http://127.0.0.1:1024/thread0806.php?fid=16&search=&page=19
+[2026-08-19 06:11:28] [run_batch] [scraper_21] [FID=21] 正在请求 版块第 17 页: http://127.0.0.1:1024/thread0806.php?fid=21&search=&page=17
+[2026-08-19 06:11:28] [run_batch] [scraper_16] [FID=16] 版块 第 19 页提取到 100 条数据
+[2026-08-19 06:11:28] [run_batch] [scraper_20] [FID=20] 正在请求 版块第 18 页: http://127.0.0.1:1024/thread0806.php?fid=20&search=&page=18
+[2026-08-19 06:11:30] [run_batch] [scraper_21] [FID=21] 版块 第 17 页提取到 100 条数据
+[2026-08-19 06:11:30] [run_batch] [scraper_20] [FID=20] 版块 第 18 页提取到 100 条数据
+[2026-08-19 06:11:31] [run_batch] [scraper_16] [FID=16] 正在请求 版块第 20 页: http://127.0.0.1:1024/thread0806.php?fid=16&search=&page=20
+[2026-08-19 06:11:33] [run_batch] [scraper_16] [FID=16] 版块 第 20 页提取到 100 条数据
+[2026-08-19 06:11:33] [run_batch] [scraper_16] [FID=16] 版块[已保存] 前 20 页数据SQLite 实际入库 15 条（标题去重后）
+
+[2026-08-19 06:11:33] [run_batch] [scraper_16] [FID=16] 版块[已保存] 前 20 页数据已写入磁盘（累计 2000 条）
+
+[2026-08-19 06:11:33] [run_batch] [scraper_21] [FID=21] 正在请求 版块第 18 页: http://127.0.0.1:1024/thread0806.php?fid=21&search=&page=18
+[2026-08-19 06:11:33] [run_batch] [scraper_20] [FID=20] 正在请求 版块第 19 页: http://127.0.0.1:1024/thread0806.php?fid=20&search=&page=19
+[2026-08-19 06:11:34] [run_batch] [scraper_21] [FID=21] 版块 第 18 页提取到 100 条数据
+[2026-08-19 06:11:35] [run_batch] [scraper_20] [FID=20] 版块 第 19 页提取到 100 条数据
+[2026-08-19 06:11:36] [run_batch] [scraper_16] [FID=16] 正在请求 版块第 21 页: http://127.0.0.1:1024/thread0806.php?fid=16&search=&page=21
+[2026-08-19 06:11:37] [run_batch] [scraper_21] [FID=21] 正在请求 版块第 19 页: http://127.0.0.1:1024/thread0806.php?fid=21&search=&page=19
+[2026-08-19 06:11:38] [run_batch] [scraper_16] [FID=16] 版块 第 21 页提取到 100 条数据
+[2026-08-19 06:11:38] [run_batch] [scraper_20] [FID=20] 正在请求 版块第 20 页: http://127.0.0.1:1024/thread0806.php?fid=20&search=&page=20
+[2026-08-19 06:11:39] [run_batch] [scraper_21] [FID=21] 版块 第 19 页提取到 100 条数据
+[2026-08-19 06:11:40] [run_batch] [scraper_20] [FID=20] 版块 第 20 页提取到 100 条数据
+[2026-08-19 06:11:40] [run_batch] [scraper_20] [FID=20] 版块[已保存] 前 20 页数据SQLite 实际入库 1 条（标题去重后）
+
+[2026-08-19 06:11:40] [run_batch] [scraper_20] [FID=20] 版块[已保存] 前 20 页数据已写入磁盘（累计 2000 条）
+
+[2026-08-19 06:11:41] [run_batch] [scraper_16] [FID=16] 正在请求 版块第 22 页: http://127.0.0.1:1024/thread0806.php?fid=16&search=&page=22
+[2026-08-19 06:11:42] [run_batch] [scraper_21] [FID=21] 正在请求 版块第 20 页: http://127.0.0.1:1024/thread0806.php?fid=21&search=&page=20
+[2026-08-19 06:11:43] [run_batch] [scraper_20] [FID=20] 正在请求 版块第 21 页: http://127.0.0.1:1024/thread0806.php?fid=20&search=&page=21
+[2026-08-19 06:11:43] [run_batch] [scraper_21] [FID=21] 版块 第 20 页提取到 100 条数据
+[2026-08-19 06:11:43] [run_batch] [scraper_21] [FID=21] 版块[已保存] 前 20 页数据SQLite 实际入库 126 条（标题去重后）
+
+[2026-08-19 06:11:43] [run_batch] [scraper_21] [FID=21] 版块[已保存] 前 20 页数据已写入磁盘（累计 2000 条）
+
+[2026-08-19 06:11:43] [run_batch] [scraper_16] [FID=16] 版块 第 22 页提取到 100 条数据
+[2026-08-19 06:11:44] [run_batch] [scraper_20] [FID=20] 版块 第 21 页提取到 100 条数据
+[2026-08-19 06:11:46] [run_batch] [scraper_21] [FID=21] 正在请求 版块第 21 页: http://127.0.0.1:1024/thread0806.php?fid=21&search=&page=21
+[2026-08-19 06:11:46] [run_batch] [scraper_16] [FID=16] 正在请求 版块第 23 页: http://127.0.0.1:1024/thread0806.php?fid=16&search=&page=23
+[2026-08-19 06:11:47] [run_batch] [scraper_21] [FID=21] 版块 第 21 页提取到 100 条数据
+[2026-08-19 06:11:47] [run_batch] [scraper_20] [FID=20] 正在请求 版块第 22 页: http://127.0.0.1:1024/thread0806.php?fid=20&search=&page=22
+[2026-08-19 06:11:48] [run_batch] [scraper_16] [FID=16] 版块 第 23 页提取到 100 条数据
+[2026-08-19 06:11:49] [run_batch] [scraper_20] [FID=20] 版块 第 22 页提取到 100 条数据
+[2026-08-19 06:11:50] [run_batch] [scraper_21] [FID=21] 正在请求 版块第 22 页: http://127.0.0.1:1024/thread0806.php?fid=21&search=&page=22
+[2026-08-19 06:11:51] [run_batch] [scraper_16] [FID=16] 正在请求 版块第 24 页: http://127.0.0.1:1024/thread0806.php?fid=16&search=&page=24
+[2026-08-19 06:11:52] [run_batch] [scraper_21] [FID=21] 版块 第 22 页提取到 100 条数据
+[2026-08-19 06:11:52] [run_batch] [scraper_16] [FID=16] 版块 第 24 页提取到 100 条数据
+[2026-08-19 06:11:52] [run_batch] [scraper_20] [FID=20] 正在请求 版块第 23 页: http://127.0.0.1:1024/thread0806.php?fid=20&search=&page=23
+[2026-08-19 06:11:54] [run_batch] [scraper_20] [FID=20] 版块 第 23 页提取到 100 条数据
+[2026-08-19 06:11:55] [run_batch] [scraper_21] [FID=21] 正在请求 版块第 23 页: http://127.0.0.1:1024/thread0806.php?fid=21&search=&page=23
+[2026-08-19 06:11:55] [run_batch] [scraper_16] [FID=16] 正在请求 版块第 25 页: http://127.0.0.1:1024/thread0806.php?fid=16&search=&page=25
+[2026-08-19 06:11:56] [run_batch] [scraper_21] [FID=21] 版块 第 23 页提取到 100 条数据
+[2026-08-19 06:11:57] [run_batch] [scraper_16] [FID=16] 版块 第 25 页提取到 100 条数据
+[2026-08-19 06:11:57] [run_batch] [scraper_16] [FID=16] 版块[已保存] 前 25 页数据SQLite 实际入库 15 条（标题去重后）
+
+[2026-08-19 06:11:57] [run_batch] [scraper_20] [FID=20] 正在请求 版块第 24 页: http://127.0.0.1:1024/thread0806.php?fid=20&search=&page=24
+[2026-08-19 06:11:59] [run_batch] [scraper_20] [FID=20] 版块 第 24 页提取到 100 条数据
+[2026-08-19 06:11:59] [run_batch] [scraper_21] [FID=21] 正在请求 版块第 24 页: http://127.0.0.1:1024/thread0806.php?fid=21&search=&page=24
+[2026-08-19 06:12:00] [run_batch] [scraper_16] [FID=16] 正在请求 版块第 26 页: http://127.0.0.1:1024/thread0806.php?fid=16&search=&page=26
+[2026-08-19 06:12:02] [run_batch] [scraper_20] [FID=20] 正在请求 版块第 25 页: http://127.0.0.1:1024/thread0806.php?fid=20&search=&page=25
+[2026-08-19 06:12:04] [run_batch] [scraper_21] [FID=21] 版块 第 24 页提取到 100 条数据
+[2026-08-19 06:12:04] [run_batch] [scraper_16] [FID=16] 版块 第 26 页提取到 100 条数据
+[2026-08-19 06:12:05] [run_batch] [scraper_20] [FID=20] 版块 第 25 页提取到 100 条数据
+[2026-08-19 06:12:05] [run_batch] [scraper_20] [FID=20] 版块[已保存] 前 25 页数据SQLite 实际入库 1 条（标题去重后）
+
+[2026-08-19 06:12:07] [run_batch] [scraper_21] [FID=21] 正在请求 版块第 25 页: http://127.0.0.1:1024/thread0806.php?fid=21&search=&page=25
+[2026-08-19 06:12:07] [run_batch] [scraper_16] [FID=16] 正在请求 版块第 27 页: http://127.0.0.1:1024/thread0806.php?fid=16&search=&page=27
+[2026-08-19 06:12:08] [run_batch] [scraper_20] [FID=20] 正在请求 版块第 26 页: http://127.0.0.1:1024/thread0806.php?fid=20&search=&page=26
+[2026-08-19 06:12:09] [run_batch] [scraper_21] [FID=21] 版块 第 25 页提取到 100 条数据
+[2026-08-19 06:12:09] [run_batch] [scraper_21] [FID=21] 版块[已保存] 前 25 页数据SQLite 实际入库 126 条（标题去重后）
+
+[2026-08-19 06:12:10] [run_batch] [scraper_16] [FID=16] 版块 第 27 页提取到 100 条数据
+[2026-08-19 06:12:10] [run_batch] [scraper_20] [FID=20] 版块 第 26 页提取到 100 条数据
+[2026-08-19 06:12:12] [run_batch] [scraper_21] [FID=21] 正在请求 版块第 26 页: http://127.0.0.1:1024/thread0806.php?fid=21&search=&page=26
+[2026-08-19 06:12:13] [run_batch] [scraper_16] [FID=16] 正在请求 版块第 28 页: http://127.0.0.1:1024/thread0806.php?fid=16&search=&page=28
+[2026-08-19 06:12:13] [run_batch] [scraper_20] [FID=20] 正在请求 版块第 27 页: http://127.0.0.1:1024/thread0806.php?fid=20&search=&page=27
+[2026-08-19 06:12:13] [run_batch] [scraper_21] [FID=21] 版块 第 26 页提取到 100 条数据
+[2026-08-19 06:12:14] [run_batch] [scraper_16] [FID=16] 版块 第 28 页提取到 100 条数据
+[2026-08-19 06:12:15] [run_batch] [scraper_20] [FID=20] 版块 第 27 页提取到 100 条数据
+[2026-08-19 06:12:16] [run_batch] [scraper_21] [FID=21] 正在请求 版块第 27 页: http://127.0.0.1:1024/thread0806.php?fid=21&search=&page=27
+[2026-08-19 06:12:17] [run_batch] [scraper_16] [FID=16] 正在请求 版块第 29 页: http://127.0.0.1:1024/thread0806.php?fid=16&search=&page=29
+[2026-08-19 06:12:18] [run_batch] [scraper_21] [FID=21] 版块 第 27 页提取到 100 条数据
+[2026-08-19 06:12:18] [run_batch] [scraper_20] [FID=20] 正在请求 版块第 28 页: http://127.0.0.1:1024/thread0806.php?fid=20&search=&page=28
+[2026-08-19 06:12:21] [run_batch] [scraper_21] [FID=21] 正在请求 版块第 28 页: http://127.0.0.1:1024/thread0806.php?fid=21&search=&page=28
+[2026-08-19 06:12:23] [run_batch] [scraper_21] [FID=21] 版块 第 28 页提取到 100 条数据
+[2026-08-19 06:12:23] [run_batch] [scraper_20] [FID=20] 版块 第 28 页提取到 100 条数据
+[2026-08-19 06:12:24] [run_batch] [scraper_16] [FID=16] 版块 第 29 页提取到 100 条数据
+[2026-08-19 06:12:26] [run_batch] [scraper_21] [FID=21] 正在请求 版块第 29 页: http://127.0.0.1:1024/thread0806.php?fid=21&search=&page=29
+[2026-08-19 06:12:26] [run_batch] [scraper_20] [FID=20] 正在请求 版块第 29 页: http://127.0.0.1:1024/thread0806.php?fid=20&search=&page=29
+[2026-08-19 06:12:27] [run_batch] [scraper_16] [FID=16] 正在请求 版块第 30 页: http://127.0.0.1:1024/thread0806.php?fid=16&search=&page=30
+[2026-08-19 06:12:28] [run_batch] [scraper_21] [FID=21] 版块 第 29 页提取到 100 条数据
+[2026-08-19 06:12:28] [run_batch] [scraper_20] [FID=20] 版块 第 29 页提取到 100 条数据
+[2026-08-19 06:12:28] [run_batch] [scraper_16] [FID=16] 版块 第 30 页提取到 100 条数据
+[2026-08-19 06:12:28] [run_batch] [scraper_16] [FID=16] 版块[已保存] 前 30 页数据SQLite 实际入库 15 条（标题去重后）
+
+[2026-08-19 06:12:28] [run_batch] [scraper_16] [FID=16] 版块[已保存] 前 30 页数据已写入磁盘（累计 3000 条）
+
+[2026-08-19 06:12:31] [run_batch] [scraper_21] [FID=21] 正在请求 版块第 30 页: http://127.0.0.1:1024/thread0806.php?fid=21&search=&page=30
+[2026-08-19 06:12:31] [run_batch] [scraper_20] [FID=20] 正在请求 版块第 30 页: http://127.0.0.1:1024/thread0806.php?fid=20&search=&page=30
+[2026-08-19 06:12:31] [run_batch] [scraper_16] [FID=16] 正在请求 版块第 31 页: http://127.0.0.1:1024/thread0806.php?fid=16&search=&page=31
+[2026-08-19 06:12:32] [run_batch] [scraper_21] [FID=21] 版块 第 30 页提取到 100 条数据
+[2026-08-19 06:12:32] [run_batch] [scraper_21] [FID=21] 版块[已保存] 前 30 页数据SQLite 实际入库 126 条（标题去重后）
+
+[2026-08-19 06:12:32] [run_batch] [scraper_21] [FID=21] 版块[已保存] 前 30 页数据已写入磁盘（累计 3000 条）
+
+[2026-08-19 06:12:33] [run_batch] [scraper_20] [FID=20] 版块 第 30 页提取到 100 条数据
+[2026-08-19 06:12:33] [run_batch] [scraper_20] [FID=20] 版块[已保存] 前 30 页数据SQLite 实际入库 1 条（标题去重后）
+
+[2026-08-19 06:12:33] [run_batch] [scraper_20] [FID=20] 版块[已保存] 前 30 页数据已写入磁盘（累计 3000 条）
+
+[2026-08-19 06:12:34] [run_batch] [scraper_16] [FID=16] 版块 第 31 页提取到 100 条数据
+[2026-08-19 06:12:35] [run_batch] [scraper_21] [FID=21] 正在请求 版块第 31 页: http://127.0.0.1:1024/thread0806.php?fid=21&search=&page=31
+[2026-08-19 06:12:36] [run_batch] [scraper_20] [FID=20] 正在请求 版块第 31 页: http://127.0.0.1:1024/thread0806.php?fid=20&search=&page=31
+[2026-08-19 06:12:37] [run_batch] [scraper_21] [FID=21] 版块 第 31 页提取到 100 条数据
+[2026-08-19 06:12:37] [run_batch] [scraper_16] [FID=16] 正在请求 版块第 32 页: http://127.0.0.1:1024/thread0806.php?fid=16&search=&page=32
+[2026-08-19 06:12:37] [run_batch] [scraper_20] [FID=20] 版块 第 31 页提取到 100 条数据
+[2026-08-19 06:12:38] [run_batch] [scraper_16] [FID=16] 版块 第 32 页提取到 100 条数据
+[2026-08-19 06:12:40] [run_batch] [scraper_21] [FID=21] 正在请求 版块第 32 页: http://127.0.0.1:1024/thread0806.php?fid=21&search=&page=32
+[2026-08-19 06:12:40] [run_batch] [scraper_20] [FID=20] 正在请求 版块第 32 页: http://127.0.0.1:1024/thread0806.php?fid=20&search=&page=32
+[2026-08-19 06:12:41] [run_batch] [scraper_21] [FID=21] 版块 第 32 页提取到 100 条数据
+[2026-08-19 06:12:41] [run_batch] [scraper_16] [FID=16] 正在请求 版块第 33 页: http://127.0.0.1:1024/thread0806.php?fid=16&search=&page=33
+[2026-08-19 06:12:42] [run_batch] [scraper_20] [FID=20] 版块 第 32 页提取到 100 条数据
+[2026-08-19 06:12:43] [run_batch] [scraper_16] [FID=16] 版块 第 33 页提取到 100 条数据
+[2026-08-19 06:12:44] [run_batch] [scraper_21] [FID=21] 正在请求 版块第 33 页: http://127.0.0.1:1024/thread0806.php?fid=21&search=&page=33
+[2026-08-19 06:12:45] [run_batch] [scraper_20] [FID=20] 正在请求 版块第 33 页: http://127.0.0.1:1024/thread0806.php?fid=20&search=&page=33
+[2026-08-19 06:12:46] [run_batch] [scraper_21] [FID=21] 版块 第 33 页提取到 100 条数据
+[2026-08-19 06:12:46] [run_batch] [scraper_16] [FID=16] 正在请求 版块第 34 页: http://127.0.0.1:1024/thread0806.php?fid=16&search=&page=34
+[2026-08-19 06:12:47] [run_batch] [scraper_20] [FID=20] 版块 第 33 页提取到 100 条数据
+[2026-08-19 06:12:47] [run_batch] [scraper_16] [FID=16] 版块 第 34 页提取到 100 条数据
+[2026-08-19 06:12:49] [run_batch] [scraper_21] [FID=21] 正在请求 版块第 34 页: http://127.0.0.1:1024/thread0806.php?fid=21&search=&page=34
+[2026-08-19 06:12:50] [run_batch] [scraper_20] [FID=20] 正在请求 版块第 34 页: http://127.0.0.1:1024/thread0806.php?fid=20&search=&page=34
+[2026-08-19 06:12:50] [run_batch] [scraper_21] [FID=21] 版块 第 34 页提取到 100 条数据
+[2026-08-19 06:12:50] [run_batch] [scraper_16] [FID=16] 正在请求 版块第 35 页: http://127.0.0.1:1024/thread0806.php?fid=16&search=&page=35
+[2026-08-19 06:12:51] [run_batch] [scraper_20] [FID=20] 版块 第 34 页提取到 100 条数据
+[2026-08-19 06:12:52] [run_batch] [scraper_16] [FID=16] 版块 第 35 页提取到 100 条数据
+[2026-08-19 06:12:52] [run_batch] [scraper_16] [FID=16] 版块[已保存] 前 35 页数据SQLite 实际入库 15 条（标题去重后）
+
+[2026-08-19 06:12:53] [run_batch] [scraper_21] [FID=21] 正在请求 版块第 35 页: http://127.0.0.1:1024/thread0806.php?fid=21&search=&page=35
+[2026-08-19 06:12:54] [run_batch] [scraper_20] [FID=20] 正在请求 版块第 35 页: http://127.0.0.1:1024/thread0806.php?fid=20&search=&page=35
+[2026-08-19 06:12:54] [run_batch] [scraper_21] [FID=21] 版块 第 35 页提取到 100 条数据
+[2026-08-19 06:12:54] [run_batch] [scraper_21] [FID=21] 版块[已保存] 前 35 页数据SQLite 实际入库 126 条（标题去重后）
+
+[2026-08-19 06:12:55] [run_batch] [scraper_16] [FID=16] 正在请求 版块第 36 页: http://127.0.0.1:1024/thread0806.php?fid=16&search=&page=36
+[2026-08-19 06:12:55] [run_batch] [scraper_20] [FID=20] 版块 第 35 页提取到 100 条数据
+[2026-08-19 06:12:55] [run_batch] [scraper_20] [FID=20] 版块[已保存] 前 35 页数据SQLite 实际入库 1 条（标题去重后）
+
+[2026-08-19 06:12:56] [run_batch] [scraper_16] [FID=16] 版块 第 36 页提取到 100 条数据
+[2026-08-19 06:12:57] [run_batch] [scraper_21] [FID=21] 正在请求 版块第 36 页: http://127.0.0.1:1024/thread0806.php?fid=21&search=&page=36
+[2026-08-19 06:12:58] [run_batch] [scraper_20] [FID=20] 正在请求 版块第 36 页: http://127.0.0.1:1024/thread0806.php?fid=20&search=&page=36
+[2026-08-19 06:12:59] [run_batch] [scraper_21] [FID=21] 版块 第 36 页提取到 100 条数据
+[2026-08-19 06:12:59] [run_batch] [scraper_16] [FID=16] 正在请求 版块第 37 页: http://127.0.0.1:1024/thread0806.php?fid=16&search=&page=37
+[2026-08-19 06:13:00] [run_batch] [scraper_20] [FID=20] 版块 第 36 页提取到 100 条数据
+[2026-08-19 06:13:01] [run_batch] [scraper_16] [FID=16] 版块 第 37 页提取到 100 条数据
+[2026-08-19 06:13:02] [run_batch] [scraper_21] [FID=21] 正在请求 版块第 37 页: http://127.0.0.1:1024/thread0806.php?fid=21&search=&page=37
+[2026-08-19 06:13:03] [run_batch] [scraper_21] [FID=21] 版块 第 37 页提取到 100 条数据
+[2026-08-19 06:13:03] [run_batch] [scraper_20] [FID=20] 正在请求 版块第 37 页: http://127.0.0.1:1024/thread0806.php?fid=20&search=&page=37
+[2026-08-19 06:13:04] [run_batch] [scraper_16] [FID=16] 正在请求 版块第 38 页: http://127.0.0.1:1024/thread0806.php?fid=16&search=&page=38
+[2026-08-19 06:13:05] [run_batch] [scraper_20] [FID=20] 版块 第 37 页提取到 100 条数据
+[2026-08-19 06:13:05] [run_batch] [scraper_16] [FID=16] 版块 第 38 页提取到 100 条数据
+[2026-08-19 06:13:06] [run_batch] [scraper_21] [FID=21] 正在请求 版块第 38 页: http://127.0.0.1:1024/thread0806.php?fid=21&search=&page=38
+[2026-08-19 06:13:08] [run_batch] [scraper_21] [FID=21] 版块 第 38 页提取到 100 条数据
+[2026-08-19 06:13:08] [run_batch] [scraper_20] [FID=20] 正在请求 版块第 38 页: http://127.0.0.1:1024/thread0806.php?fid=20&search=&page=38
+[2026-08-19 06:13:08] [run_batch] [scraper_16] [FID=16] 正在请求 版块第 39 页: http://127.0.0.1:1024/thread0806.php?fid=16&search=&page=39
+[2026-08-19 06:13:09] [run_batch] [scraper_20] [FID=20] 版块 第 38 页提取到 100 条数据
+[2026-08-19 06:13:10] [run_batch] [scraper_16] [FID=16] 版块 第 39 页提取到 100 条数据
+[2026-08-19 06:13:11] [run_batch] [scraper_21] [FID=21] 正在请求 版块第 39 页: http://127.0.0.1:1024/thread0806.php?fid=21&search=&page=39
+[2026-08-19 06:13:12] [run_batch] [scraper_20] [FID=20] 正在请求 版块第 39 页: http://127.0.0.1:1024/thread0806.php?fid=20&search=&page=39
+[2026-08-19 06:13:13] [run_batch] [scraper_21] [FID=21] 版块 第 39 页提取到 100 条数据
+[2026-08-19 06:13:13] [run_batch] [scraper_16] [FID=16] 正在请求 版块第 40 页: http://127.0.0.1:1024/thread0806.php?fid=16&search=&page=40
+[2026-08-19 06:13:14] [run_batch] [scraper_20] [FID=20] 版块 第 39 页提取到 100 条数据
+[2026-08-19 06:13:15] [run_batch] [scraper_16] [FID=16] 版块 第 40 页提取到 100 条数据
+[2026-08-19 06:13:15] [run_batch] [scraper_16] [FID=16] 版块[已保存] 前 40 页数据SQLite 实际入库 15 条（标题去重后）
+
+[2026-08-19 06:13:15] [run_batch] [scraper_16] [FID=16] 版块[已保存] 前 40 页数据已写入磁盘（累计 4000 条）
+
+[2026-08-19 06:13:16] [run_batch] [scraper_21] [FID=21] 正在请求 版块第 40 页: http://127.0.0.1:1024/thread0806.php?fid=21&search=&page=40
+[2026-08-19 06:13:17] [run_batch] [scraper_20] [FID=20] 正在请求 版块第 40 页: http://127.0.0.1:1024/thread0806.php?fid=20&search=&page=40
+[2026-08-19 06:13:17] [run_batch] [scraper_21] [FID=21] 版块 第 40 页提取到 100 条数据
+[2026-08-19 06:13:17] [run_batch] [scraper_21] [FID=21] 版块[已保存] 前 40 页数据SQLite 实际入库 126 条（标题去重后）
+
+[2026-08-19 06:13:17] [run_batch] [scraper_21] [FID=21] 版块[已保存] 前 40 页数据已写入磁盘（累计 4000 条）
+
+[2026-08-19 06:13:18] [run_batch] [scraper_16] [FID=16] 正在请求 版块第 41 页: http://127.0.0.1:1024/thread0806.php?fid=16&search=&page=41
+[2026-08-19 06:13:18] [run_batch] [scraper_20] [FID=20] 版块 第 40 页提取到 100 条数据
+[2026-08-19 06:13:18] [run_batch] [scraper_20] [FID=20] 版块[已保存] 前 40 页数据SQLite 实际入库 1 条（标题去重后）
+
+[2026-08-19 06:13:18] [run_batch] [scraper_20] [FID=20] 版块[已保存] 前 40 页数据已写入磁盘（累计 4000 条）
+
+[2026-08-19 06:13:19] [run_batch] [scraper_16] [FID=16] 版块 第 41 页提取到 100 条数据
+[2026-08-19 06:13:20] [run_batch] [scraper_21] [FID=21] 正在请求 版块第 41 页: http://127.0.0.1:1024/thread0806.php?fid=21&search=&page=41
+[2026-08-19 06:13:21] [run_batch] [scraper_21] [FID=21] 版块 第 41 页提取到 100 条数据
+[2026-08-19 06:13:21] [run_batch] [scraper_20] [FID=20] 正在请求 版块第 41 页: http://127.0.0.1:1024/thread0806.php?fid=20&search=&page=41
+[2026-08-19 06:13:22] [run_batch] [scraper_16] [FID=16] 正在请求 版块第 42 页: http://127.0.0.1:1024/thread0806.php?fid=16&search=&page=42
+[2026-08-19 06:13:23] [run_batch] [scraper_20] [FID=20] 版块 第 41 页提取到 100 条数据
+[2026-08-19 06:13:24] [run_batch] [scraper_16] [FID=16] 版块 第 42 页提取到 100 条数据
+[2026-08-19 06:13:24] [run_batch] [scraper_21] [FID=21] 正在请求 版块第 42 页: http://127.0.0.1:1024/thread0806.php?fid=21&search=&page=42
+[2026-08-19 06:13:26] [run_batch] [scraper_20] [FID=20] 正在请求 版块第 42 页: http://127.0.0.1:1024/thread0806.php?fid=20&search=&page=42
+[2026-08-19 06:13:26] [run_batch] [scraper_21] [FID=21] 版块 第 42 页提取到 100 条数据
+[2026-08-19 06:13:27] [run_batch] [scraper_16] [FID=16] 正在请求 版块第 43 页: http://127.0.0.1:1024/thread0806.php?fid=16&search=&page=43
+[2026-08-19 06:13:28] [run_batch] [scraper_20] [FID=20] 版块 第 42 页提取到 100 条数据
+[2026-08-19 06:13:28] [run_batch] [scraper_16] [FID=16] 版块 第 43 页提取到 100 条数据
+[2026-08-19 06:13:29] [run_batch] [scraper_21] [FID=21] 正在请求 版块第 43 页: http://127.0.0.1:1024/thread0806.php?fid=21&search=&page=43
+[2026-08-19 06:13:31] [run_batch] [scraper_20] [FID=20] 正在请求 版块第 43 页: http://127.0.0.1:1024/thread0806.php?fid=20&search=&page=43
+[2026-08-19 06:13:31] [run_batch] [scraper_21] [FID=21] 版块 第 43 页提取到 100 条数据
+[2026-08-19 06:13:31] [run_batch] [scraper_16] [FID=16] 正在请求 版块第 44 页: http://127.0.0.1:1024/thread0806.php?fid=16&search=&page=44
+[2026-08-19 06:13:32] [run_batch] [scraper_20] [FID=20] 版块 第 43 页提取到 100 条数据
+[2026-08-19 06:13:33] [run_batch] [scraper_16] [FID=16] 版块 第 44 页提取到 100 条数据
+[2026-08-19 06:13:34] [run_batch] [scraper_21] [FID=21] 正在请求 版块第 44 页: http://127.0.0.1:1024/thread0806.php?fid=21&search=&page=44
+[2026-08-19 06:13:35] [run_batch] [scraper_21] [FID=21] 版块 第 44 页提取到 100 条数据
+[2026-08-19 06:13:35] [run_batch] [scraper_20] [FID=20] 正在请求 版块第 44 页: http://127.0.0.1:1024/thread0806.php?fid=20&search=&page=44
+[2026-08-19 06:13:36] [run_batch] [scraper_16] [FID=16] 正在请求 版块第 45 页: http://127.0.0.1:1024/thread0806.php?fid=16&search=&page=45
+[2026-08-19 06:13:37] [run_batch] [scraper_20] [FID=20] 版块 第 44 页提取到 100 条数据
+[2026-08-19 06:13:38] [run_batch] [scraper_16] [FID=16] 版块 第 45 页提取到 100 条数据
+[2026-08-19 06:13:38] [run_batch] [scraper_16] [FID=16] 版块[已保存] 前 45 页数据SQLite 实际入库 15 条（标题去重后）
+
+[2026-08-19 06:13:38] [run_batch] [scraper_21] [FID=21] 正在请求 版块第 45 页: http://127.0.0.1:1024/thread0806.php?fid=21&search=&page=45
+[2026-08-19 06:13:40] [run_batch] [scraper_21] [FID=21] 版块 第 45 页提取到 100 条数据
+[2026-08-19 06:13:40] [run_batch] [scraper_21] [FID=21] 版块[已保存] 前 45 页数据SQLite 实际入库 126 条（标题去重后）
+
+[2026-08-19 06:13:40] [run_batch] [scraper_20] [FID=20] 正在请求 版块第 45 页: http://127.0.0.1:1024/thread0806.php?fid=20&search=&page=45
+[2026-08-19 06:13:41] [run_batch] [scraper_16] [FID=16] 正在请求 版块第 46 页: http://127.0.0.1:1024/thread0806.php?fid=16&search=&page=46
+[2026-08-19 06:13:42] [run_batch] [scraper_20] [FID=20] 版块 第 45 页提取到 100 条数据
+[2026-08-19 06:13:42] [run_batch] [scraper_20] [FID=20] 版块[已保存] 前 45 页数据SQLite 实际入库 1 条（标题去重后）
+
+[2026-08-19 06:13:43] [run_batch] [scraper_21] [FID=21] 正在请求 版块第 46 页: http://127.0.0.1:1024/thread0806.php?fid=21&search=&page=46
+[2026-08-19 06:13:43] [run_batch] [scraper_16] [FID=16] 版块 第 46 页提取到 100 条数据
+[2026-08-19 06:13:44] [run_batch] [scraper_21] [FID=21] 版块 第 46 页提取到 100 条数据
+[2026-08-19 06:13:45] [run_batch] [scraper_20] [FID=20] 正在请求 版块第 46 页: http://127.0.0.1:1024/thread0806.php?fid=20&search=&page=46
+[2026-08-19 06:13:46] [run_batch] [scraper_16] [FID=16] 正在请求 版块第 47 页: http://127.0.0.1:1024/thread0806.php?fid=16&search=&page=47
+[2026-08-19 06:13:46] [run_batch] [scraper_20] [FID=20] 版块 第 46 页提取到 100 条数据
+[2026-08-19 06:13:47] [run_batch] [scraper_21] [FID=21] 正在请求 版块第 47 页: http://127.0.0.1:1024/thread0806.php?fid=21&search=&page=47
+[2026-08-19 06:13:48] [run_batch] [scraper_16] [FID=16] 版块 第 47 页提取到 100 条数据
+[2026-08-19 06:13:49] [run_batch] [scraper_21] [FID=21] 版块 第 47 页提取到 100 条数据
+[2026-08-19 06:13:49] [run_batch] [scraper_20] [FID=20] 正在请求 版块第 47 页: http://127.0.0.1:1024/thread0806.php?fid=20&search=&page=47
+[2026-08-19 06:13:51] [run_batch] [scraper_16] [FID=16] 正在请求 版块第 48 页: http://127.0.0.1:1024/thread0806.php?fid=16&search=&page=48
+[2026-08-19 06:13:51] [run_batch] [scraper_20] [FID=20] 版块 第 47 页提取到 100 条数据
+[2026-08-19 06:13:52] [run_batch] [scraper_21] [FID=21] 正在请求 版块第 48 页: http://127.0.0.1:1024/thread0806.php?fid=21&search=&page=48
+[2026-08-19 06:13:52] [run_batch] [scraper_16] [FID=16] 版块 第 48 页提取到 100 条数据
+[2026-08-19 06:13:53] [run_batch] [scraper_21] [FID=21] 版块 第 48 页提取到 100 条数据
+[2026-08-19 06:13:54] [run_batch] [scraper_20] [FID=20] 正在请求 版块第 48 页: http://127.0.0.1:1024/thread0806.php?fid=20&search=&page=48
+[2026-08-19 06:13:55] [run_batch] [scraper_16] [FID=16] 正在请求 版块第 49 页: http://127.0.0.1:1024/thread0806.php?fid=16&search=&page=49
+[2026-08-19 06:13:56] [run_batch] [scraper_20] [FID=20] 版块 第 48 页提取到 100 条数据
+[2026-08-19 06:13:56] [run_batch] [scraper_21] [FID=21] 正在请求 版块第 49 页: http://127.0.0.1:1024/thread0806.php?fid=21&search=&page=49
+[2026-08-19 06:13:57] [run_batch] [scraper_16] [FID=16] 版块 第 49 页提取到 100 条数据
+[2026-08-19 06:13:58] [run_batch] [scraper_21] [FID=21] 版块 第 49 页提取到 100 条数据
+[2026-08-19 06:13:59] [run_batch] [scraper_20] [FID=20] 正在请求 版块第 49 页: http://127.0.0.1:1024/thread0806.php?fid=20&search=&page=49
+[2026-08-19 06:14:00] [run_batch] [scraper_16] [FID=16] 正在请求 版块第 50 页: http://127.0.0.1:1024/thread0806.php?fid=16&search=&page=50
+[2026-08-19 06:14:00] [run_batch] [scraper_20] [FID=20] 版块 第 49 页提取到 100 条数据
+[2026-08-19 06:14:01] [run_batch] [scraper_21] [FID=21] 正在请求 版块第 50 页: http://127.0.0.1:1024/thread0806.php?fid=21&search=&page=50
+[2026-08-19 06:14:02] [run_batch] [scraper_16] [FID=16] 版块 第 50 页提取到 100 条数据
+[2026-08-19 06:14:02] [run_batch] [scraper_16] [FID=16] 版块[已保存] 前 50 页数据SQLite 实际入库 15 条（标题去重后）
+
+[2026-08-19 06:14:02] [run_batch] [scraper_16] [FID=16] 版块[已保存] 前 50 页数据已写入磁盘（累计 5000 条）
+
+
+[2026-08-19 06:14:02] [run_batch] [scraper_16] [FID=16] 版块[已保存] 共写入 5000 条数据到 outputs/20260819/16_output_20260819.csv（进度至第 50 页）
+[2026-08-19 06:14:02] [run_batch] [scraper_16] [FID=16] 版块 SQLite 实际入库 15 条（标题去重后）
+[2026-08-19 06:14:02] [run_batch] __SUMMARY__ fid=16 rows=5000 db_rows=15 pages=50
+[2026-08-19 06:14:02] [run_batch] 完成 [16] 版块16（CSV 5000 条 / SQLite 15 条）
+[2026-08-19 06:14:02] [run_batch] 启动 [22] 版块22（访问根地址: http://127.0.0.1:1024）
+[2026-08-19 06:14:02] [run_batch] [scraper_21] [FID=21] 版块 第 50 页提取到 100 条数据
+[2026-08-19 06:14:02] [run_batch] [scraper_21] [FID=21] 版块[已保存] 前 50 页数据SQLite 实际入库 126 条（标题去重后）
+
+[2026-08-19 06:14:02] [run_batch] [scraper_21] [FID=21] 版块[已保存] 前 50 页数据已写入磁盘（累计 5000 条）
+
+
+[2026-08-19 06:14:02] [run_batch] [scraper_21] [FID=21] 版块[已保存] 共写入 5000 条数据到 outputs/20260819/21_output_20260819.csv（进度至第 50 页）
+[2026-08-19 06:14:02] [run_batch] [scraper_21] [FID=21] 版块 SQLite 实际入库 126 条（标题去重后）
+[2026-08-19 06:14:02] [run_batch] __SUMMARY__ fid=21 rows=5000 db_rows=126 pages=50
+[2026-08-19 06:14:02] [run_batch] 完成 [21] 版块21（CSV 5000 条 / SQLite 126 条）
+[2026-08-19 06:14:02] [run_batch] 启动 [25] 版块25（访问根地址: http://127.0.0.1:1024）
+
+[2026-08-19 06:14:03] [run_batch] [scraper_22] ===== 会话开始 2026-08-19 06:14:03 =====
+[2026-08-19 06:14:03] [run_batch] [scraper_22] [FID=22] 版块1-50页 开始抓取
+[2026-08-19 06:14:03] [run_batch] [scraper_22] [FID=22] 版块使用配置末页: 50
+[2026-08-19 06:14:03] [run_batch] [scraper_22] 开始抓取[FID=22] 版块，共 50 页（第 1 ~ 50 页）
+
+[2026-08-19 06:14:03] [run_batch] [scraper_22] [FID=22] 正在请求 版块第 1 页: http://127.0.0.1:1024/thread0806.php?fid=22&search=&page=1
+
+[2026-08-19 06:14:03] [run_batch] [scraper_25] ===== 会话开始 2026-08-19 06:14:03 =====
+[2026-08-19 06:14:03] [run_batch] [scraper_25] [FID=25] 版块1-50页 开始抓取
+[2026-08-19 06:14:03] [run_batch] [scraper_25] [FID=25] 版块使用配置末页: 50
+[2026-08-19 06:14:03] [run_batch] [scraper_25] 开始抓取[FID=25] 版块，共 50 页（第 1 ~ 50 页）
+
+[2026-08-19 06:14:03] [run_batch] [scraper_25] [FID=25] 正在请求 版块第 1 页: http://127.0.0.1:1024/thread0806.php?fid=25&search=&page=1
+[2026-08-19 06:14:03] [run_batch] [scraper_20] [FID=20] 正在请求 版块第 50 页: http://127.0.0.1:1024/thread0806.php?fid=20&search=&page=50
+[2026-08-19 06:14:04] [run_batch] [scraper_22] [FID=22] 版块 第 1 页提取到 99 条数据
+[2026-08-19 06:14:04] [run_batch] [scraper_25] [FID=25] 版块 第 1 页提取到 100 条数据
+[2026-08-19 06:14:05] [run_batch] [scraper_20] [FID=20] 版块 第 50 页提取到 100 条数据
+[2026-08-19 06:14:05] [run_batch] [scraper_20] [FID=20] 版块[已保存] 前 50 页数据SQLite 实际入库 1 条（标题去重后）
+
+[2026-08-19 06:14:05] [run_batch] [scraper_20] [FID=20] 版块[已保存] 前 50 页数据已写入磁盘（累计 5000 条）
+
+
+[2026-08-19 06:14:05] [run_batch] [scraper_20] [FID=20] 版块[已保存] 共写入 5000 条数据到 outputs/20260819/20_output_20260819.csv（进度至第 50 页）
+[2026-08-19 06:14:05] [run_batch] [scraper_20] [FID=20] 版块 SQLite 实际入库 1 条（标题去重后）
+[2026-08-19 06:14:05] [run_batch] __SUMMARY__ fid=20 rows=5000 db_rows=1 pages=50
+[2026-08-19 06:14:05] [run_batch] 完成 [20] 版块20（CSV 5000 条 / SQLite 1 条）
+[2026-08-19 06:14:05] [run_batch] 启动 [26] 版块26（访问根地址: http://127.0.0.1:1024）
+
+[2026-08-19 06:14:06] [run_batch] [scraper_26] ===== 会话开始 2026-08-19 06:14:06 =====
+[2026-08-19 06:14:06] [run_batch] [scraper_26] [FID=26] 版块1-50页 开始抓取
+[2026-08-19 06:14:06] [run_batch] [scraper_26] [FID=26] 版块使用配置末页: 50
+[2026-08-19 06:14:06] [run_batch] [scraper_26] 开始抓取[FID=26] 版块，共 50 页（第 1 ~ 50 页）
+
+[2026-08-19 06:14:06] [run_batch] [scraper_26] [FID=26] 正在请求 版块第 1 页: http://127.0.0.1:1024/thread0806.php?fid=26&search=&page=1
+[2026-08-19 06:14:07] [run_batch] [scraper_22] [FID=22] 正在请求 版块第 2 页: http://127.0.0.1:1024/thread0806.php?fid=22&search=&page=2
+[2026-08-19 06:14:07] [run_batch] [scraper_25] [FID=25] 正在请求 版块第 2 页: http://127.0.0.1:1024/thread0806.php?fid=25&search=&page=2
+[2026-08-19 06:14:07] [run_batch] [scraper_26] [FID=26] 版块 第 1 页提取到 100 条数据
+[2026-08-19 06:14:08] [run_batch] [scraper_25] [FID=25] 版块 第 2 页提取到 100 条数据
+[2026-08-19 06:14:08] [run_batch] [scraper_22] [FID=22] 版块 第 2 页提取到 100 条数据
+[2026-08-19 06:14:10] [run_batch] [scraper_26] [FID=26] 正在请求 版块第 2 页: http://127.0.0.1:1024/thread0806.php?fid=26&search=&page=2
+[2026-08-19 06:14:11] [run_batch] [scraper_25] [FID=25] 正在请求 版块第 3 页: http://127.0.0.1:1024/thread0806.php?fid=25&search=&page=3
+[2026-08-19 06:14:11] [run_batch] [scraper_22] [FID=22] 正在请求 版块第 3 页: http://127.0.0.1:1024/thread0806.php?fid=22&search=&page=3
+[2026-08-19 06:14:11] [run_batch] [scraper_26] [FID=26] 版块 第 2 页提取到 100 条数据
+[2026-08-19 06:14:12] [run_batch] [scraper_22] [FID=22] 版块 第 3 页提取到 100 条数据
+[2026-08-19 06:14:12] [run_batch] [scraper_25] [FID=25] 版块 第 3 页提取到 100 条数据
+[2026-08-19 06:14:14] [run_batch] [scraper_26] [FID=26] 正在请求 版块第 3 页: http://127.0.0.1:1024/thread0806.php?fid=26&search=&page=3
+[2026-08-19 06:14:15] [run_batch] [scraper_22] [FID=22] 正在请求 版块第 4 页: http://127.0.0.1:1024/thread0806.php?fid=22&search=&page=4
+[2026-08-19 06:14:15] [run_batch] [scraper_25] [FID=25] 正在请求 版块第 4 页: http://127.0.0.1:1024/thread0806.php?fid=25&search=&page=4
+[2026-08-19 06:14:16] [run_batch] [scraper_26] [FID=26] 版块 第 3 页提取到 100 条数据
+[2026-08-19 06:14:16] [run_batch] [scraper_22] [FID=22] 版块 第 4 页提取到 100 条数据
+[2026-08-19 06:14:16] [run_batch] [scraper_25] [FID=25] 版块 第 4 页提取到 100 条数据
+[2026-08-19 06:14:19] [run_batch] [scraper_26] [FID=26] 正在请求 版块第 4 页: http://127.0.0.1:1024/thread0806.php?fid=26&search=&page=4
+[2026-08-19 06:14:19] [run_batch] [scraper_22] [FID=22] 正在请求 版块第 5 页: http://127.0.0.1:1024/thread0806.php?fid=22&search=&page=5
+[2026-08-19 06:14:19] [run_batch] [scraper_25] [FID=25] 正在请求 版块第 5 页: http://127.0.0.1:1024/thread0806.php?fid=25&search=&page=5
+[2026-08-19 06:14:20] [run_batch] [scraper_26] [FID=26] 版块 第 4 页提取到 100 条数据
+[2026-08-19 06:14:20] [run_batch] [scraper_25] [FID=25] 版块 第 5 页提取到 100 条数据
+[2026-08-19 06:14:20] [run_batch] [scraper_25] [FID=25] 版块[已保存] 前 5 页数据SQLite 实际入库 243 条（标题去重后）
+
+[2026-08-19 06:14:21] [run_batch] [scraper_22] [FID=22] 版块 第 5 页提取到 100 条数据
+[2026-08-19 06:14:23] [run_batch] [scraper_26] [FID=26] 正在请求 版块第 5 页: http://127.0.0.1:1024/thread0806.php?fid=26&search=&page=5
+[2026-08-19 06:14:23] [run_batch] [scraper_25] [FID=25] 正在请求 版块第 6 页: http://127.0.0.1:1024/thread0806.php?fid=25&search=&page=6
+[2026-08-19 06:14:24] [run_batch] [scraper_22] [FID=22] 正在请求 版块第 6 页: http://127.0.0.1:1024/thread0806.php?fid=22&search=&page=6
+[2026-08-19 06:14:25] [run_batch] [scraper_26] [FID=26] 版块 第 5 页提取到 100 条数据
+[2026-08-19 06:14:25] [run_batch] [scraper_26] [FID=26] 版块[已保存] 前 5 页数据SQLite 实际入库 94 条（标题去重后）
+
+[2026-08-19 06:14:26] [run_batch] [scraper_25] [FID=25] 版块 第 6 页提取到 100 条数据
+[2026-08-19 06:14:26] [run_batch] [scraper_22] [FID=22] 版块 第 6 页提取到 100 条数据
+[2026-08-19 06:14:26] [run_batch] [scraper_22] [FID=22] 版块[已保存] 前 6 页数据SQLite 实际入库 406 条（标题去重后）
+
+[2026-08-19 06:14:28] [run_batch] [scraper_26] [FID=26] 正在请求 版块第 6 页: http://127.0.0.1:1024/thread0806.php?fid=26&search=&page=6
+[2026-08-19 06:14:29] [run_batch] [scraper_25] [FID=25] 正在请求 版块第 7 页: http://127.0.0.1:1024/thread0806.php?fid=25&search=&page=7
+[2026-08-19 06:14:29] [run_batch] [scraper_22] [FID=22] 正在请求 版块第 7 页: http://127.0.0.1:1024/thread0806.php?fid=22&search=&page=7
+[2026-08-19 06:14:29] [run_batch] [scraper_26] [FID=26] 版块 第 6 页提取到 100 条数据
+[2026-08-19 06:14:30] [run_batch] [scraper_25] [FID=25] 版块 第 7 页提取到 100 条数据
+[2026-08-19 06:14:31] [run_batch] [scraper_22] [FID=22] 版块 第 7 页提取到 100 条数据
+[2026-08-19 06:14:32] [run_batch] [scraper_26] [FID=26] 正在请求 版块第 7 页: http://127.0.0.1:1024/thread0806.php?fid=26&search=&page=7
+[2026-08-19 06:14:33] [run_batch] [scraper_25] [FID=25] 正在请求 版块第 8 页: http://127.0.0.1:1024/thread0806.php?fid=25&search=&page=8
+[2026-08-19 06:14:34] [run_batch] [scraper_22] [FID=22] 正在请求 版块第 8 页: http://127.0.0.1:1024/thread0806.php?fid=22&search=&page=8
+[2026-08-19 06:14:36] [run_batch] [scraper_26] [FID=26] 版块 第 7 页提取到 100 条数据
+[2026-08-19 06:14:37] [run_batch] [scraper_22] [FID=22] 版块 第 8 页提取到 100 条数据
+[2026-08-19 06:14:37] [run_batch] [scraper_25] [FID=25] 版块 第 8 页提取到 100 条数据
+[2026-08-19 06:14:39] [run_batch] [scraper_26] [FID=26] 正在请求 版块第 8 页: http://127.0.0.1:1024/thread0806.php?fid=26&search=&page=8
+[2026-08-19 06:14:40] [run_batch] [scraper_22] [FID=22] 正在请求 版块第 9 页: http://127.0.0.1:1024/thread0806.php?fid=22&search=&page=9
+[2026-08-19 06:14:40] [run_batch] [scraper_25] [FID=25] 正在请求 版块第 9 页: http://127.0.0.1:1024/thread0806.php?fid=25&search=&page=9
+[2026-08-19 06:14:41] [run_batch] [scraper_22] [FID=22] 版块 第 9 页提取到 100 条数据
+[2026-08-19 06:14:41] [run_batch] [scraper_26] [FID=26] 版块 第 8 页提取到 100 条数据[2026-08-19 06:14:41] [run_batch] [scraper_25] [FID=25] 版块 第 9 页提取到 100 条数据
+
+[2026-08-19 06:14:44] [run_batch] [scraper_22] [FID=22] 正在请求 版块第 10 页: http://127.0.0.1:1024/thread0806.php?fid=22&search=&page=10
+[2026-08-19 06:14:44] [run_batch] [scraper_26] [FID=26] 正在请求 版块第 9 页: http://127.0.0.1:1024/thread0806.php?fid=26&search=&page=9[2026-08-19 06:14:44] [run_batch] [scraper_25] [FID=25] 正在请求 版块第 10 页: http://127.0.0.1:1024/thread0806.php?fid=25&search=&page=10
+
+[2026-08-19 06:14:45] [run_batch] [scraper_22] [FID=22] 版块 第 10 页提取到 100 条数据
+[2026-08-19 06:14:45] [run_batch] [scraper_22] [FID=22] 版块[已保存] 前 10 页数据已写入磁盘（累计 999 条）
+
+[2026-08-19 06:14:45] [run_batch] [scraper_26] [FID=26] 版块 第 9 页提取到 100 条数据
+[2026-08-19 06:14:46] [run_batch] [scraper_25] [FID=25] 版块 第 10 页提取到 100 条数据
+[2026-08-19 06:14:46] [run_batch] [scraper_25] [FID=25] 版块[已保存] 前 10 页数据SQLite 实际入库 243 条（标题去重后）
+
+[2026-08-19 06:14:46] [run_batch] [scraper_25] [FID=25] 版块[已保存] 前 10 页数据已写入磁盘（累计 1000 条）
+
+[2026-08-19 06:14:48] [run_batch] [scraper_22] [FID=22] 正在请求 版块第 11 页: http://127.0.0.1:1024/thread0806.php?fid=22&search=&page=11
+[2026-08-19 06:14:48] [run_batch] [scraper_26] [FID=26] 正在请求 版块第 10 页: http://127.0.0.1:1024/thread0806.php?fid=26&search=&page=10
+[2026-08-19 06:14:49] [run_batch] [scraper_25] [FID=25] 正在请求 版块第 11 页: http://127.0.0.1:1024/thread0806.php?fid=25&search=&page=11
+[2026-08-19 06:14:50] [run_batch] [scraper_26] [FID=26] 版块 第 10 页提取到 100 条数据
+[2026-08-19 06:14:50] [run_batch] [scraper_22] [FID=22] 版块 第 11 页提取到 100 条数据
+[2026-08-19 06:14:50] [run_batch] [scraper_26] [FID=26] 版块[已保存] 前 10 页数据SQLite 实际入库 94 条（标题去重后）
+
+[2026-08-19 06:14:50] [run_batch] [scraper_26] [FID=26] 版块[已保存] 前 10 页数据已写入磁盘（累计 1000 条）
+
+[2026-08-19 06:14:50] [run_batch] [scraper_22] [FID=22] 版块[已保存] 前 11 页数据SQLite 实际入库 406 条（标题去重后）
+
+[2026-08-19 06:14:50] [run_batch] [scraper_25] [FID=25] 版块 第 11 页提取到 100 条数据
+[2026-08-19 06:14:53] [run_batch] [scraper_26] [FID=26] 正在请求 版块第 11 页: http://127.0.0.1:1024/thread0806.php?fid=26&search=&page=11
+[2026-08-19 06:14:53] [run_batch] [scraper_22] [FID=22] 正在请求 版块第 12 页: http://127.0.0.1:1024/thread0806.php?fid=22&search=&page=12
+[2026-08-19 06:14:53] [run_batch] [scraper_25] [FID=25] 正在请求 版块第 12 页: http://127.0.0.1:1024/thread0806.php?fid=25&search=&page=12
+[2026-08-19 06:14:54] [run_batch] [scraper_22] [FID=22] 版块 第 12 页提取到 100 条数据
+[2026-08-19 06:14:55] [run_batch] [scraper_25] [FID=25] 版块 第 12 页提取到 100 条数据
+[2026-08-19 06:14:55] [run_batch] [scraper_26] [FID=26] 版块 第 11 页提取到 100 条数据
+[2026-08-19 06:14:57] [run_batch] [scraper_22] [FID=22] 正在请求 版块第 13 页: http://127.0.0.1:1024/thread0806.php?fid=22&search=&page=13
+[2026-08-19 06:14:58] [run_batch] [scraper_22] [FID=22] 版块 第 13 页提取到 100 条数据
+[2026-08-19 06:14:58] [run_batch] [scraper_25] [FID=25] 正在请求 版块第 13 页: http://127.0.0.1:1024/thread0806.php?fid=25&search=&page=13
+[2026-08-19 06:14:58] [run_batch] [scraper_26] [FID=26] 正在请求 版块第 12 页: http://127.0.0.1:1024/thread0806.php?fid=26&search=&page=12
+[2026-08-19 06:14:59] [run_batch] [scraper_25] [FID=25] 版块 第 13 页提取到 100 条数据
+[2026-08-19 06:15:00] [run_batch] [scraper_26] [FID=26] 版块 第 12 页提取到 100 条数据
+[2026-08-19 06:15:01] [run_batch] [scraper_22] [FID=22] 正在请求 版块第 14 页: http://127.0.0.1:1024/thread0806.php?fid=22&search=&page=14
+[2026-08-19 06:15:02] [run_batch] [scraper_25] [FID=25] 正在请求 版块第 14 页: http://127.0.0.1:1024/thread0806.php?fid=25&search=&page=14
+[2026-08-19 06:15:02] [run_batch] [scraper_22] [FID=22] 版块 第 14 页提取到 100 条数据
+[2026-08-19 06:15:03] [run_batch] [scraper_26] [FID=26] 正在请求 版块第 13 页: http://127.0.0.1:1024/thread0806.php?fid=26&search=&page=13
+[2026-08-19 06:15:04] [run_batch] [scraper_25] [FID=25] 版块 第 14 页提取到 100 条数据
+[2026-08-19 06:15:05] [run_batch] [scraper_26] [FID=26] 版块 第 13 页提取到 100 条数据
+[2026-08-19 06:15:05] [run_batch] [scraper_22] [FID=22] 正在请求 版块第 15 页: http://127.0.0.1:1024/thread0806.php?fid=22&search=&page=15
+[2026-08-19 06:15:07] [run_batch] [scraper_22] [FID=22] 版块 第 15 页提取到 100 条数据
+[2026-08-19 06:15:07] [run_batch] [scraper_25] [FID=25] 正在请求 版块第 15 页: http://127.0.0.1:1024/thread0806.php?fid=25&search=&page=15
+[2026-08-19 06:15:08] [run_batch] [scraper_26] [FID=26] 正在请求 版块第 14 页: http://127.0.0.1:1024/thread0806.php?fid=26&search=&page=14
+[2026-08-19 06:15:09] [run_batch] [scraper_25] [FID=25] 版块 第 15 页提取到 100 条数据
+[2026-08-19 06:15:09] [run_batch] [scraper_25] [FID=25] 版块[已保存] 前 15 页数据SQLite 实际入库 243 条（标题去重后）
+
+[2026-08-19 06:15:09] [run_batch] [scraper_26] [FID=26] 版块 第 14 页提取到 100 条数据
+[2026-08-19 06:15:10] [run_batch] [scraper_22] [FID=22] 正在请求 版块第 16 页: http://127.0.0.1:1024/thread0806.php?fid=22&search=&page=16
+[2026-08-19 06:15:11] [run_batch] [scraper_22] [FID=22] 版块 第 16 页提取到 100 条数据
+[2026-08-19 06:15:11] [run_batch] [scraper_22] [FID=22] 版块[已保存] 前 16 页数据SQLite 实际入库 406 条（标题去重后）
+
+[2026-08-19 06:15:12] [run_batch] [scraper_25] [FID=25] 正在请求 版块第 16 页: http://127.0.0.1:1024/thread0806.php?fid=25&search=&page=16
+[2026-08-19 06:15:12] [run_batch] [scraper_26] [FID=26] 正在请求 版块第 15 页: http://127.0.0.1:1024/thread0806.php?fid=26&search=&page=15
+[2026-08-19 06:15:13] [run_batch] [scraper_25] [FID=25] 版块 第 16 页提取到 100 条数据
+[2026-08-19 06:15:14] [run_batch] [scraper_26] [FID=26] 版块 第 15 页提取到 100 条数据
+[2026-08-19 06:15:14] [run_batch] [scraper_26] [FID=26] 版块[已保存] 前 15 页数据SQLite 实际入库 94 条（标题去重后）
+
+[2026-08-19 06:15:14] [run_batch] [scraper_22] [FID=22] 正在请求 版块第 17 页: http://127.0.0.1:1024/thread0806.php?fid=22&search=&page=17
+[2026-08-19 06:15:16] [run_batch] [scraper_22] [FID=22] 版块 第 17 页提取到 100 条数据
+[2026-08-19 06:15:16] [run_batch] [scraper_25] [FID=25] 正在请求 版块第 17 页: http://127.0.0.1:1024/thread0806.php?fid=25&search=&page=17
+[2026-08-19 06:15:17] [run_batch] [scraper_26] [FID=26] 正在请求 版块第 16 页: http://127.0.0.1:1024/thread0806.php?fid=26&search=&page=16
+[2026-08-19 06:15:18] [run_batch] [scraper_25] [FID=25] 版块 第 17 页提取到 100 条数据
+[2026-08-19 06:15:18] [run_batch] [scraper_26] [FID=26] 版块 第 16 页提取到 100 条数据
+[2026-08-19 06:15:19] [run_batch] [scraper_22] [FID=22] 正在请求 版块第 18 页: http://127.0.0.1:1024/thread0806.php?fid=22&search=&page=18
+[2026-08-19 06:15:20] [run_batch] [scraper_22] [FID=22] 版块 第 18 页提取到 100 条数据
+[2026-08-19 06:15:21] [run_batch] [scraper_25] [FID=25] 正在请求 版块第 18 页: http://127.0.0.1:1024/thread0806.php?fid=25&search=&page=18
+[2026-08-19 06:15:21] [run_batch] [scraper_26] [FID=26] 正在请求 版块第 17 页: http://127.0.0.1:1024/thread0806.php?fid=26&search=&page=17
+[2026-08-19 06:15:22] [run_batch] [scraper_25] [FID=25] 版块 第 18 页提取到 100 条数据
+[2026-08-19 06:15:23] [run_batch] [scraper_26] [FID=26] 版块 第 17 页提取到 100 条数据
+[2026-08-19 06:15:23] [run_batch] [scraper_22] [FID=22] 正在请求 版块第 19 页: http://127.0.0.1:1024/thread0806.php?fid=22&search=&page=19
+[2026-08-19 06:15:25] [run_batch] [scraper_22] [FID=22] 版块 第 19 页提取到 100 条数据
+[2026-08-19 06:15:25] [run_batch] [scraper_25] [FID=25] 正在请求 版块第 19 页: http://127.0.0.1:1024/thread0806.php?fid=25&search=&page=19
+[2026-08-19 06:15:26] [run_batch] [scraper_26] [FID=26] 正在请求 版块第 18 页: http://127.0.0.1:1024/thread0806.php?fid=26&search=&page=18
+[2026-08-19 06:15:26] [run_batch] [scraper_25] [FID=25] 版块 第 19 页提取到 100 条数据
+[2026-08-19 06:15:27] [run_batch] [scraper_26] [FID=26] 版块 第 18 页提取到 100 条数据
+[2026-08-19 06:15:28] [run_batch] [scraper_22] [FID=22] 正在请求 版块第 20 页: http://127.0.0.1:1024/thread0806.php?fid=22&search=&page=20
+[2026-08-19 06:15:29] [run_batch] [scraper_22] [FID=22] 版块 第 20 页提取到 100 条数据
+[2026-08-19 06:15:29] [run_batch] [scraper_22] [FID=22] 版块[已保存] 前 20 页数据已写入磁盘（累计 1999 条）
+
+[2026-08-19 06:15:29] [run_batch] [scraper_25] [FID=25] 正在请求 版块第 20 页: http://127.0.0.1:1024/thread0806.php?fid=25&search=&page=20
+[2026-08-19 06:15:30] [run_batch] [scraper_26] [FID=26] 正在请求 版块第 19 页: http://127.0.0.1:1024/thread0806.php?fid=26&search=&page=19
+[2026-08-19 06:15:31] [run_batch] [scraper_25] [FID=25] 版块 第 20 页提取到 100 条数据
+[2026-08-19 06:15:31] [run_batch] [scraper_25] [FID=25] 版块[已保存] 前 20 页数据SQLite 实际入库 243 条（标题去重后）
+
+[2026-08-19 06:15:31] [run_batch] [scraper_25] [FID=25] 版块[已保存] 前 20 页数据已写入磁盘（累计 2000 条）
+
+[2026-08-19 06:15:32] [run_batch] [scraper_26] [FID=26] 版块 第 19 页提取到 100 条数据
+[2026-08-19 06:15:32] [run_batch] [scraper_22] [FID=22] 正在请求 版块第 21 页: http://127.0.0.1:1024/thread0806.php?fid=22&search=&page=21
+[2026-08-19 06:15:33] [run_batch] [scraper_22] [FID=22] 版块 第 21 页提取到 100 条数据
+[2026-08-19 06:15:33] [run_batch] [scraper_22] [FID=22] 版块[已保存] 前 21 页数据SQLite 实际入库 406 条（标题去重后）
+
+[2026-08-19 06:15:34] [run_batch] [scraper_25] [FID=25] 正在请求 版块第 21 页: http://127.0.0.1:1024/thread0806.php?fid=25&search=&page=21
+[2026-08-19 06:15:35] [run_batch] [scraper_26] [FID=26] 正在请求 版块第 20 页: http://127.0.0.1:1024/thread0806.php?fid=26&search=&page=20
+[2026-08-19 06:15:36] [run_batch] [scraper_25] [FID=25] 版块 第 21 页提取到 100 条数据
+[2026-08-19 06:15:36] [run_batch] [scraper_26] [FID=26] 版块 第 20 页提取到 100 条数据
+[2026-08-19 06:15:36] [run_batch] [scraper_26] [FID=26] 版块[已保存] 前 20 页数据SQLite 实际入库 94 条（标题去重后）
+
+[2026-08-19 06:15:36] [run_batch] [scraper_26] [FID=26] 版块[已保存] 前 20 页数据已写入磁盘（累计 2000 条）
+
+[2026-08-19 06:15:36] [run_batch] [scraper_22] [FID=22] 正在请求 版块第 22 页: http://127.0.0.1:1024/thread0806.php?fid=22&search=&page=22
+[2026-08-19 06:15:38] [run_batch] [scraper_22] [FID=22] 版块 第 22 页提取到 100 条数据
+[2026-08-19 06:15:39] [run_batch] [scraper_25] [FID=25] 正在请求 版块第 22 页: http://127.0.0.1:1024/thread0806.php?fid=25&search=&page=22
+[2026-08-19 06:15:39] [run_batch] [scraper_26] [FID=26] 正在请求 版块第 21 页: http://127.0.0.1:1024/thread0806.php?fid=26&search=&page=21
+[2026-08-19 06:15:40] [run_batch] [scraper_25] [FID=25] 版块 第 22 页提取到 100 条数据
+[2026-08-19 06:15:40] [run_batch] [scraper_26] [FID=26] 版块 第 21 页提取到 100 条数据
+[2026-08-19 06:15:41] [run_batch] [scraper_22] [FID=22] 正在请求 版块第 23 页: http://127.0.0.1:1024/thread0806.php?fid=22&search=&page=23
+[2026-08-19 06:15:42] [run_batch] [scraper_22] [FID=22] 版块 第 23 页提取到 100 条数据
+[2026-08-19 06:15:43] [run_batch] [scraper_25] [FID=25] 正在请求 版块第 23 页: http://127.0.0.1:1024/thread0806.php?fid=25&search=&page=23
+[2026-08-19 06:15:43] [run_batch] [scraper_26] [FID=26] 正在请求 版块第 22 页: http://127.0.0.1:1024/thread0806.php?fid=26&search=&page=22
+[2026-08-19 06:15:45] [run_batch] [scraper_25] [FID=25] 版块 第 23 页提取到 100 条数据
+[2026-08-19 06:15:45] [run_batch] [scraper_26] [FID=26] 版块 第 22 页提取到 100 条数据
+[2026-08-19 06:15:45] [run_batch] [scraper_22] [FID=22] 正在请求 版块第 24 页: http://127.0.0.1:1024/thread0806.php?fid=22&search=&page=24
+[2026-08-19 06:15:47] [run_batch] [scraper_22] [FID=22] 版块 第 24 页提取到 100 条数据
+[2026-08-19 06:15:48] [run_batch] [scraper_25] [FID=25] 正在请求 版块第 24 页: http://127.0.0.1:1024/thread0806.php?fid=25&search=&page=24
+[2026-08-19 06:15:48] [run_batch] [scraper_26] [FID=26] 正在请求 版块第 23 页: http://127.0.0.1:1024/thread0806.php?fid=26&search=&page=23
+[2026-08-19 06:15:49] [run_batch] [scraper_25] [FID=25] 版块 第 24 页提取到 100 条数据
+[2026-08-19 06:15:49] [run_batch] [scraper_26] [FID=26] 版块 第 23 页提取到 100 条数据
+[2026-08-19 06:15:50] [run_batch] [scraper_22] [FID=22] 正在请求 版块第 25 页: http://127.0.0.1:1024/thread0806.php?fid=22&search=&page=25
+[2026-08-19 06:15:51] [run_batch] [scraper_22] [FID=22] 版块 第 25 页提取到 100 条数据
+[2026-08-19 06:15:52] [run_batch] [scraper_25] [FID=25] 正在请求 版块第 25 页: http://127.0.0.1:1024/thread0806.php?fid=25&search=&page=25
+[2026-08-19 06:15:52] [run_batch] [scraper_26] [FID=26] 正在请求 版块第 24 页: http://127.0.0.1:1024/thread0806.php?fid=26&search=&page=24
+[2026-08-19 06:15:53] [run_batch] [scraper_25] [FID=25] 版块 第 25 页提取到 100 条数据
+[2026-08-19 06:15:53] [run_batch] [scraper_26] [FID=26] 版块 第 24 页提取到 100 条数据
+[2026-08-19 06:15:53] [run_batch] [scraper_25] [FID=25] 版块[已保存] 前 25 页数据SQLite 实际入库 243 条（标题去重后）
+
+[2026-08-19 06:15:54] [run_batch] [scraper_22] [FID=22] 正在请求 版块第 26 页: http://127.0.0.1:1024/thread0806.php?fid=22&search=&page=26
+[2026-08-19 06:15:56] [run_batch] [scraper_22] [FID=22] 版块 第 26 页提取到 100 条数据
+[2026-08-19 06:15:56] [run_batch] [scraper_22] [FID=22] 版块[已保存] 前 26 页数据SQLite 实际入库 406 条（标题去重后）
+
+[2026-08-19 06:15:56] [run_batch] [scraper_26] [FID=26] 正在请求 版块第 25 页: http://127.0.0.1:1024/thread0806.php?fid=26&search=&page=25
+[2026-08-19 06:15:56] [run_batch] [scraper_25] [FID=25] 正在请求 版块第 26 页: http://127.0.0.1:1024/thread0806.php?fid=25&search=&page=26
+[2026-08-19 06:15:58] [run_batch] [scraper_25] [FID=25] 版块 第 26 页提取到 100 条数据
+[2026-08-19 06:15:58] [run_batch] [scraper_26] [FID=26] 版块 第 25 页提取到 100 条数据
+[2026-08-19 06:15:58] [run_batch] [scraper_26] [FID=26] 版块[已保存] 前 25 页数据SQLite 实际入库 94 条（标题去重后）
+
+[2026-08-19 06:15:59] [run_batch] [scraper_22] [FID=22] 正在请求 版块第 27 页: http://127.0.0.1:1024/thread0806.php?fid=22&search=&page=27
+[2026-08-19 06:16:01] [run_batch] [scraper_25] [FID=25] 正在请求 版块第 27 页: http://127.0.0.1:1024/thread0806.php?fid=25&search=&page=27
+[2026-08-19 06:16:01] [run_batch] [scraper_22] [FID=22] 版块 第 27 页提取到 100 条数据
+[2026-08-19 06:16:01] [run_batch] [scraper_26] [FID=26] 正在请求 版块第 26 页: http://127.0.0.1:1024/thread0806.php?fid=26&search=&page=26
+[2026-08-19 06:16:02] [run_batch] [scraper_25] [FID=25] 版块 第 27 页提取到 100 条数据
+[2026-08-19 06:16:02] [run_batch] [scraper_26] [FID=26] 版块 第 26 页提取到 100 条数据
+[2026-08-19 06:16:04] [run_batch] [scraper_22] [FID=22] 正在请求 版块第 28 页: http://127.0.0.1:1024/thread0806.php?fid=22&search=&page=28
+[2026-08-19 06:16:05] [run_batch] [scraper_25] [FID=25] 正在请求 版块第 28 页: http://127.0.0.1:1024/thread0806.php?fid=25&search=&page=28
+[2026-08-19 06:16:05] [run_batch] [scraper_22] [FID=22] 版块 第 28 页提取到 100 条数据
+[2026-08-19 06:16:05] [run_batch] [scraper_26] [FID=26] 正在请求 版块第 27 页: http://127.0.0.1:1024/thread0806.php?fid=26&search=&page=27
+[2026-08-19 06:16:07] [run_batch] [scraper_26] [FID=26] 版块 第 27 页提取到 100 条数据
+[2026-08-19 06:16:07] [run_batch] [scraper_25] [FID=25] 版块 第 28 页提取到 100 条数据
+[2026-08-19 06:16:08] [run_batch] [scraper_22] [FID=22] 正在请求 版块第 29 页: http://127.0.0.1:1024/thread0806.php?fid=22&search=&page=29
+[2026-08-19 06:16:09] [run_batch] [scraper_22] [FID=22] 版块 第 29 页提取到 100 条数据
+[2026-08-19 06:16:10] [run_batch] [scraper_26] [FID=26] 正在请求 版块第 28 页: http://127.0.0.1:1024/thread0806.php?fid=26&search=&page=28
+[2026-08-19 06:16:10] [run_batch] [scraper_25] [FID=25] 正在请求 版块第 29 页: http://127.0.0.1:1024/thread0806.php?fid=25&search=&page=29
+[2026-08-19 06:16:11] [run_batch] [scraper_26] [FID=26] 版块 第 28 页提取到 100 条数据
+[2026-08-19 06:16:12] [run_batch] [scraper_25] [FID=25] 版块 第 29 页提取到 100 条数据
+[2026-08-19 06:16:12] [run_batch] [scraper_22] [FID=22] 正在请求 版块第 30 页: http://127.0.0.1:1024/thread0806.php?fid=22&search=&page=30
+[2026-08-19 06:16:14] [run_batch] [scraper_22] [FID=22] 版块 第 30 页提取到 100 条数据
+[2026-08-19 06:16:14] [run_batch] [scraper_22] [FID=22] 版块[已保存] 前 30 页数据已写入磁盘（累计 2999 条）
+
+[2026-08-19 06:16:14] [run_batch] [scraper_26] [FID=26] 正在请求 版块第 29 页: http://127.0.0.1:1024/thread0806.php?fid=26&search=&page=29
+[2026-08-19 06:16:15] [run_batch] [scraper_25] [FID=25] 正在请求 版块第 30 页: http://127.0.0.1:1024/thread0806.php?fid=25&search=&page=30
+[2026-08-19 06:16:15] [run_batch] [scraper_26] [FID=26] 版块 第 29 页提取到 100 条数据
+[2026-08-19 06:16:16] [run_batch] [scraper_25] [FID=25] 版块 第 30 页提取到 100 条数据
+[2026-08-19 06:16:16] [run_batch] [scraper_25] [FID=25] 版块[已保存] 前 30 页数据SQLite 实际入库 243 条（标题去重后）
+
+[2026-08-19 06:16:16] [run_batch] [scraper_25] [FID=25] 版块[已保存] 前 30 页数据已写入磁盘（累计 3000 条）
+
+[2026-08-19 06:16:17] [run_batch] [scraper_22] [FID=22] 正在请求 版块第 31 页: http://127.0.0.1:1024/thread0806.php?fid=22&search=&page=31
+[2026-08-19 06:16:18] [run_batch] [scraper_22] [FID=22] 版块 第 31 页提取到 100 条数据
+[2026-08-19 06:16:18] [run_batch] [scraper_22] [FID=22] 版块[已保存] 前 31 页数据SQLite 实际入库 406 条（标题去重后）
+
+[2026-08-19 06:16:18] [run_batch] [scraper_26] [FID=26] 正在请求 版块第 30 页: http://127.0.0.1:1024/thread0806.php?fid=26&search=&page=30
+[2026-08-19 06:16:19] [run_batch] [scraper_25] [FID=25] 正在请求 版块第 31 页: http://127.0.0.1:1024/thread0806.php?fid=25&search=&page=31
+[2026-08-19 06:16:20] [run_batch] [scraper_26] [FID=26] 版块 第 30 页提取到 100 条数据
+[2026-08-19 06:16:20] [run_batch] [scraper_26] [FID=26] 版块[已保存] 前 30 页数据SQLite 实际入库 94 条（标题去重后）
+
+[2026-08-19 06:16:20] [run_batch] [scraper_26] [FID=26] 版块[已保存] 前 30 页数据已写入磁盘（累计 3000 条）
+
+[2026-08-19 06:16:21] [run_batch] [scraper_25] [FID=25] 版块 第 31 页提取到 100 条数据
+[2026-08-19 06:16:21] [run_batch] [scraper_22] [FID=22] 正在请求 版块第 32 页: http://127.0.0.1:1024/thread0806.php?fid=22&search=&page=32
+[2026-08-19 06:16:23] [run_batch] [scraper_22] [FID=22] 版块 第 32 页提取到 100 条数据
+[2026-08-19 06:16:23] [run_batch] [scraper_26] [FID=26] 正在请求 版块第 31 页: http://127.0.0.1:1024/thread0806.php?fid=26&search=&page=31
+[2026-08-19 06:16:24] [run_batch] [scraper_25] [FID=25] 正在请求 版块第 32 页: http://127.0.0.1:1024/thread0806.php?fid=25&search=&page=32
+[2026-08-19 06:16:24] [run_batch] [scraper_26] [FID=26] 版块 第 31 页提取到 100 条数据
+[2026-08-19 06:16:26] [run_batch] [scraper_22] [FID=22] 正在请求 版块第 33 页: http://127.0.0.1:1024/thread0806.php?fid=22&search=&page=33
+[2026-08-19 06:16:26] [run_batch] [scraper_25] [FID=25] 版块 第 32 页提取到 100 条数据
+[2026-08-19 06:16:27] [run_batch] [scraper_26] [FID=26] 正在请求 版块第 32 页: http://127.0.0.1:1024/thread0806.php?fid=26&search=&page=32
+[2026-08-19 06:16:29] [run_batch] [scraper_22] [FID=22] 版块 第 33 页提取到 100 条数据
+[2026-08-19 06:16:29] [run_batch] [scraper_25] [FID=25] 正在请求 版块第 33 页: http://127.0.0.1:1024/thread0806.php?fid=25&search=&page=33
+[2026-08-19 06:16:30] [run_batch] [scraper_26] [FID=26] 版块 第 32 页提取到 100 条数据
+[2026-08-19 06:16:30] [run_batch] [scraper_25] [FID=25] 版块 第 33 页提取到 100 条数据
+[2026-08-19 06:16:32] [run_batch] [scraper_22] [FID=22] 正在请求 版块第 34 页: http://127.0.0.1:1024/thread0806.php?fid=22&search=&page=34
+[2026-08-19 06:16:33] [run_batch] [scraper_26] [FID=26] 正在请求 版块第 33 页: http://127.0.0.1:1024/thread0806.php?fid=26&search=&page=33
+[2026-08-19 06:16:33] [run_batch] [scraper_22] [FID=22] 版块 第 34 页提取到 100 条数据
+[2026-08-19 06:16:33] [run_batch] [scraper_25] [FID=25] 正在请求 版块第 34 页: http://127.0.0.1:1024/thread0806.php?fid=25&search=&page=34
+[2026-08-19 06:16:34] [run_batch] [scraper_26] [FID=26] 版块 第 33 页提取到 100 条数据
+[2026-08-19 06:16:35] [run_batch] [scraper_25] [FID=25] 版块 第 34 页提取到 100 条数据
+[2026-08-19 06:16:36] [run_batch] [scraper_22] [FID=22] 正在请求 版块第 35 页: http://127.0.0.1:1024/thread0806.php?fid=22&search=&page=35
+[2026-08-19 06:16:37] [run_batch] [scraper_26] [FID=26] 正在请求 版块第 34 页: http://127.0.0.1:1024/thread0806.php?fid=26&search=&page=34
+[2026-08-19 06:16:38] [run_batch] [scraper_22] [FID=22] 版块 第 35 页提取到 100 条数据
+[2026-08-19 06:16:38] [run_batch] [scraper_25] [FID=25] 正在请求 版块第 35 页: http://127.0.0.1:1024/thread0806.php?fid=25&search=&page=35
+[2026-08-19 06:16:39] [run_batch] [scraper_26] [FID=26] 版块 第 34 页提取到 100 条数据
+[2026-08-19 06:16:40] [run_batch] [scraper_25] [FID=25] 版块 第 35 页提取到 100 条数据
+[2026-08-19 06:16:40] [run_batch] [scraper_25] [FID=25] 版块[已保存] 前 35 页数据SQLite 实际入库 243 条（标题去重后）
+
+[2026-08-19 06:16:41] [run_batch] [scraper_22] [FID=22] 正在请求 版块第 36 页: http://127.0.0.1:1024/thread0806.php?fid=22&search=&page=36
+[2026-08-19 06:16:42] [run_batch] [scraper_26] [FID=26] 正在请求 版块第 35 页: http://127.0.0.1:1024/thread0806.php?fid=26&search=&page=35
+[2026-08-19 06:16:42] [run_batch] [scraper_22] [FID=22] 版块 第 36 页提取到 100 条数据
+[2026-08-19 06:16:42] [run_batch] [scraper_22] [FID=22] 版块[已保存] 前 36 页数据SQLite 实际入库 406 条（标题去重后）
+
+[2026-08-19 06:16:43] [run_batch] [scraper_25] [FID=25] 正在请求 版块第 36 页: http://127.0.0.1:1024/thread0806.php?fid=25&search=&page=36
+[2026-08-19 06:16:43] [run_batch] [scraper_26] [FID=26] 版块 第 35 页提取到 100 条数据
+[2026-08-19 06:16:43] [run_batch] [scraper_26] [FID=26] 版块[已保存] 前 35 页数据SQLite 实际入库 94 条（标题去重后）
+
+[2026-08-19 06:16:44] [run_batch] [scraper_25] [FID=25] 版块 第 36 页提取到 100 条数据
+[2026-08-19 06:16:45] [run_batch] [scraper_22] [FID=22] 正在请求 版块第 37 页: http://127.0.0.1:1024/thread0806.php?fid=22&search=&page=37
+[2026-08-19 06:16:46] [run_batch] [scraper_26] [FID=26] 正在请求 版块第 36 页: http://127.0.0.1:1024/thread0806.php?fid=26&search=&page=36
+[2026-08-19 06:16:46] [run_batch] [scraper_22] [FID=22] 版块 第 37 页提取到 100 条数据
+[2026-08-19 06:16:47] [run_batch] [scraper_25] [FID=25] 正在请求 版块第 37 页: http://127.0.0.1:1024/thread0806.php?fid=25&search=&page=37
+[2026-08-19 06:16:48] [run_batch] [scraper_26] [FID=26] 版块 第 36 页提取到 100 条数据
+[2026-08-19 06:16:49] [run_batch] [scraper_25] [FID=25] 版块 第 37 页提取到 100 条数据
+[2026-08-19 06:16:49] [run_batch] [scraper_22] [FID=22] 正在请求 版块第 38 页: http://127.0.0.1:1024/thread0806.php?fid=22&search=&page=38
+[2026-08-19 06:16:51] [run_batch] [scraper_26] [FID=26] 正在请求 版块第 37 页: http://127.0.0.1:1024/thread0806.php?fid=26&search=&page=37
+[2026-08-19 06:16:51] [run_batch] [scraper_22] [FID=22] 版块 第 38 页提取到 100 条数据
+[2026-08-19 06:16:52] [run_batch] [scraper_25] [FID=25] 正在请求 版块第 38 页: http://127.0.0.1:1024/thread0806.php?fid=25&search=&page=38
+[2026-08-19 06:16:52] [run_batch] [scraper_26] [FID=26] 版块 第 37 页提取到 100 条数据
+[2026-08-19 06:16:53] [run_batch] [scraper_25] [FID=25] 版块 第 38 页提取到 100 条数据
+[2026-08-19 06:16:54] [run_batch] [scraper_22] [FID=22] 正在请求 版块第 39 页: http://127.0.0.1:1024/thread0806.php?fid=22&search=&page=39
+[2026-08-19 06:16:55] [run_batch] [scraper_26] [FID=26] 正在请求 版块第 38 页: http://127.0.0.1:1024/thread0806.php?fid=26&search=&page=38
+[2026-08-19 06:16:55] [run_batch] [scraper_22] [FID=22] 版块 第 39 页提取到 100 条数据
+[2026-08-19 06:16:56] [run_batch] [scraper_25] [FID=25] 正在请求 版块第 39 页: http://127.0.0.1:1024/thread0806.php?fid=25&search=&page=39
+[2026-08-19 06:16:57] [run_batch] [scraper_26] [FID=26] 版块 第 38 页提取到 100 条数据
+[2026-08-19 06:16:58] [run_batch] [scraper_25] [FID=25] 版块 第 39 页提取到 100 条数据
+[2026-08-19 06:16:58] [run_batch] [scraper_22] [FID=22] 正在请求 版块第 40 页: http://127.0.0.1:1024/thread0806.php?fid=22&search=&page=40
+[2026-08-19 06:17:00] [run_batch] [scraper_26] [FID=26] 正在请求 版块第 39 页: http://127.0.0.1:1024/thread0806.php?fid=26&search=&page=39
+[2026-08-19 06:17:00] [run_batch] [scraper_22] [FID=22] 版块 第 40 页提取到 100 条数据
+[2026-08-19 06:17:00] [run_batch] [scraper_22] [FID=22] 版块[已保存] 前 40 页数据已写入磁盘（累计 3999 条）
+
+[2026-08-19 06:17:01] [run_batch] [scraper_25] [FID=25] 正在请求 版块第 40 页: http://127.0.0.1:1024/thread0806.php?fid=25&search=&page=40
+[2026-08-19 06:17:01] [run_batch] [scraper_26] [FID=26] 版块 第 39 页提取到 100 条数据
+[2026-08-19 06:17:02] [run_batch] [scraper_25] [FID=25] 版块 第 40 页提取到 100 条数据
+[2026-08-19 06:17:02] [run_batch] [scraper_25] [FID=25] 版块[已保存] 前 40 页数据SQLite 实际入库 243 条（标题去重后）
+
+[2026-08-19 06:17:02] [run_batch] [scraper_25] [FID=25] 版块[已保存] 前 40 页数据已写入磁盘（累计 4000 条）
+
+[2026-08-19 06:17:03] [run_batch] [scraper_22] [FID=22] 正在请求 版块第 41 页: http://127.0.0.1:1024/thread0806.php?fid=22&search=&page=41
+[2026-08-19 06:17:04] [run_batch] [scraper_26] [FID=26] 正在请求 版块第 40 页: http://127.0.0.1:1024/thread0806.php?fid=26&search=&page=40
+[2026-08-19 06:17:04] [run_batch] [scraper_22] [FID=22] 版块 第 41 页提取到 100 条数据
+[2026-08-19 06:17:04] [run_batch] [scraper_22] [FID=22] 版块[已保存] 前 41 页数据SQLite 实际入库 406 条（标题去重后）
+
+[2026-08-19 06:17:05] [run_batch] [scraper_25] [FID=25] 正在请求 版块第 41 页: http://127.0.0.1:1024/thread0806.php?fid=25&search=&page=41
+[2026-08-19 06:17:06] [run_batch] [scraper_26] [FID=26] 版块 第 40 页提取到 100 条数据
+[2026-08-19 06:17:06] [run_batch] [scraper_26] [FID=26] 版块[已保存] 前 40 页数据SQLite 实际入库 94 条（标题去重后）
+
+[2026-08-19 06:17:06] [run_batch] [scraper_26] [FID=26] 版块[已保存] 前 40 页数据已写入磁盘（累计 4000 条）
+
+[2026-08-19 06:17:07] [run_batch] [scraper_25] [FID=25] 版块 第 41 页提取到 100 条数据
+[2026-08-19 06:17:07] [run_batch] [scraper_22] [FID=22] 正在请求 版块第 42 页: http://127.0.0.1:1024/thread0806.php?fid=22&search=&page=42
+[2026-08-19 06:17:09] [run_batch] [scraper_26] [FID=26] 正在请求 版块第 41 页: http://127.0.0.1:1024/thread0806.php?fid=26&search=&page=41
+[2026-08-19 06:17:09] [run_batch] [scraper_22] [FID=22] 版块 第 42 页提取到 100 条数据
+[2026-08-19 06:17:10] [run_batch] [scraper_25] [FID=25] 正在请求 版块第 42 页: http://127.0.0.1:1024/thread0806.php?fid=25&search=&page=42
+[2026-08-19 06:17:10] [run_batch] [scraper_26] [FID=26] 版块 第 41 页提取到 100 条数据
+[2026-08-19 06:17:11] [run_batch] [scraper_25] [FID=25] 版块 第 42 页提取到 100 条数据
+[2026-08-19 06:17:12] [run_batch] [scraper_22] [FID=22] 正在请求 版块第 43 页: http://127.0.0.1:1024/thread0806.php?fid=22&search=&page=43
+[2026-08-19 06:17:13] [run_batch] [scraper_26] [FID=26] 正在请求 版块第 42 页: http://127.0.0.1:1024/thread0806.php?fid=26&search=&page=42
+[2026-08-19 06:17:13] [run_batch] [scraper_22] [FID=22] 版块 第 43 页提取到 100 条数据
+[2026-08-19 06:17:14] [run_batch] [scraper_25] [FID=25] 正在请求 版块第 43 页: http://127.0.0.1:1024/thread0806.php?fid=25&search=&page=43
+[2026-08-19 06:17:15] [run_batch] [scraper_26] [FID=26] 版块 第 42 页提取到 100 条数据
+[2026-08-19 06:17:16] [run_batch] [scraper_25] [FID=25] 版块 第 43 页提取到 100 条数据
+[2026-08-19 06:17:16] [run_batch] [scraper_22] [FID=22] 正在请求 版块第 44 页: http://127.0.0.1:1024/thread0806.php?fid=22&search=&page=44
+[2026-08-19 06:17:18] [run_batch] [scraper_22] [FID=22] 版块 第 44 页提取到 100 条数据
+[2026-08-19 06:17:18] [run_batch] [scraper_26] [FID=26] 正在请求 版块第 43 页: http://127.0.0.1:1024/thread0806.php?fid=26&search=&page=43
+[2026-08-19 06:17:19] [run_batch] [scraper_25] [FID=25] 正在请求 版块第 44 页: http://127.0.0.1:1024/thread0806.php?fid=25&search=&page=44
+[2026-08-19 06:17:19] [run_batch] [scraper_26] [FID=26] 版块 第 43 页提取到 100 条数据
+[2026-08-19 06:17:20] [run_batch] [scraper_25] [FID=25] 版块 第 44 页提取到 100 条数据
+[2026-08-19 06:17:21] [run_batch] [scraper_22] [FID=22] 正在请求 版块第 45 页: http://127.0.0.1:1024/thread0806.php?fid=22&search=&page=45
+[2026-08-19 06:17:22] [run_batch] [scraper_26] [FID=26] 正在请求 版块第 44 页: http://127.0.0.1:1024/thread0806.php?fid=26&search=&page=44
+[2026-08-19 06:17:23] [run_batch] [scraper_22] [FID=22] 版块 第 45 页提取到 100 条数据
+[2026-08-19 06:17:23] [run_batch] [scraper_25] [FID=25] 正在请求 版块第 45 页: http://127.0.0.1:1024/thread0806.php?fid=25&search=&page=45
+[2026-08-19 06:17:24] [run_batch] [scraper_26] [FID=26] 版块 第 44 页提取到 100 条数据
+[2026-08-19 06:17:24] [run_batch] [scraper_25] [FID=25] 版块 第 45 页提取到 100 条数据
+[2026-08-19 06:17:24] [run_batch] [scraper_25] [FID=25] 版块[已保存] 前 45 页数据SQLite 实际入库 243 条（标题去重后）
+
+[2026-08-19 06:17:26] [run_batch] [scraper_22] [FID=22] 正在请求 版块第 46 页: http://127.0.0.1:1024/thread0806.php?fid=22&search=&page=46
+[2026-08-19 06:17:27] [run_batch] [scraper_26] [FID=26] 正在请求 版块第 45 页: http://127.0.0.1:1024/thread0806.php?fid=26&search=&page=45
+[2026-08-19 06:17:27] [run_batch] [scraper_22] [FID=22] 版块 第 46 页提取到 100 条数据
+[2026-08-19 06:17:27] [run_batch] [scraper_22] [FID=22] 版块[已保存] 前 46 页数据SQLite 实际入库 406 条（标题去重后）
+
+[2026-08-19 06:17:28] [run_batch] [scraper_25] [FID=25] 正在请求 版块第 46 页: http://127.0.0.1:1024/thread0806.php?fid=25&search=&page=46
+[2026-08-19 06:17:29] [run_batch] [scraper_26] [FID=26] 版块 第 45 页提取到 100 条数据
+[2026-08-19 06:17:29] [run_batch] [scraper_26] [FID=26] 版块[已保存] 前 45 页数据SQLite 实际入库 94 条（标题去重后）
+
+[2026-08-19 06:17:29] [run_batch] [scraper_25] [FID=25] 版块 第 46 页提取到 100 条数据
+[2026-08-19 06:17:30] [run_batch] [scraper_22] [FID=22] 正在请求 版块第 47 页: http://127.0.0.1:1024/thread0806.php?fid=22&search=&page=47
+[2026-08-19 06:17:32] [run_batch] [scraper_26] [FID=26] 正在请求 版块第 46 页: http://127.0.0.1:1024/thread0806.php?fid=26&search=&page=46
+[2026-08-19 06:17:32] [run_batch] [scraper_22] [FID=22] 版块 第 47 页提取到 100 条数据
+[2026-08-19 06:17:32] [run_batch] [scraper_25] [FID=25] 正在请求 版块第 47 页: http://127.0.0.1:1024/thread0806.php?fid=25&search=&page=47
+[2026-08-19 06:17:33] [run_batch] [scraper_26] [FID=26] 版块 第 46 页提取到 100 条数据
+[2026-08-19 06:17:33] [run_batch] [scraper_25] [FID=25] 版块 第 47 页提取到 100 条数据
+[2026-08-19 06:17:35] [run_batch] [scraper_22] [FID=22] 正在请求 版块第 48 页: http://127.0.0.1:1024/thread0806.php?fid=22&search=&page=48
+[2026-08-19 06:17:36] [run_batch] [scraper_26] [FID=26] 正在请求 版块第 47 页: http://127.0.0.1:1024/thread0806.php?fid=26&search=&page=47
+[2026-08-19 06:17:36] [run_batch] [scraper_25] [FID=25] 正在请求 版块第 48 页: http://127.0.0.1:1024/thread0806.php?fid=25&search=&page=48
+[2026-08-19 06:17:36] [run_batch] [scraper_22] [FID=22] 版块 第 48 页提取到 100 条数据
+[2026-08-19 06:17:37] [run_batch] [scraper_26] [FID=26] 版块 第 47 页提取到 100 条数据
+[2026-08-19 06:17:37] [run_batch] [scraper_25] [FID=25] 版块 第 48 页提取到 100 条数据
+[2026-08-19 06:17:39] [run_batch] [scraper_22] [FID=22] 正在请求 版块第 49 页: http://127.0.0.1:1024/thread0806.php?fid=22&search=&page=49
+[2026-08-19 06:17:40] [run_batch] [scraper_26] [FID=26] 正在请求 版块第 48 页: http://127.0.0.1:1024/thread0806.php?fid=26&search=&page=48
+[2026-08-19 06:17:40] [run_batch] [scraper_25] [FID=25] 正在请求 版块第 49 页: http://127.0.0.1:1024/thread0806.php?fid=25&search=&page=49
+[2026-08-19 06:17:41] [run_batch] [scraper_22] [FID=22] 版块 第 49 页提取到 100 条数据
+[2026-08-19 06:17:42] [run_batch] [scraper_25] [FID=25] 版块 第 49 页提取到 100 条数据
+[2026-08-19 06:17:42] [run_batch] [scraper_26] [FID=26] 版块 第 48 页提取到 100 条数据
+[2026-08-19 06:17:44] [run_batch] [scraper_22] [FID=22] 正在请求 版块第 50 页: http://127.0.0.1:1024/thread0806.php?fid=22&search=&page=50
+[2026-08-19 06:17:45] [run_batch] [scraper_25] [FID=25] 正在请求 版块第 50 页: http://127.0.0.1:1024/thread0806.php?fid=25&search=&page=50
+[2026-08-19 06:17:45] [run_batch] [scraper_26] [FID=26] 正在请求 版块第 49 页: http://127.0.0.1:1024/thread0806.php?fid=26&search=&page=49
+[2026-08-19 06:17:45] [run_batch] [scraper_22] [FID=22] 版块 第 50 页提取到 100 条数据
+[2026-08-19 06:17:45] [run_batch] [scraper_22] [FID=22] 版块[已保存] 前 50 页数据已写入磁盘（累计 4999 条）
+
+
+[2026-08-19 06:17:45] [run_batch] [scraper_22] [FID=22] 版块[已保存] 共写入 4999 条数据到 outputs/20260819/22_output_20260819.csv（进度至第 50 页）
+[2026-08-19 06:17:45] [run_batch] [scraper_22] [FID=22] 版块 SQLite 实际入库 406 条（标题去重后）
+[2026-08-19 06:17:45] [run_batch] __SUMMARY__ fid=22 rows=4999 db_rows=406 pages=50
+[2026-08-19 06:17:45] [run_batch] 完成 [22] 版块22（CSV 4999 条 / SQLite 406 条）
+[2026-08-19 06:17:45] [run_batch] 启动 [28] 版块28（访问根地址: http://127.0.0.1:1024）
+
+[2026-08-19 06:17:46] [run_batch] [scraper_28] ===== 会话开始 2026-08-19 06:17:46 =====
+[2026-08-19 06:17:46] [run_batch] [scraper_28] [FID=28] 版块1-50页 开始抓取
+[2026-08-19 06:17:46] [run_batch] [scraper_28] [FID=28] 版块使用配置末页: 50
+[2026-08-19 06:17:46] [run_batch] [scraper_28] 开始抓取[FID=28] 版块，共 50 页（第 1 ~ 50 页）
+
+[2026-08-19 06:17:46] [run_batch] [scraper_28] [FID=28] 正在请求 版块第 1 页: http://127.0.0.1:1024/thread0806.php?fid=28&search=&page=1
+[2026-08-19 06:17:46] [run_batch] [scraper_25] [FID=25] 版块 第 50 页提取到 100 条数据
+[2026-08-19 06:17:46] [run_batch] [scraper_25] [FID=25] 版块[已保存] 前 50 页数据SQLite 实际入库 243 条（标题去重后）
+
+[2026-08-19 06:17:46] [run_batch] [scraper_25] [FID=25] 版块[已保存] 前 50 页数据已写入磁盘（累计 5000 条）
+
+
+[2026-08-19 06:17:46] [run_batch] [scraper_25] [FID=25] 版块[已保存] 共写入 5000 条数据到 outputs/20260819/25_output_20260819.csv（进度至第 50 页）
+[2026-08-19 06:17:46] [run_batch] [scraper_25] [FID=25] 版块 SQLite 实际入库 243 条（标题去重后）
+[2026-08-19 06:17:46] [run_batch] __SUMMARY__ fid=25 rows=5000 db_rows=243 pages=50
+[2026-08-19 06:17:46] [run_batch] [scraper_26] [FID=26] 版块 第 49 页提取到 100 条数据
+[2026-08-19 06:17:46] [run_batch] 完成 [25] 版块25（CSV 5000 条 / SQLite 243 条）
+[2026-08-19 06:17:47] [run_batch] [scraper_28] [FID=28] 版块 第 1 页提取到 100 条数据
+[2026-08-19 06:17:49] [run_batch] [scraper_26] [FID=26] 正在请求 版块第 50 页: http://127.0.0.1:1024/thread0806.php?fid=26&search=&page=50
+[2026-08-19 06:17:50] [run_batch] [scraper_28] [FID=28] 正在请求 版块第 2 页: http://127.0.0.1:1024/thread0806.php?fid=28&search=&page=2
+[2026-08-19 06:17:51] [run_batch] [scraper_26] [FID=26] 版块 第 50 页提取到 100 条数据
+[2026-08-19 06:17:51] [run_batch] [scraper_26] [FID=26] 版块[已保存] 前 50 页数据SQLite 实际入库 94 条（标题去重后）
+
+[2026-08-19 06:17:51] [run_batch] [scraper_26] [FID=26] 版块[已保存] 前 50 页数据已写入磁盘（累计 5000 条）
+
+
+[2026-08-19 06:17:51] [run_batch] [scraper_26] [FID=26] 版块[已保存] 共写入 5000 条数据到 outputs/20260819/26_output_20260819.csv（进度至第 50 页）
+[2026-08-19 06:17:51] [run_batch] [scraper_26] [FID=26] 版块 SQLite 实际入库 94 条（标题去重后）
+[2026-08-19 06:17:51] [run_batch] __SUMMARY__ fid=26 rows=5000 db_rows=94 pages=50
+[2026-08-19 06:17:51] [run_batch] 完成 [26] 版块26（CSV 5000 条 / SQLite 94 条）
+[2026-08-19 06:17:52] [run_batch] [scraper_28] [FID=28] 版块 第 2 页提取到 100 条数据
+[2026-08-19 06:17:55] [run_batch] [scraper_28] [FID=28] 正在请求 版块第 3 页: http://127.0.0.1:1024/thread0806.php?fid=28&search=&page=3
+[2026-08-19 06:17:56] [run_batch] [scraper_28] [FID=28] 版块 第 3 页提取到 100 条数据
+[2026-08-19 06:17:59] [run_batch] [scraper_28] [FID=28] 正在请求 版块第 4 页: http://127.0.0.1:1024/thread0806.php?fid=28&search=&page=4
+[2026-08-19 06:18:00] [run_batch] [scraper_28] [FID=28] 版块 第 4 页提取到 100 条数据
+[2026-08-19 06:18:03] [run_batch] [scraper_28] [FID=28] 正在请求 版块第 5 页: http://127.0.0.1:1024/thread0806.php?fid=28&search=&page=5
+[2026-08-19 06:18:05] [run_batch] [scraper_28] [FID=28] 版块 第 5 页提取到 100 条数据
+[2026-08-19 06:18:05] [run_batch] [scraper_28] [FID=28] 版块[已保存] 前 5 页数据SQLite 实际入库 75 条（标题去重后）
+
+[2026-08-19 06:18:08] [run_batch] [scraper_28] [FID=28] 正在请求 版块第 6 页: http://127.0.0.1:1024/thread0806.php?fid=28&search=&page=6
+[2026-08-19 06:18:09] [run_batch] [scraper_28] [FID=28] 版块 第 6 页提取到 100 条数据
+[2026-08-19 06:18:12] [run_batch] [scraper_28] [FID=28] 正在请求 版块第 7 页: http://127.0.0.1:1024/thread0806.php?fid=28&search=&page=7
+[2026-08-19 06:18:14] [run_batch] [scraper_28] [FID=28] 版块 第 7 页提取到 100 条数据
+[2026-08-19 06:18:17] [run_batch] [scraper_28] [FID=28] 正在请求 版块第 8 页: http://127.0.0.1:1024/thread0806.php?fid=28&search=&page=8
+[2026-08-19 06:18:18] [run_batch] [scraper_28] [FID=28] 版块 第 8 页提取到 100 条数据
+[2026-08-19 06:18:21] [run_batch] [scraper_28] [FID=28] 正在请求 版块第 9 页: http://127.0.0.1:1024/thread0806.php?fid=28&search=&page=9
+[2026-08-19 06:18:23] [run_batch] [scraper_28] [FID=28] 版块 第 9 页提取到 100 条数据
+[2026-08-19 06:18:26] [run_batch] [scraper_28] [FID=28] 正在请求 版块第 10 页: http://127.0.0.1:1024/thread0806.php?fid=28&search=&page=10
+[2026-08-19 06:18:27] [run_batch] [scraper_28] [FID=28] 版块 第 10 页提取到 100 条数据
+[2026-08-19 06:18:27] [run_batch] [scraper_28] [FID=28] 版块[已保存] 前 10 页数据SQLite 实际入库 75 条（标题去重后）
+
+[2026-08-19 06:18:27] [run_batch] [scraper_28] [FID=28] 版块[已保存] 前 10 页数据已写入磁盘（累计 1000 条）
+
+[2026-08-19 06:18:30] [run_batch] [scraper_28] [FID=28] 正在请求 版块第 11 页: http://127.0.0.1:1024/thread0806.php?fid=28&search=&page=11
+[2026-08-19 06:18:32] [run_batch] [scraper_28] [FID=28] 版块 第 11 页提取到 100 条数据
+[2026-08-19 06:18:35] [run_batch] [scraper_28] [FID=28] 正在请求 版块第 12 页: http://127.0.0.1:1024/thread0806.php?fid=28&search=&page=12
+[2026-08-19 06:18:36] [run_batch] [scraper_28] [FID=28] 版块 第 12 页提取到 100 条数据
+[2026-08-19 06:18:39] [run_batch] [scraper_28] [FID=28] 正在请求 版块第 13 页: http://127.0.0.1:1024/thread0806.php?fid=28&search=&page=13
+[2026-08-19 06:18:41] [run_batch] [scraper_28] [FID=28] 版块 第 13 页提取到 100 条数据
+[2026-08-19 06:18:44] [run_batch] [scraper_28] [FID=28] 正在请求 版块第 14 页: http://127.0.0.1:1024/thread0806.php?fid=28&search=&page=14
+[2026-08-19 06:18:46] [run_batch] [scraper_28] [FID=28] 版块 第 14 页提取到 100 条数据
+[2026-08-19 06:18:49] [run_batch] [scraper_28] [FID=28] 正在请求 版块第 15 页: http://127.0.0.1:1024/thread0806.php?fid=28&search=&page=15
+[2026-08-19 06:18:50] [run_batch] [scraper_28] [FID=28] 版块 第 15 页提取到 100 条数据
+[2026-08-19 06:18:50] [run_batch] [scraper_28] [FID=28] 版块[已保存] 前 15 页数据SQLite 实际入库 75 条（标题去重后）
+
+[2026-08-19 06:18:53] [run_batch] [scraper_28] [FID=28] 正在请求 版块第 16 页: http://127.0.0.1:1024/thread0806.php?fid=28&search=&page=16
+[2026-08-19 06:18:55] [run_batch] [scraper_28] [FID=28] 版块 第 16 页提取到 100 条数据
+[2026-08-19 06:18:58] [run_batch] [scraper_28] [FID=28] 正在请求 版块第 17 页: http://127.0.0.1:1024/thread0806.php?fid=28&search=&page=17
+[2026-08-19 06:19:00] [run_batch] [scraper_28] [FID=28] 版块 第 17 页提取到 100 条数据
+[2026-08-19 06:19:03] [run_batch] [scraper_28] [FID=28] 正在请求 版块第 18 页: http://127.0.0.1:1024/thread0806.php?fid=28&search=&page=18
+[2026-08-19 06:19:05] [run_batch] [scraper_28] [FID=28] 版块 第 18 页提取到 100 条数据
+[2026-08-19 06:19:08] [run_batch] [scraper_28] [FID=28] 正在请求 版块第 19 页: http://127.0.0.1:1024/thread0806.php?fid=28&search=&page=19
+[2026-08-19 06:19:09] [run_batch] [scraper_28] [FID=28] 版块 第 19 页提取到 100 条数据
+[2026-08-19 06:19:12] [run_batch] [scraper_28] [FID=28] 正在请求 版块第 20 页: http://127.0.0.1:1024/thread0806.php?fid=28&search=&page=20
+[2026-08-19 06:19:13] [run_batch] [scraper_28] [FID=28] 版块 第 20 页提取到 100 条数据
+[2026-08-19 06:19:13] [run_batch] [scraper_28] [FID=28] 版块[已保存] 前 20 页数据SQLite 实际入库 75 条（标题去重后）
+
+[2026-08-19 06:19:13] [run_batch] [scraper_28] [FID=28] 版块[已保存] 前 20 页数据已写入磁盘（累计 2000 条）
+
+[2026-08-19 06:19:16] [run_batch] [scraper_28] [FID=28] 正在请求 版块第 21 页: http://127.0.0.1:1024/thread0806.php?fid=28&search=&page=21
+[2026-08-19 06:19:18] [run_batch] [scraper_28] [FID=28] 版块 第 21 页提取到 100 条数据
+[2026-08-19 06:19:21] [run_batch] [scraper_28] [FID=28] 正在请求 版块第 22 页: http://127.0.0.1:1024/thread0806.php?fid=28&search=&page=22
+[2026-08-19 06:19:22] [run_batch] [scraper_28] [FID=28] 版块 第 22 页提取到 100 条数据
+[2026-08-19 06:19:25] [run_batch] [scraper_28] [FID=28] 正在请求 版块第 23 页: http://127.0.0.1:1024/thread0806.php?fid=28&search=&page=23
+[2026-08-19 06:19:27] [run_batch] [scraper_28] [FID=28] 版块 第 23 页提取到 100 条数据
+[2026-08-19 06:19:30] [run_batch] [scraper_28] [FID=28] 正在请求 版块第 24 页: http://127.0.0.1:1024/thread0806.php?fid=28&search=&page=24
+[2026-08-19 06:19:31] [run_batch] [scraper_28] [FID=28] 版块 第 24 页提取到 100 条数据
+[2026-08-19 06:19:34] [run_batch] [scraper_28] [FID=28] 正在请求 版块第 25 页: http://127.0.0.1:1024/thread0806.php?fid=28&search=&page=25
+[2026-08-19 06:19:37] [run_batch] [scraper_28] [FID=28] 版块 第 25 页提取到 100 条数据
+[2026-08-19 06:19:37] [run_batch] [scraper_28] [FID=28] 版块[已保存] 前 25 页数据SQLite 实际入库 75 条（标题去重后）
+
+[2026-08-19 06:19:40] [run_batch] [scraper_28] [FID=28] 正在请求 版块第 26 页: http://127.0.0.1:1024/thread0806.php?fid=28&search=&page=26
+[2026-08-19 06:19:41] [run_batch] [scraper_28] [FID=28] 版块 第 26 页提取到 100 条数据
+[2026-08-19 06:19:44] [run_batch] [scraper_28] [FID=28] 正在请求 版块第 27 页: http://127.0.0.1:1024/thread0806.php?fid=28&search=&page=27
+[2026-08-19 06:19:46] [run_batch] [scraper_28] [FID=28] 版块 第 27 页提取到 100 条数据
+[2026-08-19 06:19:49] [run_batch] [scraper_28] [FID=28] 正在请求 版块第 28 页: http://127.0.0.1:1024/thread0806.php?fid=28&search=&page=28
+[2026-08-19 06:19:51] [run_batch] [scraper_28] [FID=28] 版块 第 28 页提取到 100 条数据
+[2026-08-19 06:19:54] [run_batch] [scraper_28] [FID=28] 正在请求 版块第 29 页: http://127.0.0.1:1024/thread0806.php?fid=28&search=&page=29
+[2026-08-19 06:19:55] [run_batch] [scraper_28] [FID=28] 版块 第 29 页提取到 100 条数据
+[2026-08-19 06:19:58] [run_batch] [scraper_28] [FID=28] 正在请求 版块第 30 页: http://127.0.0.1:1024/thread0806.php?fid=28&search=&page=30
+[2026-08-19 06:20:00] [run_batch] [scraper_28] [FID=28] 版块 第 30 页提取到 100 条数据
+[2026-08-19 06:20:00] [run_batch] [scraper_28] [FID=28] 版块[已保存] 前 30 页数据SQLite 实际入库 75 条（标题去重后）
+
+[2026-08-19 06:20:00] [run_batch] [scraper_28] [FID=28] 版块[已保存] 前 30 页数据已写入磁盘（累计 3000 条）
+
+[2026-08-19 06:20:03] [run_batch] [scraper_28] [FID=28] 正在请求 版块第 31 页: http://127.0.0.1:1024/thread0806.php?fid=28&search=&page=31
+[2026-08-19 06:20:04] [run_batch] [scraper_28] [FID=28] 版块 第 31 页提取到 100 条数据
+[2026-08-19 06:20:07] [run_batch] [scraper_28] [FID=28] 正在请求 版块第 32 页: http://127.0.0.1:1024/thread0806.php?fid=28&search=&page=32
+[2026-08-19 06:20:09] [run_batch] [scraper_28] [FID=28] 版块 第 32 页提取到 100 条数据
+[2026-08-19 06:20:12] [run_batch] [scraper_28] [FID=28] 正在请求 版块第 33 页: http://127.0.0.1:1024/thread0806.php?fid=28&search=&page=33
+[2026-08-19 06:20:14] [run_batch] [scraper_28] [FID=28] 版块 第 33 页提取到 100 条数据
+[2026-08-19 06:20:17] [run_batch] [scraper_28] [FID=28] 正在请求 版块第 34 页: http://127.0.0.1:1024/thread0806.php?fid=28&search=&page=34
+[2026-08-19 06:20:19] [run_batch] [scraper_28] [FID=28] 版块 第 34 页提取到 100 条数据
+[2026-08-19 06:20:22] [run_batch] [scraper_28] [FID=28] 正在请求 版块第 35 页: http://127.0.0.1:1024/thread0806.php?fid=28&search=&page=35
+[2026-08-19 06:20:23] [run_batch] [scraper_28] [FID=28] 版块 第 35 页提取到 100 条数据
+[2026-08-19 06:20:23] [run_batch] [scraper_28] [FID=28] 版块[已保存] 前 35 页数据SQLite 实际入库 75 条（标题去重后）
+
+[2026-08-19 06:20:26] [run_batch] [scraper_28] [FID=28] 正在请求 版块第 36 页: http://127.0.0.1:1024/thread0806.php?fid=28&search=&page=36
+[2026-08-19 06:20:27] [run_batch] [scraper_28] [FID=28] 版块 第 36 页提取到 100 条数据
+[2026-08-19 07:01:42] [run_batch] [scraper_28] [FID=28] 正在请求 版块第 37 页: http://127.0.0.1:1024/thread0806.php?fid=28&search=&page=37
+[2026-08-19 07:01:44] [run_batch] [scraper_28] [FID=28] 版块 第 37 页提取到 100 条数据
+[2026-08-19 07:01:47] [run_batch] [scraper_28] [FID=28] 正在请求 版块第 38 页: http://127.0.0.1:1024/thread0806.php?fid=28&search=&page=38
+[2026-08-19 07:01:48] [run_batch] [scraper_28] [FID=28] 版块 第 38 页提取到 100 条数据
+[2026-08-19 07:01:51] [run_batch] [scraper_28] [FID=28] 正在请求 版块第 39 页: http://127.0.0.1:1024/thread0806.php?fid=28&search=&page=39
+[2026-08-19 07:01:53] [run_batch] [scraper_28] [FID=28] 版块 第 39 页提取到 100 条数据
+[2026-08-19 07:01:56] [run_batch] [scraper_28] [FID=28] 正在请求 版块第 40 页: http://127.0.0.1:1024/thread0806.php?fid=28&search=&page=40
+[2026-08-19 07:01:57] [run_batch] [scraper_28] [FID=28] 版块 第 40 页提取到 100 条数据
+[2026-08-19 07:01:57] [run_batch] [scraper_28] [FID=28] 版块[已保存] 前 40 页数据SQLite 实际入库 75 条（标题去重后）
+
+[2026-08-19 07:01:57] [run_batch] [scraper_28] [FID=28] 版块[已保存] 前 40 页数据已写入磁盘（累计 4000 条）
+
+[2026-08-19 07:02:00] [run_batch] [scraper_28] [FID=28] 正在请求 版块第 41 页: http://127.0.0.1:1024/thread0806.php?fid=28&search=&page=41
+[2026-08-19 07:02:02] [run_batch] [scraper_28] [FID=28] 版块 第 41 页提取到 100 条数据
+[2026-08-19 07:02:05] [run_batch] [scraper_28] [FID=28] 正在请求 版块第 42 页: http://127.0.0.1:1024/thread0806.php?fid=28&search=&page=42
+[2026-08-19 07:02:06] [run_batch] [scraper_28] [FID=28] 版块 第 42 页提取到 100 条数据
+[2026-08-19 07:02:09] [run_batch] [scraper_28] [FID=28] 正在请求 版块第 43 页: http://127.0.0.1:1024/thread0806.php?fid=28&search=&page=43
+[2026-08-19 07:02:11] [run_batch] [scraper_28] [FID=28] 版块 第 43 页提取到 100 条数据
+[2026-08-19 07:02:14] [run_batch] [scraper_28] [FID=28] 正在请求 版块第 44 页: http://127.0.0.1:1024/thread0806.php?fid=28&search=&page=44
+[2026-08-19 07:02:15] [run_batch] [scraper_28] [FID=28] 版块 第 44 页提取到 100 条数据
+[2026-08-19 07:02:18] [run_batch] [scraper_28] [FID=28] 正在请求 版块第 45 页: http://127.0.0.1:1024/thread0806.php?fid=28&search=&page=45
+[2026-08-19 07:02:20] [run_batch] [scraper_28] [FID=28] 版块 第 45 页提取到 100 条数据
+[2026-08-19 07:02:20] [run_batch] [scraper_28] [FID=28] 版块[已保存] 前 45 页数据SQLite 实际入库 75 条（标题去重后）
+
+[2026-08-19 07:02:23] [run_batch] [scraper_28] [FID=28] 正在请求 版块第 46 页: http://127.0.0.1:1024/thread0806.php?fid=28&search=&page=46
+[2026-08-19 07:02:24] [run_batch] [scraper_28] [FID=28] 版块 第 46 页提取到 100 条数据
+[2026-08-19 07:02:27] [run_batch] [scraper_28] [FID=28] 正在请求 版块第 47 页: http://127.0.0.1:1024/thread0806.php?fid=28&search=&page=47
+[2026-08-19 07:02:28] [run_batch] [scraper_28] [FID=28] 版块 第 47 页提取到 100 条数据
+[2026-08-19 07:02:31] [run_batch] [scraper_28] [FID=28] 正在请求 版块第 48 页: http://127.0.0.1:1024/thread0806.php?fid=28&search=&page=48
+[2026-08-19 07:02:33] [run_batch] [scraper_28] [FID=28] 版块 第 48 页提取到 100 条数据
+[2026-08-19 07:02:36] [run_batch] [scraper_28] [FID=28] 正在请求 版块第 49 页: http://127.0.0.1:1024/thread0806.php?fid=28&search=&page=49
+[2026-08-19 07:02:38] [run_batch] [scraper_28] [FID=28] 版块 第 49 页提取到 100 条数据
+[2026-08-19 07:02:41] [run_batch] [scraper_28] [FID=28] 正在请求 版块第 50 页: http://127.0.0.1:1024/thread0806.php?fid=28&search=&page=50
+[2026-08-19 07:02:42] [run_batch] [scraper_28] [FID=28] 版块 第 50 页提取到 100 条数据
+[2026-08-19 07:02:42] [run_batch] [scraper_28] [FID=28] 版块[已保存] 前 50 页数据SQLite 实际入库 75 条（标题去重后）
+
+[2026-08-19 07:02:42] [run_batch] [scraper_28] [FID=28] 版块[已保存] 前 50 页数据已写入磁盘（累计 5000 条）
+
+
+[2026-08-19 07:02:42] [run_batch] [scraper_28] [FID=28] 版块[已保存] 共写入 5000 条数据到 outputs/20260819/28_output_20260819.csv（进度至第 50 页）
+[2026-08-19 07:02:42] [run_batch] [scraper_28] [FID=28] 版块 SQLite 实际入库 75 条（标题去重后）
+[2026-08-19 07:02:42] [run_batch] __SUMMARY__ fid=28 rows=5000 db_rows=75 pages=50
+[2026-08-19 07:02:42] [run_batch] 完成 [28] 版块28（CSV 5000 条 / SQLite 75 条）
+
+==================================================
+执行汇总:
+  成功: 13  失败: 0  未执行: 0
+  数据总量: CSV 64998 条 / SQLite 入库 1292 条
+
+[✓] [FID=4] 版块4 — CSV 5000 条 / SQLite 47 条
+[✓] [FID=2] 版块2 — CSV 5000 条 / SQLite 79 条
+[✓] [FID=5] 版块5 — CSV 5000 条 / SQLite 23 条
+[✓] [FID=8] 版块8 — CSV 5000 条 / SQLite 24 条
+[✓] [FID=15] 版块15 — CSV 5000 条 / SQLite 95 条
+[✓] [FID=7] 版块7 — CSV 4999 条 / SQLite 64 条
+[✓] [FID=16] 版块16 — CSV 5000 条 / SQLite 15 条
+[✓] [FID=21] 版块21 — CSV 5000 条 / SQLite 126 条
+[✓] [FID=20] 版块20 — CSV 5000 条 / SQLite 1 条
+[✓] [FID=22] 版块22 — CSV 4999 条 / SQLite 406 条
+[✓] [FID=25] 版块25 — CSV 5000 条 / SQLite 243 条
+[✓] [FID=26] 版块26 — CSV 5000 条 / SQLite 94 条
+[✓] [FID=28] 版块28 — CSV 5000 条 / SQLite 75 条
+[2026-08-19 07:02:42] [run_batch] [1024服务] 正在关闭 web.exe（PID: 26508）...
+[2026-08-19 07:02:52] [run_batch] [1024服务] 端口 127.0.0.1:1024 仍被占用，按端口定位占用进程并强制结束
+[2026-08-19 07:02:53] [run_batch] [1024服务] 强制结束占用进程 PID 31872
+[2026-08-19 07:02:54] [run_batch] [1024服务] 端口 127.0.0.1:1024 已释放（强制结束生效）
