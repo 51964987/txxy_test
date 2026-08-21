@@ -7,6 +7,7 @@
 import socket
 import subprocess
 import sys
+import threading
 import time
 import os
 import traceback
@@ -48,8 +49,11 @@ SCRAPER_SCRIPT = os.path.join(os.path.dirname(__file__), "scraper.py")
 # 当 1024 端口启不起来（web.exe 无法启动/端口异常）时，将本开关手工改为 False
 # （不再监控/启停 1024 端口），并在 REMOTE_ROOT_URL 配置实际可访问的域名根地址，
 # 抓取将直接访问该域名（scraper.py 通过命令行参数接收根地址）。
+# REMOTE_ROOT_URL 还作为 "公开域名" 始终以 --public 传给 scraper.py：
+# 无论本地代理开关如何，写入数据库/CSV 的链接都拼接该真实域名，而不是本机
+# 才能访问的 127.0.0.1:1024。
 USE_LOCAL_PROXY = True
-REMOTE_ROOT_URL = "https://txxy.com"  # 本地代理关闭时 scraper 访问的实际域名（根地址），按需修改
+REMOTE_ROOT_URL = "https://txxy.com"  # 实际可访问的域名（根地址），也是入库链接使用的公开域名，按需修改
 
 # ---- 本地 web 服务（端口守护，仅 USE_LOCAL_PROXY=True 时生效） ----
 # scraper.py 抓取的站点由本机 web.exe 提供（127.0.0.1:1024）。
@@ -105,6 +109,30 @@ def _apply_cli_args() -> None:
 
 # 隐藏 web.exe 窗口（仅 Windows 生效，其它平台为 0）
 _CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+# 当前正在运行的 scraper 子进程集合（供 Ctrl+C 中断时统一终止）。
+# 若不终止它们，ThreadPoolExecutor 的 shutdown(wait=True) 会一直等待
+# 读 stdout 的线程结束，Ctrl+C 形同虚设。
+_active_procs: set[subprocess.Popen[str]] = set()
+_procs_lock = threading.Lock()
+
+
+def terminate_active_procs() -> int:
+    """终止所有仍在运行的 scraper 子进程，返回终止数量。
+
+    在 KeyboardInterrupt / 调度器异常时调用：先 terminate 子进程，读 stdout
+    的线程随即收到 EOF 结束，executor 的 shutdown(wait=True) 才能快速返回。
+    """
+    with _procs_lock:
+        procs = list(_active_procs)
+    for proc in procs:
+        try:
+            proc.terminate()
+        except Exception:
+            pass
+    if procs:
+        log(f"[中断] 已终止 {len(procs)} 个抓取子进程")
+    return len(procs)
 
 
 def is_port_listening(port: int, host: str = WEB_HOST) -> bool:
@@ -258,8 +286,13 @@ def run_scraper(fid: str, name: str) -> tuple[str, str, bool, int, int]:
     db_rows = 0
     try:
         cmd = [sys.executable, "-u", SCRAPER_SCRIPT, fid]
+        # 始终把真实域名通过 --public 传给 scraper：入库链接拼接使用公开域名，
+        # 而不是本机才能访问的本地代理地址 127.0.0.1:1024
+        cmd.append("--public")
+        cmd.append(REMOTE_ROOT_URL)
         if not USE_LOCAL_PROXY:
-            # 本地代理关闭时，向 scraper.py 传递实际域名根地址（http(s) 开头，位置不限）
+            # 本地代理关闭时，再向 scraper.py 传递实际域名根地址（http(s) 开头，位置不限），
+            # 使其直接访问该域名抓取
             cmd.append(REMOTE_ROOT_URL)
         proc = subprocess.Popen(
             cmd,
@@ -267,36 +300,44 @@ def run_scraper(fid: str, name: str) -> tuple[str, str, bool, int, int]:
             stderr=subprocess.STDOUT,
             text=True,
         )
-        if proc.stdout is None:
-            log(f"无法捕获输出 [{fid}] {name}")
+        # 注册到活动子进程集合：Ctrl+C 中断时由 terminate_active_procs() 统一终止
+        with _procs_lock:
+            _active_procs.add(proc)
+        try:
+            if proc.stdout is None:
+                log(f"无法捕获输出 [{fid}] {name}")
+                _ = proc.wait()
+                return fid, name, proc.returncode == 0, 0, 0
+            for raw_line in proc.stdout:  # pyright: ignore[reportAny]
+                # text=True 模式下每行均为 str，此处显式收窄类型以消除 Any 告警
+                if not isinstance(raw_line, str):
+                    continue
+                line = raw_line.rstrip("\n")
+                # 非机器汇总行加子进程标识 [scraper_<FID>]，并发时能区分该行来自哪个版块；
+                # __SUMMARY__ 机器行与空行保持原样，保证下方解析与机器处理不被破坏
+                if line.startswith("__SUMMARY__") or not line.strip():
+                    forwarded = line
+                else:
+                    forwarded = f"[scraper_{fid}] {line}"
+                print(forwarded, flush=True)
+                # 解析机器汇总行: __SUMMARY__ fid=7 rows=5000 db_rows=4998 pages=50
+                if line.startswith("__SUMMARY__"):
+                    for part in line.split():
+                        if part.startswith("rows="):
+                            rows = int(part.split("=")[1])
+                        elif part.startswith("db_rows="):
+                            db_rows = int(part.split("=")[1])
             _ = proc.wait()
-            return fid, name, proc.returncode == 0, 0, 0
-        for raw_line in proc.stdout:  # pyright: ignore[reportAny]
-            # text=True 模式下每行均为 str，此处显式收窄类型以消除 Any 告警
-            if not isinstance(raw_line, str):
-                continue
-            line = raw_line.rstrip("\n")
-            # 非机器汇总行加子进程标识 [scraper_<FID>]，并发时能区分该行来自哪个版块；
-            # __SUMMARY__ 机器行与空行保持原样，保证下方解析与机器处理不被破坏
-            if line.startswith("__SUMMARY__") or not line.strip():
-                forwarded = line
+            ok = proc.returncode == 0
+            if ok:
+                log(f"完成 [{fid}] {name}（CSV {rows} 条 / SQLite {db_rows} 条）")
             else:
-                forwarded = f"[scraper_{fid}] {line}"
-            print(forwarded, flush=True)
-            # 解析机器汇总行: __SUMMARY__ fid=7 rows=5000 db_rows=4998 pages=50
-            if line.startswith("__SUMMARY__"):
-                for part in line.split():
-                    if part.startswith("rows="):
-                        rows = int(part.split("=")[1])
-                    elif part.startswith("db_rows="):
-                        db_rows = int(part.split("=")[1])
-        _ = proc.wait()
-        ok = proc.returncode == 0
-        if ok:
-            log(f"完成 [{fid}] {name}（CSV {rows} 条 / SQLite {db_rows} 条）")
-        else:
-            log(f"异常 [{fid}] {name}（退出码: {proc.returncode}）")
-        return fid, name, ok, rows, db_rows
+                log(f"异常 [{fid}] {name}（退出码: {proc.returncode}）")
+            return fid, name, ok, rows, db_rows
+        finally:
+            # 无论正常完成还是中断/异常，都从活动集合移除
+            with _procs_lock:
+                _active_procs.discard(proc)
     except Exception as e:
         log(f"启动失败 [{fid}] {name}: {e}")
         return fid, name, False, rows, db_rows
@@ -356,10 +397,14 @@ def main() -> None:
     except KeyboardInterrupt:
         cancelled = True
         print(f"\n[中断] 用户手动终止 (Ctrl+C)")
+        # 立即终止仍在运行的抓取子进程：否则 with 退出时 executor 的
+        # shutdown(wait=True) 会一直等它们自然跑完，中断形同虚设
+        _ = terminate_active_procs()
     except Exception as e:
         cancelled = True
         print(f"\n[异常] 调度器发生错误: {e}", file=sys.stderr)
         traceback.print_exc()
+        _ = terminate_active_procs()
     finally:
         # 中断/异常时补收 as_completed 循环未收集的已完成任务
         # with 退出后 executor 已 shutdown(wait=True)，所有 future 均已执行完毕

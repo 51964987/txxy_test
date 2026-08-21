@@ -16,6 +16,10 @@ import file_logger
 # 根地址：默认本地代理 127.0.0.1:1024；
 # 也可由命令行 http(s) 参数指定实际域名根地址（如 https://xx.com，位置不限），见 _apply_cli_args()
 ROOT_URL = "http://127.0.0.1:1024"
+# 入库链接使用的公开域名根地址：默认与 ROOT_URL 相同；
+# 本地代理（127.0.0.1:1024）只用于抓取，写入数据库/CSV 的链接应使用真实域名，
+# run_batch 始终以 --public <域名> 传入，见 _apply_cli_args()
+PUBLIC_URL = ROOT_URL
 BASE_URL = ROOT_URL + "/thread0806.php"  # 基础地址
 FID = "2"                                # 版块ID
 START_PAGE = 1                           # 起始页码
@@ -148,7 +152,10 @@ def save_to_sqlite(
     max_retries: int = 3,
 ) -> int:
     """带重试的批量写入 SQLite（处理多进程并发写入冲突）。
-    返回实际插入行数（INSERT OR IGNORE 会跳过标题已存在的记录）。"""
+
+    连接已用 timeout=15 设置 busy_timeout（等锁最长 15 秒），绝大多数并发写冲突
+    由 SQLite 内部等待消化；此处重试仅兜底极少数等锁超时仍失败的情况，
+    避免单次写入失败直接丢数据。返回实际插入行数（INSERT OR IGNORE 跳过已存在标题）。"""
     now = datetime.now().isoformat()
     data = [(fid, date, title, url, now) for title, url in rows]
     for attempt in range(1, max_retries + 1):
@@ -237,8 +244,10 @@ def main() -> None:
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
     # 连接共享 SQLite 数据库（表及 WAL 模式已由 init_db.py 一次性初始化）
+    # timeout=15：多进程并发写时用 SQLite 内置 busy_timeout 等锁（最多 15 秒），
+    # 连续等待远优于原先手动 sleep 退避的断续轮询
     os.makedirs(os.path.dirname(DB_FILE), exist_ok=True)
-    db_conn = sqlite3.connect(DB_FILE)
+    db_conn = sqlite3.connect(DB_FILE, timeout=15)
     today_str = datetime.now().strftime("%Y-%m-%d")
 
     # 判断是否需要写入 CSV 表头
@@ -270,9 +279,10 @@ def main() -> None:
                     links = parse_links(html)
                     print(f"[FID={FID}] 版块 第 {page} 页提取到 {len(links)} 条数据")
 
-                    # 补全 URL 并写入 CSV
+                    # 补全 URL 并写入 CSV：链接拼接使用公开域名（PUBLIC_URL），
+                    # 保证入库链接离开本机仍可访问；本地代理 127.0.0.1:1024 仅用于抓取
                     for title, href in links:
-                        full_url = href if href.startswith("http") else f"{ROOT_URL}{href}"
+                        full_url = href if href.startswith("http") else f"{PUBLIC_URL}{href}"
                         writer.writerow([title, full_url])
                         sqlite_buffer.append((title, full_url))
                         total_rows += 1
@@ -325,41 +335,57 @@ def main() -> None:
 def _apply_cli_args() -> None:
     """从命令行参数覆盖模块级配置。
 
-    参数宽松解析（run_batch.py 关闭本地代理时只传 <版块ID> + <根地址> 两个参数）：
+    参数宽松解析：
     - 第 1 个参数：版块ID（必填）
     - 其后数字参数依次作为 [起始页] [结束页]（可省略）
-    - 其后 http(s) 参数作为根地址（实际域名，可省略，且位置不限）
+    - 其后 http(s) 参数作为根地址（抓取访问的实际域名，可省略，且位置不限）
+    - --public <域名>：指定入库链接使用的公开域名根地址（仅影响写入数据库/CSV 的
+      链接拼接，不影响抓取根地址；run_batch 始终以 --public 传入真实域名，
+      避免本地代理地址 127.0.0.1:1024 入库）
     示例:
       python scraper.py 2
       python scraper.py 2 1 50
       python scraper.py 2 https://xx.com
       python scraper.py 2 1 100 https://xx.com
+      python scraper.py 2 --public https://xx.com
     """
-    global FID, START_PAGE, END_PAGE, ROOT_URL, BASE_URL, OUTPUT_DIR, OUTPUT_FILE, PROGRESS_FILE
+    global FID, START_PAGE, END_PAGE, ROOT_URL, PUBLIC_URL, BASE_URL, OUTPUT_DIR, OUTPUT_FILE, PROGRESS_FILE
     args = sys.argv[1:]
     if not args:
-        print("用法: python scraper.py <版块ID> [起始页] [结束页] [根地址]")
+        print("用法: python scraper.py <版块ID> [起始页] [结束页] [根地址] [--public <域名>]")
         print("示例: python scraper.py 2                 # 抓取版块2，第1页~第10页")
         print("      python scraper.py 2 1 50            # 抓取版块2，第1页~第50页")
         print("      python scraper.py 2 https://xx.com  # 仅指定实际域名（根地址），页数用默认值")
         print("      python scraper.py 2 1 100 https://xx.com  # 指定域名 + 抓取范围")
+        print("      python scraper.py 2 --public https://xx.com  # 入库链接用该公开域名")
         sys.exit(1)
     FID = args[0]  # pyright: ignore[reportConstantRedefinition]
     page_args: list[int] = []
     root_url: str | None = None
-    for arg in args[1:]:
-        if arg.lower().startswith(("http://", "https://")):
+    public_url: str | None = None
+    i = 1
+    while i < len(args):
+        arg = args[i]
+        if arg == "--public":
+            if i + 1 >= len(args):
+                print("[错误] --public 后缺少域名参数", file=sys.stderr)
+                sys.exit(1)
+            public_url = args[i + 1]
+            i += 2
+        elif arg.lower().startswith(("http://", "https://")):
             if root_url is not None:
                 print(f"[错误] 根地址重复指定: {root_url} 与 {arg}", file=sys.stderr)
                 sys.exit(1)
             root_url = arg
+            i += 1
         else:
             try:
                 page_args.append(int(arg))
             except ValueError:
-                print(f"[错误] 无法识别的参数: {arg!r}（应为数字页码或 http(s) 根地址）", file=sys.stderr)
-                print("用法: python scraper.py <版块ID> [起始页] [结束页] [根地址]", file=sys.stderr)
+                print(f"[错误] 无法识别的参数: {arg!r}（应为数字页码、http(s) 根地址或 --public <域名>）", file=sys.stderr)
+                print("用法: python scraper.py <版块ID> [起始页] [结束页] [根地址] [--public <域名>]", file=sys.stderr)
                 sys.exit(1)
+            i += 1
     if page_args:
         START_PAGE = page_args[0]  # pyright: ignore[reportConstantRedefinition]
         if START_PAGE < 1:
@@ -373,9 +399,16 @@ def _apply_cli_args() -> None:
     if len(page_args) > 2:
         print(f"[警告] 忽略多余的页码参数: {page_args[2:]}", file=sys.stderr)
     if root_url is not None:
-        # 覆盖根地址（如 https://xx.com）：BASE_URL / 拼接完整链接均依赖此值
+        # 覆盖根地址（如 https://xx.com）：BASE_URL / 抓取请求均依赖此值
         ROOT_URL = root_url.rstrip("/")  # pyright: ignore[reportConstantRedefinition]
         print(f"[配置] 已指定实际域名根地址: {ROOT_URL}")
+    if public_url is not None:
+        if not public_url.lower().startswith(("http://", "https://")):
+            print(f"[错误] --public 参数必须是 http(s) 开头的完整域名: {public_url!r}", file=sys.stderr)
+            sys.exit(1)
+        # 覆盖入库链接用的公开域名：仅影响 full_url 拼接，抓取仍走 ROOT_URL
+        PUBLIC_URL = public_url.rstrip("/")  # pyright: ignore[reportConstantRedefinition]
+        print(f"[配置] 入库链接使用公开域名: {PUBLIC_URL}")
     BASE_URL = ROOT_URL + "/thread0806.php"  # pyright: ignore[reportConstantRedefinition]
     OUTPUT_DIR = f"outputs/{datetime.now().strftime('%Y%m%d')}"  # pyright: ignore[reportConstantRedefinition]
     OUTPUT_FILE = f"{OUTPUT_DIR}/{FID}_output_{datetime.now().strftime('%Y%m%d')}.csv"  # pyright: ignore[reportConstantRedefinition]

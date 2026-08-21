@@ -61,14 +61,3 @@ if __name__ == "__main__":
     _ = file_logger.setup("init_db")
     _ = init_db()
     print("\n提示: 该脚本只需执行一次，后续所有日期批次的 scraper 共用此数据库。")
-
-    # 初始化成功后才清理过期日志；失败时 init_db 抛异常直接退出，不清理
-    try:
-        removed = file_logger.cleanup_old_logs()
-        if removed:
-            print(
-                f"[日志清理] 已删除 {removed} 个过期日志文件"
-                + f"（保留最近 {file_logger.RETENTION_DAYS} 天）"
-            )
-    except Exception as e:
-        print(f"[日志清理] 清理过期日志异常: {e}", file=sys.stderr)

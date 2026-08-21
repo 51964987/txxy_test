@@ -515,15 +515,17 @@ def main() -> None:
             ok_items = sum(v for k, v in stats.items() if k not in ("跳过", "失败"))
             skip_items = stats.get("跳过", 0)
             fail_items = stats.get("失败", 0)
-            if ok_items == 0:
-                # 无任何成功项：整体记为失败（页面获取失败 / 有资源但全部下载失败）
+            if ok_items == 0 and skip_items == 0:
+                # 无任何成功项且无跳过项：整体记为失败（页面获取失败 / 有资源但全部下载失败）
                 failed_inputs += 1
                 detail = f"，失败 {fail_items} 项" if fail_items else ""
                 print(f"[{i}] [失败] {label}{detail}")
                 total_fail += fail_items
                 continue
             parts = [f"{k} {v}{units.get(k, '项')}" for k, v in stats.items() if k not in ("跳过", "失败")]
-            line = f"[{i}] [成功] {label}，{', '.join(parts)}"
+            line = f"[{i}] [成功] {label}"
+            if parts:
+                line += f"，{', '.join(parts)}"
             if skip_items:
                 line += f"，已存在跳过 {skip_items} 项"
             if fail_items:
@@ -541,18 +543,6 @@ def main() -> None:
         if failed_inputs:
             summary.append(f"失败 {failed_inputs} 个输入")
         print(f"总计: {', '.join(summary)}")
-
-    # 正常走完整个处理流程后清理过期日志；参数错误 / 未捕获异常 / 中断时不清理，
-    # 保留日志现场便于排查
-    try:
-        removed = file_logger.cleanup_old_logs()
-        if removed:
-            print(
-                f"[日志清理] 已删除 {removed} 个过期日志文件"
-                + f"（保留最近 {file_logger.RETENTION_DAYS} 天）"
-            )
-    except Exception as e:
-        print(f"[日志清理] 清理过期日志异常: {e}", file=sys.stderr)
 
 
 if __name__ == "__main__":
