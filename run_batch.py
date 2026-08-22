@@ -12,8 +12,10 @@ import time
 import os
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed, Future
+from datetime import datetime
 
 import file_logger
+import run_recorder
 
 # ============ 配置区域 ============
 
@@ -276,12 +278,14 @@ def shutdown_web_service(proc: subprocess.Popen[bytes] | None) -> None:
         log(f"[1024服务] 警告: 端口 {WEB_HOST}:{WEB_PORT} 仍被占用，请手动关闭 {WEB_APP_EXE} 后重试")
 
 
-def run_scraper(fid: str, name: str) -> tuple[str, str, bool, int, int]:
+def run_scraper(fid: str, name: str, run_id: int = 0) -> tuple[str, str, bool, int, int, int]:
     """
     启动子进程执行 scraper.py，实时输出并捕获汇总行
-    返回 (fid, name, 是否成功, CSV写入行数, SQLite入库行数)
+    返回 (fid, name, 是否成功, CSV写入行数, SQLite入库行数, 耗时秒数)
+    run_id: 本次运行记录 ID（>0 时通过环境变量传给子进程，供其逐页上报进度）
     """
     log(f"启动 [{fid}] {name}（访问根地址: {effective_root_url()}）")
+    start = time.time()
     rows = 0
     db_rows = 0
     try:
@@ -294,11 +298,17 @@ def run_scraper(fid: str, name: str) -> tuple[str, str, bool, int, int]:
             # 本地代理关闭时，再向 scraper.py 传递实际域名根地址（http(s) 开头，位置不限），
             # 使其直接访问该域名抓取
             cmd.append(REMOTE_ROOT_URL)
+        # 批量运行时由本脚本统一汇总写运行记录，关闭子进程各自的落库，避免重复记录；
+        # 同时把 run_id 传给子进程，子进程实时更新自己版块的进度明细
+        env = {**os.environ, "SCRAPER_RECORD_RUN": "0"}
+        if run_id:
+            env["SCRAPER_RUN_ID"] = str(run_id)
         proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
+            env=env,
         )
         # 注册到活动子进程集合：Ctrl+C 中断时由 terminate_active_procs() 统一终止
         with _procs_lock:
@@ -307,7 +317,7 @@ def run_scraper(fid: str, name: str) -> tuple[str, str, bool, int, int]:
             if proc.stdout is None:
                 log(f"无法捕获输出 [{fid}] {name}")
                 _ = proc.wait()
-                return fid, name, proc.returncode == 0, 0, 0
+                return fid, name, proc.returncode == 0, 0, 0, int(time.time() - start)
             for raw_line in proc.stdout:  # pyright: ignore[reportAny]
                 # text=True 模式下每行均为 str，此处显式收窄类型以消除 Any 告警
                 if not isinstance(raw_line, str):
@@ -333,14 +343,14 @@ def run_scraper(fid: str, name: str) -> tuple[str, str, bool, int, int]:
                 log(f"完成 [{fid}] {name}（CSV {rows} 条 / SQLite {db_rows} 条）")
             else:
                 log(f"异常 [{fid}] {name}（退出码: {proc.returncode}）")
-            return fid, name, ok, rows, db_rows
+            return fid, name, ok, rows, db_rows, int(time.time() - start)
         finally:
             # 无论正常完成还是中断/异常，都从活动集合移除
             with _procs_lock:
                 _active_procs.discard(proc)
     except Exception as e:
         log(f"启动失败 [{fid}] {name}: {e}")
-        return fid, name, False, rows, db_rows
+        return fid, name, False, rows, db_rows, int(time.time() - start)
 
 
 def main() -> None:
@@ -373,14 +383,32 @@ def main() -> None:
     total = len(SECTIONS)
     print(f"共 {total} 个版块，并发数: {MAX_WORKERS}，启动间隔: {STAGGER_DELAY}s\n")
 
-    results: list[tuple[str, str, bool, int, int]] = []
-    futures: dict[Future[tuple[str, str, bool, int, int]], tuple[str, str]] = {}
+    # 运行开始：创建 running 记录，供 Web 端实时展示状态与进度
+    # （sections 的 total_pages 由各子进程启动后自行上报真实值，此处填 0 待补充）
+    run_id = 0
+    try:
+        run_id = run_recorder.start_run(
+            datetime.now().strftime("%Y%m%d"),
+            "run_batch",
+            [{"fid": fid, "name": name, "total_pages": 0} for fid, name in SECTIONS.items()],
+        )
+        if run_id:
+            log(f"[入库] 已创建运行记录 ID={run_id}（状态: 进行中），子进程将实时上报进度")
+        else:
+            log("[入库] 创建运行记录失败（不影响抓取，结束后将一次性补写）")
+    except Exception as e:
+        print(f"[入库] 创建运行记录异常: {e}", file=sys.stderr)
+
+    results: list[tuple[str, str, bool, int, int, int]] = []
+    futures: dict[Future[tuple[str, str, bool, int, int, int]], tuple[str, str]] = {}
     cancelled = False
+    batch_status = "ok"  # ok / cancelled / error，用于运行记录落库
+    batch_start = time.time()
 
     try:
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
             for i, (fid, name) in enumerate(SECTIONS.items()):
-                future = executor.submit(run_scraper, fid, name)
+                future = executor.submit(run_scraper, fid, name, run_id)
                 futures[future] = (fid, name)
                 if i < total - 1:
                     time.sleep(STAGGER_DELAY)
@@ -392,16 +420,18 @@ def main() -> None:
                     results.append(result)
                 except Exception as e:
                     log(f"任务异常 [{fid}] {name}: {e}")
-                    results.append((fid, name, False, 0, 0))
+                    results.append((fid, name, False, 0, 0, 0))
 
     except KeyboardInterrupt:
         cancelled = True
+        batch_status = "cancelled"
         print(f"\n[中断] 用户手动终止 (Ctrl+C)")
         # 立即终止仍在运行的抓取子进程：否则 with 退出时 executor 的
         # shutdown(wait=True) 会一直等它们自然跑完，中断形同虚设
         _ = terminate_active_procs()
     except Exception as e:
         cancelled = True
+        batch_status = "error"
         print(f"\n[异常] 调度器发生错误: {e}", file=sys.stderr)
         traceback.print_exc()
         _ = terminate_active_procs()
@@ -418,21 +448,21 @@ def main() -> None:
                     results.append(result)
                 except Exception as e:
                     log(f"任务异常 [{fid}] {name}: {e}")
-                    results.append((fid, name, False, 0, 0))
+                    results.append((fid, name, False, 0, 0, 0))
 
         # 执行汇总：raw 模式不加时间戳
         with file_logger.raw():
             print(f"\n{'=' * 50}")
             print("执行汇总:")
-            success_count = sum(1 for _, _, ok, _, _ in results if ok)
-            failed_count = sum(1 for _, _, ok, _, _ in results if not ok)
+            success_count = sum(1 for _, _, ok, _, _, _ in results if ok)
+            failed_count = sum(1 for _, _, ok, _, _, _ in results if not ok)
             skipped_count = total - len(results)
-            total_rows = sum(rows for _, _, _, rows, _ in results)
-            total_db_rows = sum(db for _, _, _, _, db in results)
+            total_rows = sum(rows for _, _, _, rows, _, _ in results)
+            total_db_rows = sum(db for _, _, _, _, db, _ in results)
             print(f"  成功: {success_count}  失败: {failed_count}  未执行: {skipped_count}")
             print(f"  数据总量: CSV {total_rows} 条 / SQLite 入库 {total_db_rows} 条")
             print()
-            for fid, name, ok, rows, db_rows in results:
+            for fid, name, ok, rows, db_rows, _duration in results:
                 status = "✓" if ok else "✗"
                 print(f"[{status}] [FID={fid}] {name} — CSV {rows} 条 / SQLite {db_rows} 条")
             for fid, name in SECTIONS.items():
@@ -440,6 +470,75 @@ def main() -> None:
                     print(f"[−] [FID={fid}] {name}（未执行）")
             if cancelled:
                 print("\n提示: 已处理的数据已写入各版块 CSV，重新运行即可断点续写。")
+
+        # 运行记录落库：有 run_id 时更新汇总 + 兜底同步版块明细；
+        # 记录创建失败（run_id=0）时退回原一次性写入
+        try:
+            if run_id:
+                run_recorder.finish_run(
+                    run_id,
+                    batch_status,
+                    ok=success_count,
+                    fail=failed_count,
+                    skip=skipped_count,
+                    csv=total_rows,
+                    sqlite=total_db_rows,
+                    duration=int(time.time() - batch_start),
+                )
+                # 兜底同步各版块最终状态：子进程可能被强杀未写入，这里以本脚本
+                # 收集到的 __SUMMARY__ 汇总为准补全（与子进程写入的值一致，幂等）
+                for fid, name, ok, rows, db_rows, duration in results:
+                    run_recorder.update_section(
+                        run_id,
+                        fid,
+                        status="ok" if ok else "fail",
+                        csv=rows,
+                        sqlite=db_rows,
+                        duration=duration,
+                    )
+                for fid, name in SECTIONS.items():
+                    if not any(r[0] == fid for r in results):
+                        run_recorder.update_section(run_id, fid, status="skip")
+                log(
+                    f"[入库] 运行记录已更新（ID={run_id}，成功 {success_count} / 失败 {failed_count}"
+                    + f" / 未执行 {skipped_count}，状态 {batch_status}）"
+                )
+            else:
+                sections: list[dict] = []
+                for fid, name, ok, rows, db_rows, duration in results:
+                    sections.append(
+                        {
+                            "fid": fid,
+                            "name": name,
+                            "status": "ok" if ok else "fail",
+                            "csv": rows,
+                            "sqlite": db_rows,
+                            "duration": duration,
+                        }
+                    )
+                for fid, name in SECTIONS.items():
+                    if not any(r[0] == fid for r in results):
+                        sections.append(
+                            {"fid": fid, "name": name, "status": "skip", "csv": 0, "sqlite": 0, "duration": None}
+                        )
+                run_recorder.record_run(
+                    datetime.now().strftime("%Y%m%d"),
+                    "run_batch",
+                    batch_status,
+                    ok=success_count,
+                    fail=failed_count,
+                    skip=skipped_count,
+                    csv=total_rows,
+                    sqlite=total_db_rows,
+                    duration=int(time.time() - batch_start),
+                    sections=sections,
+                )
+                log(
+                    f"[入库] 运行记录已写入 SQLite（成功 {success_count} / 失败 {failed_count}"
+                    + f" / 未执行 {skipped_count}，状态 {batch_status}）"
+                )
+        except Exception as e:
+            print(f"[入库] 运行记录写入数据库异常: {e}", file=sys.stderr)
 
         # --- 全部任务结束后关闭 web 服务（仅关闭本脚本启动的进程；本地代理关闭时跳过） ---
         if USE_LOCAL_PROXY:

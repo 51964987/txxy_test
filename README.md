@@ -16,7 +16,8 @@ pip install -r requirements.txt
 ```
 txxy_test/
 ├── scraper.py          # 单版块抓取器（写入 CSV + SQLite，断点续写、请求重试、连续失败保护、权限拦截检测）
-├── run_batch.py        # 多版块并发调度器（并发启动 scraper.py 子进程；1024 端口开关[可选入参] + web.exe 端口守护）
+├── run_batch.py        # 多版块并发调度器（并发启动 scraper.py 子进程；1024 端口开关[可选入参] + web.exe 端口守护；运行记录落库）
+├── run_recorder.py     # 运行记录持久化（run_days / run_sections 写入 db/posts.db）
 ├── file_logger.py      # 统一日志模块（输出带时间戳，执行汇总不加）
 ├── download_files.py   # 帖子页下载主流程（页面访问 + 下载编排 + 执行汇总）
 ├── extract_images.py   # 图片专属模块（提取 / 请求头 / 内容校验 / 下载 / 分目录与命名）
@@ -28,7 +29,17 @@ txxy_test/
 ├── init_db.py          # SQLite 数据库一次性初始化
 ├── run_daily.bat       # Windows 计划任务批处理入口（固定工作目录）
 ├── requirements.txt
-├── db/posts.db         # SQLite 数据库（title 主键去重）
+├── web/                # 前端数据展示服务（FastAPI + Vue3 SPA，只读访问 db/posts.db）
+│   ├── app.py          # 服务入口（托管 /api 接口 + 前端静态资源）
+│   ├── api.py          # REST 接口（/api/config、stats、posts、runs、resources，60s 缓存）
+│   ├── config.py       # 服务配置（端口/公开域名/路径/自动刷新开关，可用环境变量覆盖）
+│   ├── db.py           # 只读 SQLite 访问层（PRAGMA query_only + 缓存 + URL 归一化）
+│   ├── runs.py         # 运行记录读取（SQLite run_days/run_sections 优先，日志兼容回退）
+│   ├── resources.py    # 下载资源扫描（downloads）
+│   └── frontend/       # Vue3 + Vite + TypeScript + Element Plus + Pinia + ECharts SPA
+│       └── src/stores/dashboard.ts  # Pinia 全局状态（自动刷新/更新时间，Header 与页面解耦）
+├── start_web.bat       # 一键启动前端展示服务
+├── db/posts.db         # SQLite 数据库（posts 表 title 主键去重 + run_days/run_sections 运行记录表）
 ├── outputs/日期/        # 抓取结果 CSV 与进度文件
 └── downloads/标题/      # 帖子页下载的图片 / 视频 / 种子及磁力·云盘清单
 ```
@@ -60,7 +71,7 @@ download_files.py ──► 调用各 extract 模块（页面访问 + 下载编�
 python init_db.py
 ```
 
-在 `db/` 下创建共享数据库 `posts.db`，`title` 为主键，重复标题自动忽略（`INSERT OR IGNORE`）。所有日期批次的抓取共用此库。
+在 `db/` 下创建共享数据库 `posts.db`，包含帖子表 `posts` 与运行记录表 `run_days`/`run_sections`。`posts` 表 `title` 为主键，重复标题时覆盖更新（`INSERT ... ON CONFLICT(title) DO UPDATE`，upsert）：首次插入时 `update_at`/`update_date` 为空，重复写入时除 `title`/`date`/`created_at` 外其余字段覆盖为本次新值。所有日期批次的抓取共用此库。**中文注释**：建表 DDL 每列带 `/* */` 中文注释（新表随 `sqlite_master` 持久化）；另建 `schema_comments` 表幂等保存表级+列级中文注释，旧库重跑本脚本即补齐（`SELECT * FROM schema_comments` 可查）。
 
 ### 2. 批量抓取版块列表（推荐）
 
@@ -73,7 +84,8 @@ python run_batch.py true       # 可选入参：本次强制开启本地代理�
 - 遍历 `run_batch.py` 顶部的 `SECTIONS`，每个版块启动一个独立进程执行 `scraper.py`；
 - `MAX_WORKERS` 控制并发数（默认 3），`STAGGER_DELAY` 错开启动时间（默认 5 秒），降低反爬风险；
 - 结果输出到 `outputs/YYYYMMDD/`，数据写入 `db/posts.db`；
-- 执行汇总同时展示 **CSV 写入量**与 **SQLite 实际入库量**（按标题去重），如 `数据总量: CSV 12898 条 / SQLite 入库 20 条`，逐版块明细同步显示两项数据。
+- 执行汇总同时展示 **CSV 写入量**与 **SQLite 实际入库量**（按标题去重），如 `数据总量: CSV 12898 条 / SQLite 入库 20 条`，逐版块明细同步显示两项数据；
+- 运行结束后，整体汇总与各版块明细由 `run_recorder.py` 写入 `db/posts.db` 的 `run_days`/`run_sections` 表（`run_days` 自增 id 主键，**每次运行一条、历史保留**，同一天多次运行各自成条；`run_sections` 通过 `run_id` 关联明细），供 Web 端运行记录页读取展示，**不受 outputs 日志清理策略影响**；`scraper.py` 单跑同样会落库（批量运行时通过环境变量 `SCRAPER_RECORD_RUN=0` 关闭子进程落库，避免重复记录）。
 
 **1024 端口开关（`USE_LOCAL_PROXY`，默认开启）**：既可改顶部配置区，也可作为**可选命令行入参**（传入时按实际值执行，优先于配置区）：
 
@@ -92,7 +104,7 @@ python run_batch.py true       # 可选入参：本次强制开启本地代理�
 ### 3. 单版块抓取
 
 ```bash
-python scraper.py <版块ID> [起始页] [结束页] [根地址] [--public <域名>]
+python scraper.py <版块ID> [起始页] [结束页] [根地址] [--public <域名>] [--restart]
 ```
 
 示例：
@@ -103,10 +115,12 @@ python scraper.py 7 1 50            # 抓取版块 7，第 1 ~ 50 页
 python scraper.py 2 https://xx.com  # 仅指定实际域名（根地址），页数取默认值
 python scraper.py 2 1 100 https://xx.com  # 指定实际域名（根地址）+ 抓取范围，绕过本地 1024 端口
 python scraper.py 2 --public https://xx.com  # 抓取走默认根地址，入库链接改用该公开域名
+python scraper.py 2 --restart       # 忽略断点进度，强制重跑（提示"所有页面已完成"时用）
 ```
 
 - 版块 ID 为**必填**参数，`[起始页]` / `[结束页]` 可选（数字参数依次识别），缺省取顶部配置区 `START_PAGE` / `END_PAGE`；`[根地址]` 可选且**位置不限**（http/https 开头即识别为根地址），传入实际域名（如 `https://xx.com`）时覆盖默认的本地代理根地址，`BASE_URL` 与抓取请求均基于该域名（`run_batch.py` 关闭本地代理开关后会自动以 `python scraper.py <版块ID> <根地址>` 的形式传入）；
 - `--public <域名>`（可选）：指定**入库链接**使用的公开域名根地址，仅影响写入数据库/CSV 的链接拼接，不影响抓取根地址；默认与根地址相同。本地代理开启时若不传，入库链接会带 `127.0.0.1:1024`（离开本机不可访问），因此 `run_batch.py` 始终自动以 `--public <REMOTE_ROOT_URL>` 传入真实域名；
+- `--restart`（可选）：忽略断点进度，从起始页强制重跑；会先删除当天该版块已生成的 CSV/进度文件再重新抓取（删除有日志留痕），适用于提示"版块所有页面已完成，无需重复抓取"后仍想重抓的场景；与 `--public`、页码参数可自由组合；
 - 顶部配置区可调整 `REQUEST_INTERVAL`（请求间隔）、`AUTO_DETECT_END_PAGE`（动态获取末页）等；
 - 断点续写：进度写入 `*_progress.txt`，重新运行会从上次完成的页码继续；
 - 请求重试：网络异常（连接拒绝/超时）与 `408/429/5xx` 状态码按退避递增重试，第 N 次重试等待 `RETRY_BASE_DELAY`×N 秒，最多 `REQUEST_MAX_RETRIES` 次（默认 3）；其它 `4xx` 确定性失败不重试直接跳过；
@@ -167,6 +181,36 @@ downloads/帖子标题/
 
 扩展新媒体类型（如音频/压缩包）：在 `extract_torrents.extract_other_urls()` 中追加提取规则，并在 `download_files.process_page()` 的"其他媒体类型"区块追加下载循环（可参考 `extract_torrents.download_torrent` 或复用 `media_download.download_media`）。
 
+### 5. 前端数据展示（web/）
+
+以网页形式浏览抓取数据（**只读**，不影响抓取/下载任务）：
+
+```bash
+start_web.bat                      # 一键启动（未构建时自动 npm install + npm run build）
+# 或手动：
+pip install fastapi uvicorn        # 首次（已写入 requirements.txt）
+python -X utf8 web/app.py          # 启动后访问 http://127.0.0.1:8088
+```
+
+- **技术栈**：FastAPI 后端 + Vue3 / Vite / TypeScript / Element Plus / Pinia / ECharts 前端（SPA）；
+- **页面**：
+  - 数据总览：
+    - **顶部 Header（全局布局）**：左侧显示最后更新时间，右侧"自动刷新"操作卡片——由后端配置 `TXXY_ENABLE_AUTO_REFRESH` 控制（**默认关闭**，开启时才显示开关并启用 30s 轮询，手动"刷新"按钮始终可用）；
+    - KPI 统计卡片：累计 / 今日 / 昨日 / 近 7 日新增 + 累计用户 / 活跃用户，副指标展示环比与今日新增；
+    - 每日新增趋势：折线图（渐变面积 + 峰值标注），7/30/90 天切换，90 天支持缩放；
+    - 版块分布：**环形图 / 排行榜双视图**切换，扇区与图例点击跳转帖子浏览并按版块预筛选，悬停显示中心动态（最近抓取/今日/昨日）；排行榜行为纯 HTML 渲染，标题 tooltip 展示副指标；
+    - 热门榜：点赞最高帖 / 回复最高帖左右 **1:1 等宽**，按指标值严格降序（`CAST AS INTEGER DESC`，避免字符串字典序错误）；
+    - 最近抓取 Top10（点赞/作者/回复，相对时间）；
+    - 布局：趋势与版块分布 `1fr 1fr`、两个热门榜 `1fr 1fr`，间距统一 16px；窄屏自动降级为单列；
+  - 帖子浏览：版块多选 / 日期区间 / 标题关键词筛选，分页排序（日期/入库/点赞/回复），支持从数据总览跳转预选版块，操作栏为图标按钮（悬浮显示"打开/复制链接"提示），跳转原帖，一键导出 CSV（10 列带 BOM，Excel 可直接打开）；
+  - 运行记录：读取 `db/posts.db` 的 `run_days`/`run_sections`（run_batch/scraper 每次运行结束写入，每次运行一条、历史保留，同日多次分别展示，含运行时间），**每页 10 条分页**（含页码跳转，记录数 ≤10 时不显示分页器），页面内 4s 轮询实时刷新（running 状态实时进度），点击查看各版块成功/失败/CSV 与 SQLite 条数/耗时；改动前仅留日志的历史记录回退解析 `outputs/` 日志展示；
+  - 资源管理：扫描 `downloads/` 目录，按文件夹分组展示文件清单与大小，复制路径；
+- **只读安全**：后端以 `PRAGMA query_only=ON` 只读访问 `db/posts.db`，绝不写库，与抓取写进程（WAL 模式）安全并发；
+- **URL 归一化**：旧数据中 `http://127.0.0.1:1024` 前缀在展示层统一替换为 `PUBLIC_ROOT`（`web/config.py`，默认 `https://txxy.com`，与 `run_batch.REMOTE_ROOT_URL` 一致），**不改数据库**；
+- **配置**：`web/config.py` 顶部可用环境变量覆盖（`TXXY_WEB_HOST` 地址 / `TXXY_WEB_PORT` 端口 / `PUBLIC_ROOT` 域名 / `POSTS_DB` 数据库路径等），默认监听 `127.0.0.1:8088`（8080 常被本机其他程序占用）；
+- **自动刷新开关**：`TXXY_ENABLE_AUTO_REFRESH`（默认 `0` 关闭）控制数据总览的自动刷新功能——关闭时 Header 不显示"自动刷新"开关、前端不启动 30s 轮询，仅保留手动"刷新"按钮；需要恢复时启动前设置 `TXXY_ENABLE_AUTO_REFRESH=1`（或直接改 `web/config.py` 为 `True`）；
+- **开发模式**：`cd web/frontend && npm run dev` 启动 Vite（端口 5173，`/api` 自动代理到 8088）热更新；改完执行 `npm run build` 重新构建，再启动 `python -X utf8 web/app.py` 生效。
+
 ## 定时任务（Windows）
 
 已注册计划任务 `txxy_daily_batch`，每天 01:00 以 SYSTEM 身份运行 `run_daily.bat`（未登录也会执行）：
@@ -202,14 +246,16 @@ schtasks /Delete /TN "txxy_daily_batch" /F
 | `[终止] 检测到权限拦截` | 当前账号无权访问该版块，脚本自动停止，检查代理/账号 |
 | `内容非图片` | 图床返回广告 HTML 页：确认使用纯图片 `Accept` 头（已内置 `extract_images.IMG_HEADERS`） |
 | 下载失败提示 `ConnectionError / Read timed out` | 网络暂时性超时，脚本已自动降级重试一次；仍失败可稍后重跑（断点续传） |
-| 数据库重复数据 | `posts` 表以 `title` 为主键自动忽略，无需清理 |
+| 数据库重复数据 | `posts` 表以 `title` 为主键，重复标题自动覆盖更新，无需清理 |
 | 日志在哪里 | `outputs/日期/<程序名>_<日期>.log`（与 CSV 同目录），如 `outputs/20260812/run_batch_20260812.log` |
 
 ## 数据说明
 
-- `db/posts.db` 表结构：`posts(title PRIMARY KEY, fid, date, url, created_at)`，附带 `fid`、`date`、`fid+date` 索引；
+- `db/posts.db` 表结构：`posts(title PRIMARY KEY, fid, date, url, likes, author, replies, created_at, update_at, update_date)`，附带 `fid`、`date`、`fid+date` 索引；`likes`（点赞数）、`author`（作者）、`replies`（回复数）由 `scraper.py` 列表页按行提取；`created_at` 为首次插入时间戳（标题重复时**保持不变**），`date` 为帖子发布日（重复时**保持不变**），`update_at`/`update_date` 为最近一次覆盖写入的时间戳/日期（**首次插入时为空字符串**，标题重复时自动更新），重复写入时除 `title`/`date`/`created_at` 外 `fid`/`url`/`likes`/`author`/`replies`/`update_at`/`update_date` 全部覆盖；旧库已由 `init_db.py` 自动 `ALTER TABLE` 补列（缺失时为空字符串）；
 - **入库链接使用公开域名**：`url` 列拼接 `--public` 指定的公开域名（`run_batch.py` 自动传 `REMOTE_ROOT_URL`），不包含本机才能访问的 `127.0.0.1:1024` 本地代理地址；
 - 多进程并发写库：`scraper.py` 以 `sqlite3.connect(DB_FILE, timeout=15)` 连接，busy_timeout 最多等锁 15 秒，替代原先手动 sleep 退避，避免并发写冲突丢数据；
 - CSV 与数据库同步写入：每 `BATCH_SIZE` 页刷新一次 CSV，每 `SQLITE_BATCH_ROWS` 行批量提交一次；
-- 运行结束时输出 `版块 SQLite 实际入库 N 条（标题去重后）` 与机器汇总行 `__SUMMARY__ fid=.. rows=.. db_rows=.. pages=..`，供调度器解析展示；
-- **入库量口径**：`db_rows` 统计的是本次运行**实际新增**条数（`INSERT OR IGNORE` 按 `title` 去重，已存在标题不计入），而非数据库累计总量；如需查询累计总量可执行 `SELECT COUNT(*) FROM posts`。
+- 运行结束时输出 `版块 SQLite 实际入库 N 条（标题重复已覆盖更新）` 与机器汇总行 `__SUMMARY__ fid=.. rows=.. db_rows=.. pages=..`，供调度器解析展示；
+- **入库量口径**：`db_rows` 统计的是本次运行实际写入条数（`INSERT ... ON CONFLICT(title) DO UPDATE`，标题重复时整行覆盖更新，新增与覆盖均计 1 条），而非数据库累计总量；如需查询累计总量可执行 `SELECT COUNT(*) FROM posts`；
+- `run_days`（运行记录，自增 `id` 主键，**每次运行一条**，同一天多次运行各自成条）与 `run_sections`（明细，`run_id` 关联 `run_days.id`）记录每次抓取：`run_date` 为 `YYYYMMDD` 日期目录名，`source` 区分 `run_batch`（批量）/ `scraper`（单跑），`status` 为 `ok` / `cancelled` / `error`；由 `run_recorder.py` 写入，`web/runs.py` 只读展示（Web 端按 `run_id` 查明细，列表含运行时间列）；
+- **中文注释**：`posts`/`run_days`/`run_sections` 建表 DDL 每列带 `/* */` 中文注释（新表随 `sqlite_master` 持久化）；`schema_comments` 表（`object_type` + `table_name` + `column_name` 主键）幂等保存全部表/列中文注释，已有旧库重跑 `python init_db.py` 即补齐，查询 `SELECT object_type, table_name, column_name, comment FROM schema_comments` 可查看完整字段含义。

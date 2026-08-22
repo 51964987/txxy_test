@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import TextIO
 
 import file_logger
+import run_recorder
 
 # ============ 配置区域 ============
 # 根地址：默认本地代理 127.0.0.1:1024；
@@ -23,8 +24,9 @@ PUBLIC_URL = ROOT_URL
 BASE_URL = ROOT_URL + "/thread0806.php"  # 基础地址
 FID = "2"                                # 版块ID
 START_PAGE = 1                           # 起始页码
-END_PAGE = 50                            # 结束页码（可自行修改）
+END_PAGE = 100                           # 结束页码（可自行修改）
 AUTO_DETECT_END_PAGE = False             # 是否动态获取末页页码（False 时使用 END_PAGE 配置值）
+FORCE_RESTART = False                    # 是否忽略断点进度强制重跑（--restart）
 
 # 输出目录 & 文件（统一放在 outputs/日期/ 下：最外层 outputs，再到日期目录）
 _OUTPUT_DATE = datetime.now().strftime("%Y%m%d")
@@ -96,18 +98,49 @@ def fetch_page(page_num: int) -> str | None:
     return None
 
 
-def parse_links(html:str):
-    """从HTML中提取符合格式的标题和链接"""
+def parse_links(html: str) -> list[tuple[str, str, str, str, str]]:
+    """从HTML中提取帖子标题、链接、点赞数、作者、回复数。
+
+    以列表行的标题链接 <a href="/htm_data/..." target="_blank" id="t..."> 为准，
+    再定位其所在 <tr> 行，按列提取：
+    - 点赞数：第 1 个 td 内 <span class="s3"> 的文本（无则取该 td 纯文本）
+    - 作者：行内 <a class="bl"> 的文本
+    - 回复数：第 4 个 td（索引 3）的纯文本
+    目标行结构参考：
+      <td><span class="s3">39</span></td>                    点赞
+      <td class="tal"><h3><a ...>标题</a></h3></td>           标题
+      <td><a class="bl">作者</a><div class="f12">...</div></td> 作者
+      <td>17</td>                                             回复数
+    结构不同或字段缺失时相应返回空字符串，不影响主数据。
+    """
     soup = BeautifulSoup(html, "html.parser")
-    results: list[tuple[str, str]] = []
+    results: list[tuple[str, str, str, str, str]] = []
 
     # 匹配 <a href="/htm_data/..." target="_blank" id="t...">文字</a>
     for a_tag in soup.find_all("a", href=re.compile(r"^/htm_data/\d+/\d+/\d+\.html$"), target="_blank"):
         href = a_tag.get("href", "")
         title = a_tag.get_text(strip=True)
         tag_id = str(a_tag.get("id", ""))
-        if href and title and tag_id.startswith("t"):
-            results.append((str(title), str(href)))
+        if not (href and title and tag_id.startswith("t")):
+            continue
+
+        likes = author = replies = ""
+        tr = a_tag.find_parent("tr")
+        if tr is not None:
+            tds = tr.find_all("td")
+            if tds:
+                # 点赞数：第 1 个 td 中的 <span class="s3">（如 <span class="s3">39</span>）
+                like_span = tds[0].find("span", class_="s3")
+                likes = like_span.get_text(strip=True) if like_span else tds[0].get_text(strip=True)
+            # 作者：<a href="/thread0806.php?fid=..." class="bl">阿东虫</a>
+            author_tag = tr.find("a", class_="bl")
+            if author_tag:
+                author = author_tag.get_text(strip=True)
+            # 回复数：第 4 个 td 的纯文本（如 17）
+            if len(tds) >= 4:
+                replies = tds[3].get_text(strip=True)
+
+        results.append((str(title), str(href), str(likes), str(author), str(replies)))
 
     return results
 
@@ -148,21 +181,38 @@ def save_to_sqlite(
     conn: sqlite3.Connection,
     fid: str,
     date: str,
-    rows: list[tuple[str, str]],
+    rows: list[tuple[str, str, str, str, str]],
     max_retries: int = 3,
 ) -> int:
     """带重试的批量写入 SQLite（处理多进程并发写入冲突）。
 
     连接已用 timeout=15 设置 busy_timeout（等锁最长 15 秒），绝大多数并发写冲突
     由 SQLite 内部等待消化；此处重试仅兜底极少数等锁超时仍失败的情况，
-    避免单次写入失败直接丢数据。返回实际插入行数（INSERT OR IGNORE 跳过已存在标题）。"""
-    now = datetime.now().isoformat()
-    data = [(fid, date, title, url, now) for title, url in rows]
+    避免单次写入失败直接丢数据。返回本次实际写入条数：title 已存在时覆盖更新
+    （upsert），新增与覆盖均计 1 条。
+
+    覆盖语义：首次插入时 update_at/update_date 为空，其余字段按提取数据写入；
+    重复标题写入时，除 title（主键）、date、created_at（首次插入时间）外，
+    fid/url/likes/author/replies/update_at/update_date 覆盖为本次新值
+    （update_at 为当前时间戳、update_date 为当前日期）。"""
+    now = datetime.now()
+    update_ts = now.isoformat()                      # 当前时间戳（如 2026-08-22T13:06:03.123456）
+    update_date = now.strftime("%Y-%m-%d")           # 当前日期（如 2026-08-22）
+    data = [
+        (fid, date, title, url, likes, author, replies, update_ts, update_ts, update_date)
+        for title, url, likes, author, replies in rows
+    ]
     for attempt in range(1, max_retries + 1):
         try:
             before = conn.total_changes
             _ = conn.executemany(
-                "INSERT OR IGNORE INTO posts (fid, date, title, url, created_at) VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO posts "
+                + "(fid, date, title, url, likes, author, replies, update_at, update_date, created_at) "
+                + "VALUES (?, ?, ?, ?, ?, ?, ?, '', '', ?) "
+                + "ON CONFLICT(title) DO UPDATE SET "
+                + "fid=excluded.fid, url=excluded.url, "
+                + "likes=excluded.likes, author=excluded.author, "
+                + "replies=excluded.replies, update_at=?, update_date=?",
                 data,
             )
             conn.commit()
@@ -178,7 +228,7 @@ def save_to_sqlite(
 def _flush_and_close(
     db_conn: sqlite3.Connection,
     csv_file: TextIO,
-    sqlite_buffer: list[tuple[str, str]],
+    sqlite_buffer: list[tuple[str, str, str, str, str]],
     fid: str,
     date: str,
 ) -> int:
@@ -211,13 +261,58 @@ def _flush_and_close(
     return inserted
 
 
-def main() -> None:
-    # --- 断点续写：读取上次进度 ---
-    last_page = get_last_page()
-    start_page = max(START_PAGE, last_page + 1)
+def _record_run(status: str, rows: int, db_rows: int, duration: int) -> None:
+    """把本次 scraper 单跑结果写入 SQLite 运行记录表。
 
-    if last_page > 0:
-        print(f"检测到[FID={FID}] 版块断点进度：已完成第 {last_page} 页，从第 {start_page} 页继续\n")
+    run_batch 批量启动子进程时通过环境变量 SCRAPER_RECORD_RUN=0 关闭本记录，
+    由 run_batch 统一汇总写入，避免同一批数据重复记录。
+    """
+    if os.environ.get("SCRAPER_RECORD_RUN", "1") != "1":
+        return
+    run_recorder.record_run(
+        datetime.now().strftime("%Y%m%d"),
+        "scraper",
+        status,
+        ok=1 if status == "ok" else 0,
+        fail=1 if status != "ok" else 0,
+        skip=0,
+        csv=rows,
+        sqlite=db_rows,
+        duration=duration,
+        sections=[
+            {
+                "fid": FID,
+                "name": f"版块{FID}",
+                "status": "ok" if status == "ok" else "fail",
+                "csv": rows,
+                "sqlite": db_rows,
+                "duration": duration,
+            }
+        ],
+    )
+    print(f"[FID={FID}] [入库] 运行记录已写入 SQLite（status={status}）")
+
+
+def main() -> None:
+    # 记录本次运行的起始时间（用于写入运行记录表的耗时字段）
+    start_time = time.time()
+
+    # --- 断点续写：读取上次进度 ---
+    if FORCE_RESTART:
+        # --restart：忽略断点，从起始页重跑；当天该版块已生成的 CSV/进度文件一并
+        # 删除重新生成，避免旧数据行与新数据行重复（删除留痕，随日志输出）
+        for _f in (OUTPUT_FILE, PROGRESS_FILE):
+            if os.path.exists(_f):
+                os.remove(_f)
+                print(f"[FID={FID}] [重跑] 已删除旧文件，重新生成: {_f}")
+        last_page = 0
+        start_page = START_PAGE
+        print(f"[FID={FID}] [重跑] 已指定 --restart，忽略断点进度，从第 {start_page} 页重新抓取\n")
+    else:
+        last_page = get_last_page()
+        start_page = max(START_PAGE, last_page + 1)
+        if last_page > 0:
+            print(f"检测到[FID={FID}] 版块断点进度：已完成第 {last_page} 页，从第 {start_page} 页继续\n")
 
     # --- 动态获取末页页码（同时复用第 1 页 HTML） ---
     end_page = END_PAGE  # 默认使用配置值
@@ -236,7 +331,26 @@ def main() -> None:
     total_pages = end_page - start_page + 1
     if total_pages <= 0:
         print(f"[FID={FID}] 版块所有页面已完成，无需重复抓取")
+        _record_run("ok", 0, 0, int(time.time() - start_time))
         return
+
+    # --- 实时运行记录：运行中创建 running 记录，逐页上报进度 ---
+    # 批量模式（run_batch 子进程）：环境变量 SCRAPER_RUN_ID 关联已创建的运行记录，
+    # 本脚本只负责更新自己版块的明细行（进度/条数/状态）；
+    # 单跑模式：自动创建 running 记录，结束时写最终汇总。
+    run_id = 0
+    _env_run_id = os.environ.get("SCRAPER_RUN_ID", "").strip()
+    if _env_run_id:
+        try:
+            run_id = int(_env_run_id)
+        except ValueError:
+            run_id = 0
+    elif os.environ.get("SCRAPER_RECORD_RUN", "1") == "1":
+        run_id = run_recorder.start_run(
+            datetime.now().strftime("%Y%m%d"),
+            "scraper",
+            [{"fid": FID, "name": f"版块{FID}", "total_pages": total_pages}],
+        )
 
     print(f"开始抓取[FID={FID}] 版块，共 {total_pages} 页（第 {start_page} ~ {end_page} 页）\n")
 
@@ -252,18 +366,34 @@ def main() -> None:
 
     # 判断是否需要写入 CSV 表头
     write_header = not os.path.exists(OUTPUT_FILE)
+    csv_header = ["标题", "地址", "点赞数", "作者", "回复数"]
+    if not write_header:
+        # 校验已有 CSV 表头是否匹配当前字段，避免新旧结构混写造成列错位
+        try:
+            with open(OUTPUT_FILE, "r", encoding="utf-8-sig", errors="replace") as _f:
+                first_line = _f.readline().strip()
+            if first_line != ",".join(csv_header):
+                print(
+                    f"[FID={FID}] [警告] 已有 CSV 表头与当前字段不一致: {first_line!r}，"
+                    + f"后续追加将按新表头 {','.join(csv_header)} 写入，可能出现列错位；"
+                    + f"如需完整数据建议删除 {OUTPUT_FILE} 后重新抓取",
+                    file=sys.stderr,
+                )
+        except OSError as e:
+            print(f"[FID={FID}] [警告] 无法读取已有 CSV 表头: {e}", file=sys.stderr)
 
     # 以追加模式打开 CSV，解析一条写一条
     with open(OUTPUT_FILE, "a", newline="", encoding="utf-8-sig") as f:
         writer = csv.writer(f)
         if write_header:
-            writer.writerow(["标题", "地址"])
+            writer.writerow(csv_header)
 
         batch_count = 0
         total_rows = 0
-        db_rows = 0  # SQLite 实际插入行数（去重后）
+        db_rows = 0  # SQLite 实际写入条数（新增或覆盖）
         last_saved_page = start_page - 1  # 上一次已成功写入的页码
-        sqlite_buffer: list[tuple[str, str]] = []  # SQLite 批量写入缓冲区
+        sqlite_buffer: list[tuple[str, str, str, str, str]] = []  # SQLite 批量写入缓冲区
+        run_status = "ok"  # ok / cancelled / error，用于运行记录落库
 
         try:
             consecutive_failures = 0
@@ -281,21 +411,24 @@ def main() -> None:
 
                     # 补全 URL 并写入 CSV：链接拼接使用公开域名（PUBLIC_URL），
                     # 保证入库链接离开本机仍可访问；本地代理 127.0.0.1:1024 仅用于抓取
-                    for title, href in links:
+                    for title, href, likes, author, replies in links:
                         full_url = href if href.startswith("http") else f"{PUBLIC_URL}{href}"
-                        writer.writerow([title, full_url])
-                        sqlite_buffer.append((title, full_url))
+                        writer.writerow([title, full_url, likes, author, replies])
+                        sqlite_buffer.append((title, full_url, likes, author, replies))
                         total_rows += 1
 
                     # SQLite 批量写入：积累到阈值时一次性提交
                     if len(sqlite_buffer) >= SQLITE_BATCH_ROWS:
                         db_rows += save_to_sqlite(db_conn, FID, today_str, sqlite_buffer)
-                        print(f"[FID={FID}] 版块[已保存] 前 {page} 页数据SQLite 实际入库 {db_rows} 条（标题去重后）\n")
+                        print(f"[FID={FID}] 版块[已保存] 前 {page} 页数据SQLite 实际入库 {db_rows} 条（标题重复已覆盖更新）\n")
                         sqlite_buffer.clear()
 
                     # 数据已写入 CSV 缓冲区，更新已保存页码
                     last_saved_page = page
                     save_progress(page)
+                    # 实时上报版块进度（批量/单跑共用），失败页不推进进度
+                    if run_id:
+                        run_recorder.update_section(run_id, FID, current_page=page, total_pages=total_pages)
                 else:
                     # 重试后仍失败：不推进进度，下次运行会重抓该页，避免漏数据
                     consecutive_failures += 1
@@ -316,8 +449,14 @@ def main() -> None:
                     time.sleep(REQUEST_INTERVAL)
 
         except KeyboardInterrupt:
+            run_status = "cancelled"
             print("\n[中断] 用户手动终止 (Ctrl+C)")
+        except SystemExit:
+            # BLOCKED_TEXT 权限拦截等场景 sys.exit(1)：记录为 error 后继续向外抛出
+            run_status = "error"
+            raise
         except Exception as e:
+            run_status = "error"
             print(f"\n[异常] 程序发生错误: {e}", file=sys.stderr)
             traceback.print_exc()
         finally:
@@ -326,10 +465,39 @@ def main() -> None:
             # 使用 last_saved_page（实际写入成功的页码），而非发生异常时的 current_page
             save_progress(last_saved_page)
             print(f"\n[FID={FID}] 版块[已保存] 共写入 {total_rows} 条数据到 {OUTPUT_FILE}（进度至第 {last_saved_page} 页）")
-            print(f"[FID={FID}] 版块 SQLite 实际入库 {db_rows} 条（标题去重后）")
+            print(f"[FID={FID}] 版块 SQLite 实际入库 {db_rows} 条（标题重复已覆盖更新）")
             # 机器汇总行：raw 模式不加时间戳，保持可解析格式
             with file_logger.raw():
                 print(f"__SUMMARY__ fid={FID} rows={total_rows} db_rows={db_rows} pages={last_saved_page}")
+            # 运行记录落库：有 run_id 时更新版块明细并（单跑）写运行汇总；
+            # 否则退回原一次性记录（仅单跑且无可用记录时触发）
+            _elapsed = int(time.time() - start_time)
+            if run_id:
+                run_recorder.update_section(
+                    run_id,
+                    FID,
+                    status="ok" if run_status == "ok" else "fail",
+                    current_page=last_saved_page,
+                    total_pages=total_pages,
+                    csv=total_rows,
+                    sqlite=db_rows,
+                    duration=_elapsed,
+                )
+                # 单跑模式：记录由本脚本创建，结束运行并写汇总；
+                # 批量模式由 run_batch 统一汇总，此处不重复写入
+                if os.environ.get("SCRAPER_RECORD_RUN", "1") == "1":
+                    run_recorder.finish_run(
+                        run_id,
+                        run_status,
+                        ok=1 if run_status == "ok" else 0,
+                        fail=1 if run_status == "error" else 0,
+                        skip=0,
+                        csv=total_rows,
+                        sqlite=db_rows,
+                        duration=_elapsed,
+                    )
+            else:
+                _record_run(run_status, total_rows, db_rows, _elapsed)
 
 
 def _apply_cli_args() -> None:
@@ -342,22 +510,27 @@ def _apply_cli_args() -> None:
     - --public <域名>：指定入库链接使用的公开域名根地址（仅影响写入数据库/CSV 的
       链接拼接，不影响抓取根地址；run_batch 始终以 --public 传入真实域名，
       避免本地代理地址 127.0.0.1:1024 入库）
+    - --restart：忽略断点进度，从起始页强制重跑；当天该版块已生成的 CSV/进度文件
+      会被删除重新生成（适用于提示"所有页面已完成，无需重复抓取"后仍想重抓的场景）
     示例:
       python scraper.py 2
       python scraper.py 2 1 50
       python scraper.py 2 https://xx.com
       python scraper.py 2 1 100 https://xx.com
       python scraper.py 2 --public https://xx.com
+      python scraper.py 2 --restart
     """
-    global FID, START_PAGE, END_PAGE, ROOT_URL, PUBLIC_URL, BASE_URL, OUTPUT_DIR, OUTPUT_FILE, PROGRESS_FILE
+    global FID, START_PAGE, END_PAGE, ROOT_URL, PUBLIC_URL, BASE_URL, OUTPUT_DIR, OUTPUT_FILE, PROGRESS_FILE, FORCE_RESTART
+    FORCE_RESTART = False  # 每次解析前重置，仅 --restart 会置为 True  # pyright: ignore[reportConstantRedefinition]
     args = sys.argv[1:]
     if not args:
-        print("用法: python scraper.py <版块ID> [起始页] [结束页] [根地址] [--public <域名>]")
+        print("用法: python scraper.py <版块ID> [起始页] [结束页] [根地址] [--public <域名>] [--restart]")
         print("示例: python scraper.py 2                 # 抓取版块2，第1页~第10页")
         print("      python scraper.py 2 1 50            # 抓取版块2，第1页~第50页")
         print("      python scraper.py 2 https://xx.com  # 仅指定实际域名（根地址），页数用默认值")
         print("      python scraper.py 2 1 100 https://xx.com  # 指定域名 + 抓取范围")
         print("      python scraper.py 2 --public https://xx.com  # 入库链接用该公开域名")
+        print("      python scraper.py 2 --restart       # 忽略断点，强制重跑该版块")
         sys.exit(1)
     FID = args[0]  # pyright: ignore[reportConstantRedefinition]
     page_args: list[int] = []
@@ -372,6 +545,10 @@ def _apply_cli_args() -> None:
                 sys.exit(1)
             public_url = args[i + 1]
             i += 2
+        elif arg == "--restart":
+            FORCE_RESTART = True  # pyright: ignore[reportConstantRedefinition]
+            print("[配置] 已指定 --restart：忽略断点进度，强制从头重跑")
+            i += 1
         elif arg.lower().startswith(("http://", "https://")):
             if root_url is not None:
                 print(f"[错误] 根地址重复指定: {root_url} 与 {arg}", file=sys.stderr)
@@ -382,8 +559,8 @@ def _apply_cli_args() -> None:
             try:
                 page_args.append(int(arg))
             except ValueError:
-                print(f"[错误] 无法识别的参数: {arg!r}（应为数字页码、http(s) 根地址或 --public <域名>）", file=sys.stderr)
-                print("用法: python scraper.py <版块ID> [起始页] [结束页] [根地址] [--public <域名>]", file=sys.stderr)
+                print(f"[错误] 无法识别的参数: {arg!r}（应为数字页码、http(s) 根地址、--public <域名> 或 --restart）", file=sys.stderr)
+                print("用法: python scraper.py <版块ID> [起始页] [结束页] [根地址] [--public <域名>] [--restart]", file=sys.stderr)
                 sys.exit(1)
             i += 1
     if page_args:
