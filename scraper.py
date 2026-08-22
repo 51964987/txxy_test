@@ -188,7 +188,6 @@ def save_to_sqlite(
 
     连接已用 timeout=15 设置 busy_timeout（等锁最长 15 秒），绝大多数并发写冲突
     由 SQLite 内部等待消化；此处重试仅兜底极少数等锁超时仍失败的情况，
-<<<<<<< HEAD
     避免单次写入失败直接丢数据。返回本次实际写入条数：title 已存在时覆盖更新
     （upsert），新增与覆盖均计 1 条。
 
@@ -203,11 +202,6 @@ def save_to_sqlite(
         (fid, date, title, url, likes, author, replies, update_ts, update_ts, update_date)
         for title, url, likes, author, replies in rows
     ]
-=======
-    避免单次写入失败直接丢数据。返回实际插入行数（INSERT OR IGNORE 跳过已存在标题）。"""
-    now = datetime.now().isoformat()
-    data = [(fid, date, title, url, now) for title, url in rows]
->>>>>>> b3259b4f0e1b255d55849d54052645e782ceef8e
     for attempt in range(1, max_retries + 1):
         try:
             before = conn.total_changes
@@ -417,17 +411,10 @@ def main() -> None:
 
                     # 补全 URL 并写入 CSV：链接拼接使用公开域名（PUBLIC_URL），
                     # 保证入库链接离开本机仍可访问；本地代理 127.0.0.1:1024 仅用于抓取
-<<<<<<< HEAD
                     for title, href, likes, author, replies in links:
                         full_url = href if href.startswith("http") else f"{PUBLIC_URL}{href}"
                         writer.writerow([title, full_url, likes, author, replies])
                         sqlite_buffer.append((title, full_url, likes, author, replies))
-=======
-                    for title, href in links:
-                        full_url = href if href.startswith("http") else f"{PUBLIC_URL}{href}"
-                        writer.writerow([title, full_url])
-                        sqlite_buffer.append((title, full_url))
->>>>>>> b3259b4f0e1b255d55849d54052645e782ceef8e
                         total_rows += 1
 
                     # SQLite 批量写入：积累到阈值时一次性提交
@@ -523,18 +510,14 @@ def _apply_cli_args() -> None:
     - --public <域名>：指定入库链接使用的公开域名根地址（仅影响写入数据库/CSV 的
       链接拼接，不影响抓取根地址；run_batch 始终以 --public 传入真实域名，
       避免本地代理地址 127.0.0.1:1024 入库）
-<<<<<<< HEAD
     - --restart：忽略断点进度，从起始页强制重跑；当天该版块已生成的 CSV/进度文件
       会被删除重新生成（适用于提示"所有页面已完成，无需重复抓取"后仍想重抓的场景）
-=======
->>>>>>> b3259b4f0e1b255d55849d54052645e782ceef8e
     示例:
       python scraper.py 2
       python scraper.py 2 1 50
       python scraper.py 2 https://xx.com
       python scraper.py 2 1 100 https://xx.com
       python scraper.py 2 --public https://xx.com
-<<<<<<< HEAD
       python scraper.py 2 --restart
     """
     global FID, START_PAGE, END_PAGE, ROOT_URL, PUBLIC_URL, BASE_URL, OUTPUT_DIR, OUTPUT_FILE, PROGRESS_FILE, FORCE_RESTART
@@ -542,22 +525,12 @@ def _apply_cli_args() -> None:
     args = sys.argv[1:]
     if not args:
         print("用法: python scraper.py <版块ID> [起始页] [结束页] [根地址] [--public <域名>] [--restart]")
-=======
-    """
-    global FID, START_PAGE, END_PAGE, ROOT_URL, PUBLIC_URL, BASE_URL, OUTPUT_DIR, OUTPUT_FILE, PROGRESS_FILE
-    args = sys.argv[1:]
-    if not args:
-        print("用法: python scraper.py <版块ID> [起始页] [结束页] [根地址] [--public <域名>]")
->>>>>>> b3259b4f0e1b255d55849d54052645e782ceef8e
         print("示例: python scraper.py 2                 # 抓取版块2，第1页~第10页")
         print("      python scraper.py 2 1 50            # 抓取版块2，第1页~第50页")
         print("      python scraper.py 2 https://xx.com  # 仅指定实际域名（根地址），页数用默认值")
         print("      python scraper.py 2 1 100 https://xx.com  # 指定域名 + 抓取范围")
         print("      python scraper.py 2 --public https://xx.com  # 入库链接用该公开域名")
-<<<<<<< HEAD
         print("      python scraper.py 2 --restart       # 忽略断点，强制重跑该版块")
-=======
->>>>>>> b3259b4f0e1b255d55849d54052645e782ceef8e
         sys.exit(1)
     FID = args[0]  # pyright: ignore[reportConstantRedefinition]
     page_args: list[int] = []
@@ -572,13 +545,10 @@ def _apply_cli_args() -> None:
                 sys.exit(1)
             public_url = args[i + 1]
             i += 2
-<<<<<<< HEAD
         elif arg == "--restart":
             FORCE_RESTART = True  # pyright: ignore[reportConstantRedefinition]
             print("[配置] 已指定 --restart：忽略断点进度，强制从头重跑")
             i += 1
-=======
->>>>>>> b3259b4f0e1b255d55849d54052645e782ceef8e
         elif arg.lower().startswith(("http://", "https://")):
             if root_url is not None:
                 print(f"[错误] 根地址重复指定: {root_url} 与 {arg}", file=sys.stderr)
@@ -589,13 +559,8 @@ def _apply_cli_args() -> None:
             try:
                 page_args.append(int(arg))
             except ValueError:
-<<<<<<< HEAD
                 print(f"[错误] 无法识别的参数: {arg!r}（应为数字页码、http(s) 根地址、--public <域名> 或 --restart）", file=sys.stderr)
                 print("用法: python scraper.py <版块ID> [起始页] [结束页] [根地址] [--public <域名>] [--restart]", file=sys.stderr)
-=======
-                print(f"[错误] 无法识别的参数: {arg!r}（应为数字页码、http(s) 根地址或 --public <域名>）", file=sys.stderr)
-                print("用法: python scraper.py <版块ID> [起始页] [结束页] [根地址] [--public <域名>]", file=sys.stderr)
->>>>>>> b3259b4f0e1b255d55849d54052645e782ceef8e
                 sys.exit(1)
             i += 1
     if page_args:
