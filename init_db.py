@@ -51,6 +51,11 @@ CREATE INDEX IF NOT EXISTS idx_posts_likes_expr ON posts(fid, CAST(likes AS INTE
 CREATE INDEX IF NOT EXISTS idx_posts_replies_expr ON posts(fid, CAST(replies AS INTEGER), date, created_at);
 CREATE INDEX IF NOT EXISTS idx_posts_author ON posts(author) WHERE author IS NOT NULL AND author <> '';
 CREATE INDEX IF NOT EXISTS idx_posts_created_at ON posts(created_at);
+-- 帖子浏览页优化：复合排序与全局热榜排序索引
+CREATE INDEX IF NOT EXISTS idx_posts_date_created ON posts(date DESC, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_posts_fid_date_created ON posts(fid, date DESC, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_posts_likes_num ON posts(CAST(likes AS INTEGER) DESC);
+CREATE INDEX IF NOT EXISTS idx_posts_replies_num ON posts(CAST(replies AS INTEGER) DESC);
 """
 
 # 运行记录表：run_batch / scraper 每次运行结束后写入，Web 端运行记录页读取展示。
