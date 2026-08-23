@@ -62,14 +62,9 @@ onMounted(async () => {
             <el-icon class="text-muted"><Timer /></el-icon>
             <span class="text-muted">{{ store.updatedAtText }}</span>
           </span>
-          <div class="auto-refresh-card">
-            <template v-if="store.enableAutoRefresh">
-              <span class="text-muted">自动刷新</span>
-              <el-switch v-model="store.autoRefresh" size="small" @change="onAutoChange" />
-            </template>
-            <el-button size="small" type="primary" :icon="RefreshRight" :loading="store.refreshing" @click="store.triggerRefresh()">
-              刷新
-            </el-button>
+          <div v-if="store.enableAutoRefresh" class="auto-refresh-card">
+            <span class="text-muted">自动刷新</span>
+            <el-switch v-model="store.autoRefresh" size="small" @change="onAutoChange" />
           </div>
         </div>
       </el-header>

@@ -18,6 +18,7 @@ import os
 import sqlite3
 import sys
 from datetime import datetime
+from typing import TypedDict
 
 # 数据库路径（与 scraper.py / init_db.py 共用 db/posts.db）
 DB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "db")
@@ -56,10 +57,32 @@ CREATE INDEX IF NOT EXISTS idx_run_sections_run_id ON run_sections(run_id);
 """
 
 
+class SectionInfo(TypedDict, total=False):
+    """版块明细项（所有键均可选，按场景提供）：
+
+    - start_run / scraper.py 启动时：{fid, name, total_pages?}
+    - 结束时：{fid, name, status, csv, sqlite, duration}
+    """
+    fid: str
+    name: str
+    status: str
+    total_pages: int
+    current_page: int
+    csv: int
+    sqlite: int
+    duration: int | None
+
+
 def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
     return conn.execute(
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)
     ).fetchone() is not None
+
+
+def _table_column_names(conn: sqlite3.Connection, table: str) -> set[str]:
+    """返回表的列名集合（PRAGMA table_info 每行第 2 列），用于结构检测。"""
+    rows: list[tuple[object, ...]] = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    return {str(row[1]) for row in rows}
 
 
 def _migrate_legacy(conn: sqlite3.Connection) -> None:
@@ -74,9 +97,9 @@ def _migrate_legacy(conn: sqlite3.Connection) -> None:
     """
     if not _table_exists(conn, "run_days"):
         return
-    cols = {r[1] for r in conn.execute("PRAGMA table_info(run_days)")}
+    cols = _table_column_names(conn, "run_days")
     if "id" not in cols:
-        conn.executescript(
+        _ = conn.executescript(
             """\
             CREATE TABLE run_days_new (
                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -102,9 +125,9 @@ def _migrate_legacy(conn: sqlite3.Connection) -> None:
         print("[迁移] run_days 已重建为自增 id 结构（每次运行一条，历史保留）", file=sys.stderr)
     if not _table_exists(conn, "run_sections"):
         return
-    scols = {r[1] for r in conn.execute("PRAGMA table_info(run_sections)")}
+    scols = _table_column_names(conn, "run_sections")
     if "run_id" not in scols:
-        conn.executescript(
+        _ = conn.executescript(
             """\
             CREATE TABLE run_sections_new (
                 id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -134,14 +157,14 @@ def _ensure_progress_columns(conn: sqlite3.Connection) -> None:
     """为旧 run_sections 表补齐实时进度列（幂等）。"""
     if not _table_exists(conn, "run_sections"):
         return
-    cols = {r[1] for r in conn.execute("PRAGMA table_info(run_sections)")}
+    cols = _table_column_names(conn, "run_sections")
     for name, ddl in (
         ("total_pages", "INTEGER NOT NULL DEFAULT 0"),
         ("current_page", "INTEGER NOT NULL DEFAULT 0"),
         ("progress", "INTEGER NOT NULL DEFAULT 0"),
     ):
         if name not in cols:
-            conn.execute(f"ALTER TABLE run_sections ADD COLUMN {name} {ddl}")
+            _ = conn.execute(f"ALTER TABLE run_sections ADD COLUMN {name} {ddl}")
             print(f"[迁移] run_sections 已补充列 {name}", file=sys.stderr)
 
 
@@ -155,14 +178,14 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     """
     _migrate_legacy(conn)
     _ensure_progress_columns(conn)
-    conn.executescript(_DDL)
+    _ = conn.executescript(_DDL)
 
 
 def _connect() -> sqlite3.Connection:
     """打开连接并确保两张表存在（幂等）"""
     os.makedirs(DB_DIR, exist_ok=True)
     conn = sqlite3.connect(DB_FILE, timeout=15)
-    conn.execute("PRAGMA busy_timeout = 15000")
+    _ = conn.execute("PRAGMA busy_timeout = 15000")
     ensure_schema(conn)
     return conn
 
@@ -170,7 +193,7 @@ def _connect() -> sqlite3.Connection:
 def start_run(
     run_date: str,
     source: str,
-    sections: list[dict],
+    sections: list[SectionInfo],
 ) -> int:
     """运行开始：创建一条 status=running 的记录及其版块明细，返回 run_days.id。
 
@@ -188,14 +211,17 @@ def start_run(
     try:
         cur = conn.execute(
             "INSERT INTO run_days(run_date, source, status, ok, fail, skip, csv, sqlite, duration, created_at, updated_at)"
-            " VALUES (?, ?, 'running', 0, 0, 0, 0, 0, NULL, ?, ?)",
+            + " VALUES (?, ?, 'running', 0, 0, 0, 0, 0, NULL, ?, ?)",
             (run_date, source, now, now),
         )
-        run_id = int(cur.lastrowid)
-        conn.executemany(
+        run_id = int(cur.lastrowid or 0)
+        _ = conn.executemany(
             "INSERT INTO run_sections(run_id, fid, name, status, csv, sqlite, duration, total_pages, current_page, progress)"
-            " VALUES (?, ?, ?, 'running', 0, 0, NULL, ?, 0, 0)",
-            [(run_id, s["fid"], s["name"], int(s.get("total_pages") or 0)) for s in sections],
+            + " VALUES (?, ?, ?, 'running', 0, 0, NULL, ?, 0, 0)",
+            [
+                (run_id, s.get("fid", ""), s.get("name", ""), int(s.get("total_pages") or 0))
+                for s in sections
+            ],
         )
         conn.commit()
     except Exception as e:  # 记录失败不应影响抓取主流程
@@ -227,7 +253,7 @@ def update_section(
     if not run_id:
         return
     sets: list[str] = []
-    args: list = []
+    args: list[object] = []
     if status is not None:
         sets.append("status = ?")
         args.append(status)
@@ -258,7 +284,7 @@ def update_section(
     conn = None
     try:
         conn = _connect()
-        conn.execute(
+        _ = conn.execute(
             "UPDATE run_sections SET " + ", ".join(sets) + " WHERE run_id = ? AND fid = ?",
             args,
         )
@@ -288,9 +314,9 @@ def finish_run(
     conn = None
     try:
         conn = _connect()
-        conn.execute(
+        _ = conn.execute(
             "UPDATE run_days SET status = ?, ok = ?, fail = ?, skip = ?, csv = ?, sqlite = ?, duration = ?, updated_at = ?"
-            " WHERE id = ?",
+            + " WHERE id = ?",
             (status, int(ok), int(fail), int(skip), int(csv), int(sqlite), duration, now, run_id),
         )
         conn.commit()
@@ -312,7 +338,7 @@ def record_run(
     csv: int = 0,
     sqlite: int = 0,
     duration: int | None = None,
-    sections: list[dict],
+    sections: list[SectionInfo],
 ) -> int:
     """一次性追加一条运行记录及其版块明细，返回本次运行的 run_days.id。
 

@@ -3,6 +3,7 @@
 - 遍历所有版块，每个版块启动一个独立进程执行 scraper.py
 - 可配置并发数，错开启动时间防止反爬
 - 可选入参 USE_LOCAL_PROXY：python run_batch.py [true|false]（不传则用配置区默认值）
+- 可选入参 --restart：忽略断点进度，强制重跑所有版块（透传给各 scraper.py 子进程）
 """
 import socket
 import subprocess
@@ -16,6 +17,7 @@ from datetime import datetime
 
 import file_logger
 import run_recorder
+from run_recorder import SectionInfo
 
 # ============ 配置区域 ============
 
@@ -57,6 +59,10 @@ SCRAPER_SCRIPT = os.path.join(os.path.dirname(__file__), "scraper.py")
 USE_LOCAL_PROXY = True
 REMOTE_ROOT_URL = os.environ.get("REMOTE_ROOT_URL", "http://127.0.0.1:1024")  # 实际可访问的域名（根地址），也是入库链接使用的公开域名，按需修改；支持环境变量覆盖（Docker 部署经 .env 统一管理）
 
+# 是否忽略断点进度强制重跑（--restart）：True 时所有版块从第 1 页重新抓取，
+# 当天该版块已生成的 CSV/进度文件会被删除重新生成（透传给各 scraper.py 子进程，见 scraper.py）
+FORCE_RESTART = False
+
 # ---- 本地 web 服务（端口守护，仅 USE_LOCAL_PROXY=True 时生效） ----
 # scraper.py 抓取的站点由本机 web.exe 提供（127.0.0.1:1024）。
 # run_batch 运行前先确保端口可用：未监听则自动启动 web.exe，全部任务结束后再关闭。
@@ -91,19 +97,29 @@ def _parse_bool(value: str) -> bool | None:
 
 def _apply_cli_args() -> None:
     """
-    处理命令行可选参数：python run_batch.py [USE_LOCAL_PROXY]
-    - 传入时按传入的实际值覆盖顶部配置（如 python run_batch.py false 表示关闭本地代理）；
-    - 不传时使用配置区默认值 USE_LOCAL_PROXY。
+    处理命令行可选参数：python run_batch.py [USE_LOCAL_PROXY] [--restart]
+    - USE_LOCAL_PROXY：传入时按传入的实际值覆盖顶部配置（如 python run_batch.py false 表示关闭本地代理）；
+      不传时使用配置区默认值。与 --restart 混用时位置不限。
+    - --restart：忽略断点进度，强制重跑所有版块（透传给各 scraper.py 子进程，
+      各版块当天已生成的 CSV/进度文件会被删除重新生成）。
     """
-    global USE_LOCAL_PROXY
-    if len(sys.argv) >= 2:
-        parsed = _parse_bool(sys.argv[1])
+    global USE_LOCAL_PROXY, FORCE_RESTART
+    FORCE_RESTART = False  # 每次解析前重置，仅 --restart 会置为 True  # pyright: ignore[reportConstantRedefinition]
+    for arg in sys.argv[1:]:
+        if arg == "--restart":
+            FORCE_RESTART = True  # pyright: ignore[reportConstantRedefinition]
+            log("[配置] 已指定 --restart：忽略断点进度，强制重跑所有版块")
+            continue
+        parsed = _parse_bool(arg)
         if parsed is None:
             print(
-                f"无效的 USE_LOCAL_PROXY 参数: {sys.argv[1]!r}（可选值: true/1/yes/on 或 false/0/no/off）",
+                f"无效的 USE_LOCAL_PROXY 参数: {arg!r}（可选值: true/1/yes/on 或 false/0/no/off，或 --restart）",
                 file=sys.stderr,
             )
-            print("用法: python run_batch.py [USE_LOCAL_PROXY]   # 如: python run_batch.py false", file=sys.stderr)
+            print(
+                "用法: python run_batch.py [USE_LOCAL_PROXY] [--restart]   # 如: python run_batch.py false --restart",
+                file=sys.stderr,
+            )
             sys.exit(1)
         USE_LOCAL_PROXY = parsed  # pyright: ignore[reportConstantRedefinition]
         log(f"[配置] 命令行指定 USE_LOCAL_PROXY={USE_LOCAL_PROXY}")
@@ -284,7 +300,8 @@ def run_scraper(fid: str, name: str, run_id: int = 0) -> tuple[str, str, bool, i
     返回 (fid, name, 是否成功, CSV写入行数, SQLite入库行数, 耗时秒数)
     run_id: 本次运行记录 ID（>0 时通过环境变量传给子进程，供其逐页上报进度）
     """
-    log(f"启动 [{fid}] {name}（访问根地址: {effective_root_url()}）")
+    restart_note = "，--restart 强制重跑" if FORCE_RESTART else ""
+    log(f"启动 [{fid}] {name}（访问根地址: {effective_root_url()}{restart_note}）")
     start = time.time()
     rows = 0
     db_rows = 0
@@ -298,6 +315,9 @@ def run_scraper(fid: str, name: str, run_id: int = 0) -> tuple[str, str, bool, i
             # 本地代理关闭时，再向 scraper.py 传递实际域名根地址（http(s) 开头，位置不限），
             # 使其直接访问该域名抓取
             cmd.append(REMOTE_ROOT_URL)
+        if FORCE_RESTART:
+            # --restart：忽略断点进度，强制重跑该版块（scraper.py 会删除当天 CSV/进度文件后从头抓取）
+            cmd.append("--restart")
         # 批量运行时由本脚本统一汇总写运行记录，关闭子进程各自的落库，避免重复记录；
         # 同时把 run_id 传给子进程，子进程实时更新自己版块的进度明细
         env = {**os.environ, "SCRAPER_RECORD_RUN": "0"}
@@ -382,6 +402,8 @@ def main() -> None:
 
     total = len(SECTIONS)
     print(f"共 {total} 个版块，并发数: {MAX_WORKERS}，启动间隔: {STAGGER_DELAY}s\n")
+    if FORCE_RESTART:
+        log("[配置] 已指定 --restart：忽略断点进度，所有版块强制从头重跑（当天 CSV/进度文件将重新生成）")
 
     # 运行开始：创建 running 记录，供 Web 端实时展示状态与进度
     # （sections 的 total_pages 由各子进程启动后自行上报真实值，此处填 0 待补充）
@@ -504,7 +526,7 @@ def main() -> None:
                     + f" / 未执行 {skipped_count}，状态 {batch_status}）"
                 )
             else:
-                sections: list[dict] = []
+                sections: list[SectionInfo] = []
                 for fid, name, ok, rows, db_rows, duration in results:
                     sections.append(
                         {
@@ -521,7 +543,7 @@ def main() -> None:
                         sections.append(
                             {"fid": fid, "name": name, "status": "skip", "csv": 0, "sqlite": 0, "duration": None}
                         )
-                run_recorder.record_run(
+                _ = run_recorder.record_run(
                     datetime.now().strftime("%Y%m%d"),
                     "run_batch",
                     batch_status,

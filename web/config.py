@@ -26,7 +26,7 @@ LOCAL_PROXY_PREFIX = "http://127.0.0.1:1024"
 HOST = os.environ.get("TXXY_WEB_HOST", "127.0.0.1")
 PORT = int(os.environ.get("TXXY_WEB_PORT", "8088"))
 
-# 数据总览【自动刷新】总开关：当前默认关闭（仅保留手动刷新），
+# 数据总览【自动刷新】总开关：当前默认关闭（Header 不显示自动刷新开关、不启动轮询），
 # 需要恢复时设置环境变量 TXXY_ENABLE_AUTO_REFRESH=1（或改为 True）。
 # 前端 /api/config 读取该值，为 False 时不显示自动刷新开关、不启动轮询。
 ENABLE_AUTO_REFRESH = os.environ.get("TXXY_ENABLE_AUTO_REFRESH", "0").strip().lower() in ("1", "true", "yes", "on")

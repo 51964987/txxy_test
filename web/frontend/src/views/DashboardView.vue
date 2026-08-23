@@ -95,7 +95,6 @@ const kpiSub = computed(() => {
 
 async function load(initial = false) {
   if (initial) loading.value = true
-  store.refreshing = true
   try {
     const [o, t, f, r] = await Promise.all([
       api.overview(),
@@ -114,7 +113,6 @@ async function load(initial = false) {
     ElMessage.error(`加载总览数据失败: ${(e as Error).message}`)
   } finally {
     loading.value = false
-    store.refreshing = false
   }
 }
 
@@ -287,15 +285,9 @@ function syncAutoRefresh() {
   }
 }
 
-// Header 刷新按钮 / 开关通过 store 触发，保持原有逻辑
-function onRefresh() {
-  load(false)
-}
-
 onMounted(() => {
   load(true)
   syncAutoRefresh()
-  store.registerRefresh(onRefresh)
   store.registerAutoChange(syncAutoRefresh)
   window.addEventListener('resize', onResize)
 })
@@ -305,7 +297,6 @@ onBeforeUnmount(() => {
     clearInterval(refreshTimer)
     refreshTimer = null
   }
-  store.registerRefresh(null)
   store.registerAutoChange(null)
   window.removeEventListener('resize', onResize)
   trendChart.value?.dispose()

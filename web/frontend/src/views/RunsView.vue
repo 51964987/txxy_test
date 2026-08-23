@@ -9,8 +9,8 @@ const detailLoading = ref(false)
 const current = ref<RunDetail | null>(null)
 const activeDir = ref('')
 
-/** 分页：每页 10 条 */
-const PAGE_SIZE = 10
+/** 分页：每页 5 条 */
+const PAGE_SIZE = 5
 const currentPage = ref(1)
 
 /** 当前页展示的运行记录（按日期倒序全量切片） */
@@ -140,7 +140,7 @@ onBeforeUnmount(() => {
           每次运行一条、历史保留，
           同一天多次运行会分别展示，不受日志清理策略影响；
           改动前仅留日志的历史记录会回退解析 <code>outputs/&lt;日期&gt;/</code> 的日志展示。
-          记录超过 10 条时自动分页，每页 10 条。
+          记录超过 5 条时自动分页，每页 5 条。
         </span>
       </div>
 
