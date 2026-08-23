@@ -1,0 +1,2 @@
+# 每日 01:00 全量抓取; false = 关闭本地代理, 直连 REMOTE_ROOT_URL
+0 1 * * * root cd /app && python -u run_batch.py false >> /proc/1/fd/1 2>&1

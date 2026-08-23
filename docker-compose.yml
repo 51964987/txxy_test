@@ -1,0 +1,25 @@
+services:
+  web:
+    build: .
+    command: ["bash", "docker/entrypoint.sh"]
+    ports:
+      - "18088:8088"            # 环境A 若本地 8088 仍被占用, 改如 "18088:8088"
+    env_file: .env
+    volumes:
+      - ./db:/app/db                  # bind mount: 环境A 即共用本地 db/posts.db
+      - ./outputs:/app/outputs
+      - ./downloads:/app/downloads
+    restart: unless-stopped
+
+  cron:
+    build: .
+    command: ["bash", "docker/entrypoint_cron.sh"]
+    env_file: .env
+    volumes:
+      - ./db:/app/db
+      - ./outputs:/app/outputs
+      - ./downloads:/app/downloads
+    restart: unless-stopped
+
+# 说明: 数据目录统一 bind mount 宿主机 ./db ./outputs ./downloads, 无需命名卷声明;
+# 若某目录想改用命名卷, 改回 "txxy_xxx:/app/xxx" 并在下方 volumes 段声明。

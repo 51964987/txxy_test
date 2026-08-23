@@ -55,7 +55,7 @@ SCRAPER_SCRIPT = os.path.join(os.path.dirname(__file__), "scraper.py")
 # 无论本地代理开关如何，写入数据库/CSV 的链接都拼接该真实域名，而不是本机
 # 才能访问的 127.0.0.1:1024。
 USE_LOCAL_PROXY = True
-REMOTE_ROOT_URL = "127.0.0.1:1024"  # 实际可访问的域名（根地址），也是入库链接使用的公开域名，按需修改
+REMOTE_ROOT_URL = os.environ.get("REMOTE_ROOT_URL", "http://127.0.0.1:1024")  # 实际可访问的域名（根地址），也是入库链接使用的公开域名，按需修改；支持环境变量覆盖（Docker 部署经 .env 统一管理）
 
 # ---- 本地 web 服务（端口守护，仅 USE_LOCAL_PROXY=True 时生效） ----
 # scraper.py 抓取的站点由本机 web.exe 提供（127.0.0.1:1024）。
