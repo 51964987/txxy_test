@@ -60,6 +60,9 @@ export interface Overview {
   today_str: string
   total_users: number
   active_users: number
+}
+
+export interface Boards {
   top_likes: BoardTop[]
   top_replies: BoardTop[]
 }
@@ -156,6 +159,7 @@ export interface Resources {
 export const api = {
   config: () => get<AppConfig>('/config'),
   overview: () => get<Overview>('/stats/overview'),
+  boards: () => get<Boards>('/stats/boards'),
   trend: (days: number) => get<TrendPoint[]>('/stats/trend', { days }),
   fidDist: () => get<FidDistItem[]>('/stats/fid_dist'),
   recent: (limit = 10) => get<Post[]>('/stats/recent', { limit }),

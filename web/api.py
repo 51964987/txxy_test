@@ -50,21 +50,38 @@ def _build_filters(fid, date_from, date_to, q):
     return (" AND ".join(where) if where else "1=1"), params
 
 
+def _as_int(value: object) -> int:
+    """模拟 SQLite CAST(text AS INTEGER)：解析为数字（小数截断），失败返回 0。"""
+    try:
+        return int(float(str(value)))
+    except (TypeError, ValueError):
+        return 0
+
+
 def _board_top(field: str) -> list[dict]:
     """每个版块该指标（likes/replies）最高的一条记录。
 
-    用 ROW_NUMBER() OVER (PARTITION BY fid) 取每版块第 1 名，
-    并列时按 date / created_at 倒序取最新一条，保证每版块唯一。
+    方案 B：改为 per-fid 循环 + ORDER BY ... LIMIT 1，命中
+    idx_posts_<field>_expr 表达式索引（(fid, CAST(field AS INTEGER), date, created_at)），
+    避免窗口函数对全表物化排序；并列时按 date / created_at 倒序取最新一条。
+    全部查询复用同一连接，减少冷连接开销。
     """
-    rows = db.query(
-        "SELECT fid, title, url, "
-        + f"{field} AS value FROM ("
-        + f" SELECT fid, title, url, {field},"
-        + " ROW_NUMBER() OVER (PARTITION BY fid ORDER BY"
-        + f" CAST({field} AS INTEGER) DESC, date DESC, created_at DESC) AS rn"
-        + f" FROM posts WHERE {field} IS NOT NULL AND {field} <> ''"
-        + ") WHERE rn = 1 ORDER BY CAST(value AS INTEGER) DESC, fid"
-    )
+    rows: list[dict] = []
+    conn = db.open_conn()
+    try:
+        for fid in (r["fid"] for r in conn.execute("SELECT DISTINCT fid FROM posts ORDER BY fid")):
+            rows.extend(
+                dict(r)
+                for r in conn.execute(
+                    "SELECT fid, title, url, " + field + " AS value FROM posts"
+                    " WHERE fid = ? AND " + field + " IS NOT NULL AND " + field + " <> ''"
+                    " ORDER BY CAST(" + field + " AS INTEGER) DESC, date DESC, created_at DESC LIMIT 1",
+                    (fid,),
+                )
+            )
+    finally:
+        conn.close()
+    rows.sort(key=lambda r: (-_as_int(r["value"]), r["fid"] or ""))
     return [
         {
             "fid": r["fid"],
@@ -121,11 +138,19 @@ def stats_overview():
             "today_str": today,
             "total_users": total_users,
             "active_users": active_users,
-            "top_likes": _board_top("likes"),
-            "top_replies": _board_top("replies"),
         }
 
-    return db.cached("overview", _calc)
+    return db.cached("overview_v2", _calc)
+
+
+@router.get("/stats/boards")
+def stats_boards():
+    """各版块点赞 / 回复最高帖（方案 C：前端热门榜区块懒加载时单独请求）。"""
+
+    def _calc():
+        return {"top_likes": _board_top("likes"), "top_replies": _board_top("replies")}
+
+    return db.cached("boards", _calc)
 
 
 @router.get("/stats/trend")

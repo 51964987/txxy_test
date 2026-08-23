@@ -45,6 +45,12 @@ CREATE TABLE IF NOT EXISTS posts (
 CREATE INDEX IF NOT EXISTS idx_posts_fid ON posts(fid);
 CREATE INDEX IF NOT EXISTS idx_posts_date ON posts(date);
 CREATE INDEX IF NOT EXISTS idx_posts_fid_date ON posts(fid, date);
+-- 性能优化（数据总览页）：支撑 per-fid 热门榜 ORDER BY CAST(...) DESC ... LIMIT 1，
+-- 避免窗口函数全表物化排序；author 部分索引加速 COUNT(DISTINCT author)；created_at 加速 MAX()/排序
+CREATE INDEX IF NOT EXISTS idx_posts_likes_expr ON posts(fid, CAST(likes AS INTEGER), date, created_at);
+CREATE INDEX IF NOT EXISTS idx_posts_replies_expr ON posts(fid, CAST(replies AS INTEGER), date, created_at);
+CREATE INDEX IF NOT EXISTS idx_posts_author ON posts(author) WHERE author IS NOT NULL AND author <> '';
+CREATE INDEX IF NOT EXISTS idx_posts_created_at ON posts(created_at);
 """
 
 # 运行记录表：run_batch / scraper 每次运行结束后写入，Web 端运行记录页读取展示。
