@@ -19,7 +19,6 @@ OUTPUTS_DIR = Path(os.environ.get("OUTPUTS_DIR", str(BASE_DIR / "outputs")))
 DOWNLOADS_DIR = Path(os.environ.get("DOWNLOADS_DIR", str(BASE_DIR / "downloads")))
 
 # 公开域名：展示层 URL 归一化用，与 run_batch.REMOTE_ROOT_URL 保持一致
-#PUBLIC_ROOT = os.environ.get("PUBLIC_ROOT", "https://txxy.com").rstrip("/")
 PUBLIC_ROOT = os.environ.get("PUBLIC_ROOT", "http://127.0.0.1:1024").rstrip("/")
 # 旧数据中可能出现的本地代理前缀（--public 修复前入库）
 LOCAL_PROXY_PREFIX = "http://127.0.0.1:1024"

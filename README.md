@@ -104,11 +104,7 @@ python run_batch.py true       # 可选入参：本次强制开启本地代理�
 ### 3. 单版块抓取
 
 ```bash
-<<<<<<< HEAD
 python scraper.py <版块ID> [起始页] [结束页] [根地址] [--public <域名>] [--restart]
-=======
-python scraper.py <版块ID> [起始页] [结束页] [根地址] [--public <域名>]
->>>>>>> b3259b4f0e1b255d55849d54052645e782ceef8e
 ```
 
 示例：
@@ -119,18 +115,12 @@ python scraper.py 7 1 50            # 抓取版块 7，第 1 ~ 50 页
 python scraper.py 2 https://xx.com  # 仅指定实际域名（根地址），页数取默认值
 python scraper.py 2 1 100 https://xx.com  # 指定实际域名（根地址）+ 抓取范围，绕过本地 1024 端口
 python scraper.py 2 --public https://xx.com  # 抓取走默认根地址，入库链接改用该公开域名
-<<<<<<< HEAD
 python scraper.py 2 --restart       # 忽略断点进度，强制重跑（提示"所有页面已完成"时用）
-=======
->>>>>>> b3259b4f0e1b255d55849d54052645e782ceef8e
 ```
 
 - 版块 ID 为**必填**参数，`[起始页]` / `[结束页]` 可选（数字参数依次识别），缺省取顶部配置区 `START_PAGE` / `END_PAGE`；`[根地址]` 可选且**位置不限**（http/https 开头即识别为根地址），传入实际域名（如 `https://xx.com`）时覆盖默认的本地代理根地址，`BASE_URL` 与抓取请求均基于该域名（`run_batch.py` 关闭本地代理开关后会自动以 `python scraper.py <版块ID> <根地址>` 的形式传入）；
 - `--public <域名>`（可选）：指定**入库链接**使用的公开域名根地址，仅影响写入数据库/CSV 的链接拼接，不影响抓取根地址；默认与根地址相同。本地代理开启时若不传，入库链接会带 `127.0.0.1:1024`（离开本机不可访问），因此 `run_batch.py` 始终自动以 `--public <REMOTE_ROOT_URL>` 传入真实域名；
-<<<<<<< HEAD
 - `--restart`（可选）：忽略断点进度，从起始页强制重跑；会先删除当天该版块已生成的 CSV/进度文件再重新抓取（删除有日志留痕），适用于提示"版块所有页面已完成，无需重复抓取"后仍想重抓的场景；与 `--public`、页码参数可自由组合；
-=======
->>>>>>> b3259b4f0e1b255d55849d54052645e782ceef8e
 - 顶部配置区可调整 `REQUEST_INTERVAL`（请求间隔）、`AUTO_DETECT_END_PAGE`（动态获取末页）等；
 - 断点续写：进度写入 `*_progress.txt`，重新运行会从上次完成的页码继续；
 - 请求重试：网络异常（连接拒绝/超时）与 `408/429/5xx` 状态码按退避递增重试，第 N 次重试等待 `RETRY_BASE_DELAY`×N 秒，最多 `REQUEST_MAX_RETRIES` 次（默认 3）；其它 `4xx` 确定性失败不重试直接跳过；
@@ -261,11 +251,7 @@ schtasks /Delete /TN "txxy_daily_batch" /F
 
 ## 数据说明
 
-<<<<<<< HEAD
 - `db/posts.db` 表结构：`posts(title PRIMARY KEY, fid, date, url, likes, author, replies, created_at, update_at, update_date)`，附带 `fid`、`date`、`fid+date` 索引；`likes`（点赞数）、`author`（作者）、`replies`（回复数）由 `scraper.py` 列表页按行提取；`created_at` 为首次插入时间戳（标题重复时**保持不变**），`date` 为帖子发布日（重复时**保持不变**），`update_at`/`update_date` 为最近一次覆盖写入的时间戳/日期（**首次插入时为空字符串**，标题重复时自动更新），重复写入时除 `title`/`date`/`created_at` 外 `fid`/`url`/`likes`/`author`/`replies`/`update_at`/`update_date` 全部覆盖；旧库已由 `init_db.py` 自动 `ALTER TABLE` 补列（缺失时为空字符串）；
-=======
-- `db/posts.db` 表结构：`posts(title PRIMARY KEY, fid, date, url, created_at)`，附带 `fid`、`date`、`fid+date` 索引；
->>>>>>> b3259b4f0e1b255d55849d54052645e782ceef8e
 - **入库链接使用公开域名**：`url` 列拼接 `--public` 指定的公开域名（`run_batch.py` 自动传 `REMOTE_ROOT_URL`），不包含本机才能访问的 `127.0.0.1:1024` 本地代理地址；
 - 多进程并发写库：`scraper.py` 以 `sqlite3.connect(DB_FILE, timeout=15)` 连接，busy_timeout 最多等锁 15 秒，替代原先手动 sleep 退避，避免并发写冲突丢数据；
 - CSV 与数据库同步写入：每 `BATCH_SIZE` 页刷新一次 CSV，每 `SQLITE_BATCH_ROWS` 行批量提交一次；
