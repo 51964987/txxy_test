@@ -331,8 +331,36 @@ def main() -> None:
     total_pages = end_page - start_page + 1
     if total_pages <= 0:
         print(f"[FID={FID}] 版块所有页面已完成，无需重复抓取")
-        _record_run("ok", 0, 0, int(time.time() - start_time))
+        # 批量模式（run_batch 子进程）：向本次运行记录上报该版块已完成（进度 100），
+        # 避免 run_sections 该行一直停在 running/0%（且因未上报 total_pages 而被整体
+        # 进度聚合排除，导致其它版块接近完成时整体进度提前显示 100%）。
+        _batch_run_id = os.environ.get("SCRAPER_RUN_ID", "").strip()
+        if _batch_run_id:
+            try:
+                _rid = int(_batch_run_id)
+            except ValueError:
+                _rid = 0
+            if _rid:
+                run_recorder.update_section(
+                    _rid,
+                    FID,
+                    status="ok",
+                    current_page=end_page,
+                    total_pages=end_page - START_PAGE + 1,
+                    csv=0,
+                    sqlite=0,
+                    duration=int(time.time() - start_time),
+                )
+        else:
+            # 单跑模式：本次未实际抓取，但数据已完整，记一条成功记录
+            _record_run("ok", 0, 0, int(time.time() - start_time))
         return
+
+    # 版块全量页数（进度口径用）：从 START_PAGE 到末页的总页数。
+    # 断点续传时 current_page 是绝对页码，若 total_pages 用“本次剩余页数”会导致
+    # 进度一开跑就虚高（如上次抓到第 50 页、本次剩 50 页，第 51 页即 51/50≈100%）。
+    # 统一用全量页数，进度从上次断点位置继续平滑增长、不回退。
+    report_total_pages = end_page - START_PAGE + 1
 
     # --- 实时运行记录：运行中创建 running 记录，逐页上报进度 ---
     # 批量模式（run_batch 子进程）：环境变量 SCRAPER_RUN_ID 关联已创建的运行记录，
@@ -349,7 +377,7 @@ def main() -> None:
         run_id = run_recorder.start_run(
             datetime.now().strftime("%Y%m%d"),
             "scraper",
-            [{"fid": FID, "name": f"版块{FID}", "total_pages": total_pages}],
+            [{"fid": FID, "name": f"版块{FID}", "total_pages": report_total_pages}],
         )
 
     print(f"开始抓取[FID={FID}] 版块，共 {total_pages} 页（第 {start_page} ~ {end_page} 页）\n")
@@ -426,9 +454,18 @@ def main() -> None:
                     # 数据已写入 CSV 缓冲区，更新已保存页码
                     last_saved_page = page
                     save_progress(page)
-                    # 实时上报版块进度（批量/单跑共用），失败页不推进进度
+                    # 实时上报版块进度与条数（批量/单跑共用），失败页不推进进度。
+                    # csv 为已写入 CSV 的累计行数；sqlite 为已入库 + 缓冲区待入库行数，
+                    # 保证运行中“CSV/SQLite 条数”与进度同步实时刷新，而非等运行结束才一次性写入
                     if run_id:
-                        run_recorder.update_section(run_id, FID, current_page=page, total_pages=total_pages)
+                        run_recorder.update_section(
+                            run_id,
+                            FID,
+                            current_page=page,
+                            total_pages=report_total_pages,
+                            csv=total_rows,
+                            sqlite=db_rows + len(sqlite_buffer),
+                        )
                 else:
                     # 重试后仍失败：不推进进度，下次运行会重抓该页，避免漏数据
                     consecutive_failures += 1
@@ -478,7 +515,7 @@ def main() -> None:
                     FID,
                     status="ok" if run_status == "ok" else "fail",
                     current_page=last_saved_page,
-                    total_pages=total_pages,
+                    total_pages=report_total_pages,
                     csv=total_rows,
                     sqlite=db_rows,
                     duration=_elapsed,

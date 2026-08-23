@@ -317,11 +317,7 @@ def run_scraper(fid: str, name: str, run_id: int = 0) -> tuple[str, str, bool, i
             if proc.stdout is None:
                 log(f"无法捕获输出 [{fid}] {name}")
                 _ = proc.wait()
-<<<<<<< HEAD
                 return fid, name, proc.returncode == 0, 0, 0, int(time.time() - start)
-=======
-                return fid, name, proc.returncode == 0, 0, 0
->>>>>>> b3259b4f0e1b255d55849d54052645e782ceef8e
             for raw_line in proc.stdout:  # pyright: ignore[reportAny]
                 # text=True 模式下每行均为 str，此处显式收窄类型以消除 Any 告警
                 if not isinstance(raw_line, str):
@@ -347,11 +343,7 @@ def run_scraper(fid: str, name: str, run_id: int = 0) -> tuple[str, str, bool, i
                 log(f"完成 [{fid}] {name}（CSV {rows} 条 / SQLite {db_rows} 条）")
             else:
                 log(f"异常 [{fid}] {name}（退出码: {proc.returncode}）")
-<<<<<<< HEAD
             return fid, name, ok, rows, db_rows, int(time.time() - start)
-=======
-            return fid, name, ok, rows, db_rows
->>>>>>> b3259b4f0e1b255d55849d54052645e782ceef8e
         finally:
             # 无论正常完成还是中断/异常，都从活动集合移除
             with _procs_lock:

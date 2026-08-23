@@ -52,18 +52,50 @@ def _db_ready() -> bool:
 
 
 def _run_progress(run_id: int) -> int | None:
-    """running 状态运行的整体进度：有效版块（total_pages>0）progress 的平均值。
+    """running 状态运行的整体进度：本次运行全部版块进度均值，未开始的按 0 计。
 
-    尚无任何版块上报总页数（total_pages=0）时返回 None，前端显示“准备中”。
+    分母为全部 run_sections 行数（含尚未上报 total_pages 的版块），避免把未开始
+    的版块排除在分母外导致进度虚高（如 13 个版块中完成 12 个时整体直接显示 100%）。
+
+    各版块取值：
+    - status=ok：按 100 计。正常抓完时 progress 本就是 100；断点续传中“无需重复
+      抓取”的版块可能未逐页上报（progress 仍为 0），但数据已完整，也视为完成；
+    - running / fail / skip：按实时 progress（未开始的 running 版块自然为 0）。
     """
     rows = db.query(
-        "SELECT total_pages, progress FROM run_sections WHERE run_id = ?",
+        "SELECT status, progress FROM run_sections WHERE run_id = ?",
         (run_id,),
     )
-    valid = [r["progress"] for r in rows if r["total_pages"] and r["total_pages"] > 0]
-    if not valid:
+    if not rows:
         return None
-    return round(sum(valid) / len(valid))
+    total = 0
+    for r in rows:
+        total += 100 if r["status"] == "ok" else (r["progress"] or 0)
+    return round(total / len(rows))
+
+
+def _run_live_agg(run_id: int) -> dict:
+    """running 状态运行：从各版块明细实时聚合 CSV/SQLite 条数与成功/失败/未执行数。
+
+    子进程每抓一页都会实时上报进度与条数（run_sections.csv / sqlite），
+    此处按需聚合，保证【运行记录】列表与【运行明细】在运行期间
+    所有数据（而非仅进度）随轮询实时刷新，无需额外落库写入。
+    """
+    rows = db.query(
+        "SELECT status, csv, sqlite FROM run_sections WHERE run_id = ?",
+        (run_id,),
+    )
+    agg = {"ok": 0, "fail": 0, "skip": 0, "csv": 0, "sqlite": 0}
+    for r in rows:
+        agg["csv"] += r["csv"] or 0
+        agg["sqlite"] += r["sqlite"] or 0
+        if r["status"] == "ok":
+            agg["ok"] += 1
+        elif r["status"] == "fail":
+            agg["fail"] += 1
+        elif r["status"] == "skip":
+            agg["skip"] += 1
+    return agg
 
 
 def _db_run_row(r, progress: int | None = None) -> dict:
@@ -96,10 +128,20 @@ def _db_list_runs() -> list[dict]:
         "SELECT id, run_date, source, status, ok, fail, skip, csv, sqlite, duration, created_at FROM run_days"
         " ORDER BY run_date DESC, id DESC"
     )
-    return [
-        _db_run_row(r, _run_progress(r["id"]) if r["status"] == "running" else 100)
-        for r in rows
-    ]
+    out: list[dict] = []
+    for r in rows:
+        if r["status"] == "running":
+            row = _db_run_row(r, _run_progress(r["id"]))
+            # 运行中：条数与成功/失败/未执行数实时聚合自各版块明细
+            agg = _run_live_agg(r["id"])
+            row.update(
+                ok=agg["ok"], fail=agg["fail"], skip=agg["skip"],
+                csv=agg["csv"], sqlite=agg["sqlite"],
+            )
+        else:
+            row = _db_run_row(r, 100)
+        out.append(row)
+    return out
 
 
 def _db_detail_by_id(run_id: int) -> dict | None:
@@ -120,10 +162,17 @@ def _db_detail_by_id(run_id: int) -> dict | None:
         (run_id,),
     )
     detail: dict = _db_run_row(r, _run_progress(run_id) if r["status"] == "running" else 100)
-    detail["total"] = {"csv": r["csv"], "sqlite": r["sqlite"]}
     detail["sections"] = [dict(s) for s in sections]
-    if r["source"] == "run_batch":
-        detail["overall"] = {"ok": r["ok"], "fail": r["fail"], "skip": r["skip"]}
+    if r["status"] == "running":
+        # 运行中：CSV/SQLite 汇总与成功/失败/未执行数实时聚合自各版块明细
+        agg = _run_live_agg(run_id)
+        detail["total"] = {"csv": agg["csv"], "sqlite": agg["sqlite"]}
+        if r["source"] == "run_batch":
+            detail["overall"] = {"ok": agg["ok"], "fail": agg["fail"], "skip": agg["skip"]}
+    else:
+        detail["total"] = {"csv": r["csv"], "sqlite": r["sqlite"]}
+        if r["source"] == "run_batch":
+            detail["overall"] = {"ok": r["ok"], "fail": r["fail"], "skip": r["skip"]}
     return detail
 
 
