@@ -186,16 +186,16 @@ downloads/帖子标题/
 以网页形式浏览抓取数据（**只读**，不影响抓取/下载任务）：
 
 ```bash
-start_web.bat                      # 一键启动（未构建时自动 npm install + npm run build）
+start_web.bat                      # 一键启动（未构建时自动 npm install + npm run build；当前解释器缺 fastapi 时自动切换可用 Python）
 # 或手动：
 pip install fastapi uvicorn        # 首次（已写入 requirements.txt）
-python -X utf8 web/app.py          # 启动后访问 http://127.0.0.1:8088
+python -X utf8 web/app.py          # 启动后访问 http://127.0.0.1:8088（需使用装有依赖的解释器）
 ```
 
 - **技术栈**：FastAPI 后端 + Vue3 / Vite / TypeScript / Element Plus / Pinia / ECharts 前端（SPA）；
 - **页面**：
   - 数据总览：
-    - **顶部 Header（全局布局）**：左侧显示最后更新时间，右侧"自动刷新"操作卡片——由后端配置 `TXXY_ENABLE_AUTO_REFRESH` 控制（**默认关闭**，开启时才显示开关并启用 30s 轮询，手动"刷新"按钮始终可用）；
+    - **顶部 Header（全局布局）**：左侧显示最后更新时间，右侧"自动刷新"操作卡片——由后端配置 `TXXY_ENABLE_AUTO_REFRESH` 控制（**默认关闭**，开启时才显示开关并启用 30s 轮询）；
     - KPI 统计卡片：累计 / 今日 / 昨日 / 近 7 日新增 + 累计用户 / 活跃用户，副指标展示环比与今日新增；
     - 每日新增趋势：折线图（渐变面积 + 峰值标注），7/30/90 天切换，90 天支持缩放；
     - 版块分布：**环形图 / 排行榜双视图**切换，扇区与图例点击跳转帖子浏览并按版块预筛选，悬停显示中心动态（最近抓取/今日/昨日）；排行榜行为纯 HTML 渲染，标题 tooltip 展示副指标；
@@ -203,12 +203,12 @@ python -X utf8 web/app.py          # 启动后访问 http://127.0.0.1:8088
     - 最近抓取 Top10（点赞/作者/回复，相对时间）；
     - 布局：趋势与版块分布 `1fr 1fr`、两个热门榜 `1fr 1fr`，间距统一 16px；窄屏自动降级为单列；
   - 帖子浏览：版块多选 / 日期区间 / 标题关键词筛选，分页排序（日期/入库/点赞/回复），支持从数据总览跳转预选版块，操作栏为图标按钮（悬浮显示"打开/复制链接"提示），跳转原帖，一键导出 CSV（10 列带 BOM，Excel 可直接打开）；
-  - 运行记录：读取 `db/posts.db` 的 `run_days`/`run_sections`（run_batch/scraper 每次运行结束写入，每次运行一条、历史保留，同日多次分别展示，含运行时间），**每页 10 条分页**（含页码跳转，记录数 ≤10 时不显示分页器），页面内 4s 轮询实时刷新（running 状态实时进度），点击查看各版块成功/失败/CSV 与 SQLite 条数/耗时；改动前仅留日志的历史记录回退解析 `outputs/` 日志展示；
+  - 运行记录：读取 `db/posts.db` 的 `run_days`/`run_sections`（run_batch/scraper 每次运行结束写入，每次运行一条、历史保留，同日多次分别展示，含运行时间），**每页 5 条分页**（含页码跳转，记录数 ≤5 时不显示分页器），页面内 4s 轮询实时刷新（running 状态实时进度），点击查看各版块成功/失败/CSV 与 SQLite 条数/耗时；改动前仅留日志的历史记录回退解析 `outputs/` 日志展示；
   - 资源管理：扫描 `downloads/` 目录，按文件夹分组展示文件清单与大小，复制路径；
 - **只读安全**：后端以 `PRAGMA query_only=ON` 只读访问 `db/posts.db`，绝不写库，与抓取写进程（WAL 模式）安全并发；
 - **URL 归一化**：旧数据中 `http://127.0.0.1:1024` 前缀在展示层统一替换为 `PUBLIC_ROOT`（`web/config.py`，默认 `https://txxy.com`，与 `run_batch.REMOTE_ROOT_URL` 一致），**不改数据库**；
 - **配置**：`web/config.py` 顶部可用环境变量覆盖（`TXXY_WEB_HOST` 地址 / `TXXY_WEB_PORT` 端口 / `PUBLIC_ROOT` 域名 / `POSTS_DB` 数据库路径等），默认监听 `127.0.0.1:8088`（8080 常被本机其他程序占用）；
-- **自动刷新开关**：`TXXY_ENABLE_AUTO_REFRESH`（默认 `0` 关闭）控制数据总览的自动刷新功能——关闭时 Header 不显示"自动刷新"开关、前端不启动 30s 轮询，仅保留手动"刷新"按钮；需要恢复时启动前设置 `TXXY_ENABLE_AUTO_REFRESH=1`（或直接改 `web/config.py` 为 `True`）；
+- **自动刷新开关**：`TXXY_ENABLE_AUTO_REFRESH`（默认 `0` 关闭）控制数据总览的自动刷新功能——关闭时 Header 不显示"自动刷新"开关、前端不启动 30s 轮询，也没有手动"刷新"按钮（进入页面仅在首次加载数据）；需要恢复时启动前设置 `TXXY_ENABLE_AUTO_REFRESH=1`（或直接改 `web/config.py` 为 `True`）；
 - **开发模式**：`cd web/frontend && npm run dev` 启动 Vite（端口 5173，`/api` 自动代理到 8088）热更新；改完执行 `npm run build` 重新构建，再启动 `python -X utf8 web/app.py` 生效。
 
 ## 定时任务（Windows）

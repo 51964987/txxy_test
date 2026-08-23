@@ -11,9 +11,14 @@
   - false / 0 / no / off / --no-build   → 跳过编译
   - 未传参数 → 默认不编译
 当 dist 不存在时，无论是否指定编译，都会自动编译一次，避免启动失败。
+
+解释器探测：web/app.py 依赖 fastapi/uvicorn，若当前解释器未安装，
+自动按优先级（TXXY_PYTHON 环境变量 → 当前解释器 → 项目 .venv → run_daily.bat
+中配置的解释器）寻找可用 Python 后重新启动自身，无需手动切换环境。
 """
 import importlib.util
 import os
+import re
 import subprocess
 import sys
 from typing import Protocol, cast
@@ -22,6 +27,68 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 WEB_DIR = os.path.join(BASE_DIR, "web")
 FRONTEND_DIR = os.path.join(WEB_DIR, "frontend")
 DIST_DIR = os.path.join(FRONTEND_DIR, "dist")
+
+
+def _has_fastapi(python: str) -> bool:
+    """检测指定解释器能否导入 fastapi/uvicorn。"""
+    try:
+        r = subprocess.run(
+            [python, "-c", "import fastapi, uvicorn"],
+            capture_output=True,
+        )
+        return r.returncode == 0
+    except OSError:
+        return False
+
+
+def _run_daily_python() -> str | None:
+    """从 run_daily.bat 解析绝对 Python 路径（项目约定：任务脚本固定使用该解释器）。"""
+    bat = os.path.join(BASE_DIR, "run_daily.bat")
+    try:
+        with open(bat, "r", encoding="utf-8", errors="ignore") as f:
+            content = f.read()
+    except OSError:
+        return None
+    m = re.search(r'"([^"]*python\.exe)"', content)
+    return m.group(1) if m else None
+
+
+def _find_python() -> str | None:
+    """按优先级寻找装有 fastapi/uvicorn 的 Python 解释器。"""
+    candidates: list[str] = []
+    override = os.environ.get("TXXY_PYTHON", "").strip()
+    if override:
+        candidates.append(override)
+    candidates.append(sys.executable)
+    candidates.append(os.path.join(BASE_DIR, ".venv", "Scripts", "python.exe"))
+    daily = _run_daily_python()
+    if daily:
+        candidates.append(daily)
+    seen: set[str] = set()
+    for py in candidates:
+        if not py:
+            continue
+        key = os.path.abspath(py)
+        if key in seen:
+            continue
+        seen.add(key)
+        if os.path.isfile(py) and _has_fastapi(py):
+            return py
+    return None
+
+
+def _ensure_python_env() -> None:
+    """当前解释器缺少 fastapi 时，自动切换到可用解释器并重新启动自身。"""
+    target = _find_python()
+    if target is None:
+        print("[错误] 未找到装有 fastapi/uvicorn 的 Python 解释器。", file=sys.stderr)
+        print("        请先执行: pip install -r requirements.txt", file=sys.stderr)
+        print("        或在 start_web.bat 中改用已安装依赖的 Python 路径。", file=sys.stderr)
+        sys.exit(1)
+    if os.path.abspath(target).lower() != os.path.abspath(sys.executable).lower():
+        print(f"[环境] 当前解释器 {sys.executable} 缺少 fastapi，自动切换为: {target}")
+        r = subprocess.run([target, "-X", "utf8", os.path.abspath(__file__), *sys.argv[1:]])
+        sys.exit(r.returncode)
 
 
 class _WebAppModule(Protocol):
@@ -62,6 +129,7 @@ def build_frontend() -> None:
 
 
 def main() -> None:
+    _ensure_python_env()
     rebuild = _should_rebuild()
     os.chdir(BASE_DIR)
     if rebuild:
