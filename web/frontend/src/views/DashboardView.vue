@@ -594,18 +594,95 @@ const BAR_WAIT_TIME = 2000 // ms
 let barTimer: ReturnType<typeof setInterval> | null = null
 let barIndex = 0
 
+// C2：排序维度切换（总量 / 今日 / 昨日），切换后基于新字段重排并重置轮播
+type BarSortField = 'count' | 'today' | 'yesterday'
+const barSortField = ref<BarSortField>('count')
+const barSortOptions = [
+  { value: 'count', label: '总量' },
+  { value: 'today', label: '今日' },
+  { value: 'yesterday', label: '昨日' },
+] as const
+
+const barSortValue = (f: BarSortField, item: FidDistItem): number => {
+  if (f === 'today') return item.today_count ?? 0
+  if (f === 'yesterday') return item.yesterday_count ?? 0
+  return item.count ?? 0
+}
+
+// 按当前排序维度生成榜单数据（A2：携带 rank 用于高亮前三名）
+const barRankedItems = computed(() => {
+  const f = barSortField.value
+  return [...fidDist.value]
+    .sort((a, b) => barSortValue(f, b) - barSortValue(f, a))
+    .map((item, i) => ({ item, rank: i + 1 }))
+})
+
 // 名次徽章按真实排名计算；末尾补位 (N-1) 行复用前几行的名次（1~N-1），实现无缝循环
 const barLoopItems = computed(() => {
-  const items = fidDist.value.map((item, i) => ({ item, rank: i + 1 }))
+  const items = barRankedItems.value
   const padCount = Math.max(0, BAR_VISIBLE_ROWS - 1)
-  const pad = fidDist.value
-    .slice(0, Math.min(padCount, fidDist.value.length))
-    .map((item, i) => ({ item, rank: i + 1 }))
+  const pad = items
+    .slice(0, Math.min(padCount, items.length))
+    .map((item) => ({ item: item.item, rank: item.rank }))
   return [...items, ...pad]
 })
 
+// 行内增量（B1：今日较昨日）——返回 { delta, cls }
+function barDeltaOf(item: FidDistItem) {
+  const today = item.today_count ?? 0
+  const yesterday = item.yesterday_count ?? 0
+  const delta = today - yesterday
+  const cls = delta > 0 ? 'delta-up' : delta < 0 ? 'delta-down' : 'delta-flat'
+  return { delta, cls }
+}
+
+// A1：占比进度条宽度（%），基于当前排序维度数值相对列表最大值
+function barPctOf(item: FidDistItem): number {
+  const f = barSortField.value
+  const max = barRankedItems.value[0]
+  if (!max) return 0
+  const denom = barSortValue(f, max.item)
+  if (!denom) return 0
+  return Math.max(2, (barSortValue(f, item) / denom) * 100)
+}
+
+function onBarSortChange() {
+  // 重置轮播到顶部，保证切换后首屏展示新排序的前 8 名
+  const el = barListRef.value
+  if (el) el.scrollTop = 0
+  barIndex = 0
+  startBarScroll()
+}
+
+// C1：悬停排行榜某行时，环形图同步高亮对应扇区（联动）；移出时恢复轮播展示
+function barHoverFid(fid: string) {
+  const idx = fidDist.value.findIndex((f) => f.fid === fid)
+  if (idx < 0) return
+  const chart = pieChart.value
+  if (!chart) return
+  // 悬停期间暂停环形图自动轮播，避免抢占
+  pieHover = true
+  if (pieTimer) {
+    clearInterval(pieTimer)
+    pieTimer = null
+  }
+  chart.dispatchAction({ type: 'downplay', seriesIndex: 0 })
+  chart.dispatchAction({ type: 'highlight', seriesIndex: 0, dataIndex: idx })
+  const f = fidDist.value[idx]
+  if (f) updatePieCenter({ labelText: f.name, value: f.count, fid: f.fid }, fidDistTotal.value)
+}
+
+function barUnhover() {
+  pieHover = false
+  // 离开后恢复环形图自动轮播（若未暂停）
+  if (!pieTimer && pieChart.value && fidDist.value.length > 1) startPieCarousel()
+}
+
 // 固定 8 行可视区高度，与 CSS 中 .bar-list 保持一致
 const barListStyle = computed(() => ({ height: `${BAR_VISIBLE_ROWS * BAR_ROW_HEIGHT}px` }))
+
+// D1：轮播当前行高亮跟随（仅在有轮播时更新）
+const barActiveIndex = ref(-1)
 
 function startBarScroll() {
   stopBarScroll()
@@ -613,10 +690,12 @@ function startBarScroll() {
   if (!el || fidDist.value.length <= BAR_VISIBLE_ROWS) return
   barIndex = 0
   el.scrollTop = 0
+  barActiveIndex.value = 0
   barTimer = setInterval(() => {
     const maxIndex = Math.max(0, barLoopItems.value.length - BAR_VISIBLE_ROWS)
     barIndex = barIndex >= maxIndex ? 0 : barIndex + 1
     el.scrollTop = barIndex * BAR_ROW_HEIGHT
+    barActiveIndex.value = barIndex
   }, BAR_WAIT_TIME)
 }
 
@@ -626,6 +705,7 @@ function stopBarScroll() {
     barTimer = null
   }
   barIndex = 0
+  barActiveIndex.value = -1
   const el = barListRef.value
   if (el) el.scrollTop = 0
 }
@@ -639,6 +719,15 @@ function pauseBarScroll() {
 
 function resumeBarScroll() {
   if (!barTimer) startBarScroll()
+}
+
+// C3：行悬停自定义 Tooltip（替代原生 title）
+const barTip = ref<{ x: number; y: number; item: FidDistItem; rank: number } | null>(null)
+function barShowTip(e: MouseEvent, item: FidDistItem, rank: number) {
+  barTip.value = { x: e.clientX, y: e.clientY, item, rank }
+}
+function barHideTip() {
+  barTip.value = null
 }
 
 // ---- 版块分布环形图：自动轮播高亮 ----
@@ -959,8 +1048,14 @@ function onTrendDaysChange() {
     <!-- 图表（P0）：左排行榜 + 右环形图，同时展示 -->
     <div class="chart-row">
       <div class="page-card chart-card">
-        <div class="chart-head">
+        <div class="chart-head bar-head">
           <span class="chart-title">版块分布 · 排行榜</span>
+          <!-- C2：排序维度切换 -->
+          <el-radio-group v-model="barSortField" size="small" @change="onBarSortChange">
+            <el-radio-button v-for="opt in barSortOptions" :key="opt.value" :value="opt.value">
+              {{ opt.label }}
+            </el-radio-button>
+          </el-radio-group>
         </div>
         <div class="chart-wrap">
           <div v-if="!fidDist.length && loadingP0" class="chart chart-loading">
@@ -979,8 +1074,14 @@ function onTrendDaysChange() {
               v-for="(row, i) in barLoopItems"
               :key="`${row.item.fid}-${i}`"
               class="bar-row"
-              :title="`最近抓取：${row.item.latest_date ?? '-'}，今日新增：${row.item.today_count ?? 0}，昨日新增：${row.item.yesterday_count ?? 0}`"
+              :class="[`rank-${row.rank}`, row.rank === 1 ? 'bar-top' : '', i === barActiveIndex ? 'is-active' : '']"
+              :style="{
+                '--bar-width': `${barPctOf(row.item)}%`,
+                '--bar-progress': colorForFid(row.item.fid),
+              }"
               @click="goDist(row.item.fid)"
+              @mouseenter="barHoverFid(row.item.fid); barShowTip($event, row.item, row.rank)"
+              @mouseleave="barUnhover; barHideTip()"
             >
               <span :class="rankClass(row.rank - 1)" class="bar-rank">{{ row.rank }}</span>
               <span class="bar-name">{{ row.item.name }}({{ row.item.fid }})</span>
@@ -989,12 +1090,67 @@ function onTrendDaysChange() {
                 <template v-else>最新 {{ row.item.latest_date ?? '-' }}</template>
               </span>
               <div class="bar-metric">
+                <!-- B1：今日较昨日增量趋势箭头 -->
+                <span
+                  v-if="row.item.today_count != null"
+                  class="bar-delta"
+                  :class="barDeltaOf(row.item).cls"
+                  :title="`较昨日 ${barDeltaOf(row.item).delta >= 0 ? '+' : ''}${barDeltaOf(row.item).delta}`"
+                >
+                  <el-icon>
+                    <CaretTop v-if="barDeltaOf(row.item).delta > 0" />
+                    <CaretBottom v-else-if="barDeltaOf(row.item).delta < 0" />
+                    <Minus v-else />
+                  </el-icon>
+                  <span>{{ Math.abs(barDeltaOf(row.item).delta).toLocaleString() }}</span>
+                </span>
                 <span class="bar-value">{{ row.item.count.toLocaleString() }} 条</span>
                 <span class="bar-pct">({{ fidDistTotal ? ((row.item.count / fidDistTotal) * 100).toFixed(1) : 0 }}%)</span>
               </div>
             </div>
           </div>
+          <!-- B3：底部汇总条（覆盖固定在底部，不参与轮播）+ 上方渐变遮罩 -->
+          <div v-if="fidDist.length" class="bar-total-mask"></div>
+          <div v-if="fidDist.length" class="bar-total-bar">
+            <span>共 {{ fidDist.length }} 个版块</span>
+            <span class="bar-total-divider"></span>
+            <span>累计 <b>{{ fidDistTotal.toLocaleString() }}</b> 条</span>
+          </div>
         </div>
+
+        <!-- C3：行悬停自定义 Tooltip -->
+        <teleport to="body">
+          <div
+            v-if="barTip"
+            class="bar-tip"
+            :style="{ left: `${barTip.x + 12}px`, top: `${barTip.y + 12}px` }"
+          >
+            <div class="bar-tip-title">
+              <span :class="rankClass(barTip.rank - 1)" class="bar-tip-rank">{{ barTip.rank }}</span>
+              <span class="bar-tip-name">{{ barTip.item.name }}({{ barTip.item.fid }})</span>
+            </div>
+            <div class="bar-tip-row">
+              <span>累计总量</span>
+              <span class="bar-tip-strong">{{ barTip.item.count.toLocaleString() }} 条</span>
+            </div>
+            <div class="bar-tip-row">
+              <span>占总量</span>
+              <span>{{ fidDistTotal ? ((barTip.item.count / fidDistTotal) * 100).toFixed(1) : 0 }}%</span>
+            </div>
+            <div class="bar-tip-row">
+              <span>今日新增</span>
+              <span>{{ barTip.item.today_count?.toLocaleString() ?? '-' }}</span>
+            </div>
+            <div class="bar-tip-row">
+              <span>昨日新增</span>
+              <span>{{ barTip.item.yesterday_count?.toLocaleString() ?? '-' }}</span>
+            </div>
+            <div class="bar-tip-row">
+              <span>最近抓取</span>
+              <span>{{ barTip.item.latest_date ?? '-' }}</span>
+            </div>
+          </div>
+        </teleport>
       </div>
       <div class="page-card chart-card">
         <div class="chart-head">
@@ -1376,6 +1532,49 @@ function onTrendDaysChange() {
   transition: background 0.15s ease;
   font-size: 13px;
   flex-shrink: 0;
+  /* A1：占比进度条锚点 */
+  position: relative;
+  overflow: hidden;
+}
+/* A1：行底部占比进度条（静态主条 + 淡色底槽） */
+.bar-row::before {
+  content: '';
+  position: absolute;
+  left: 38px;
+  right: 10px;
+  bottom: 4px;
+  height: 3px;
+  border-radius: 2px;
+  background: rgba(127, 141, 163, 0.16);
+}
+.bar-row::after {
+  content: '';
+  position: absolute;
+  left: 38px;
+  bottom: 4px;
+  height: 3px;
+  width: var(--bar-width, 0%);
+  border-radius: 2px;
+  background: linear-gradient(90deg, var(--bar-progress, #2f6fed), #6366f1);
+  transform-origin: left center;
+  transition: width 0.5s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* A2：前三名行高亮（左侧色条 + 淡渐变背景 + 冠军发光） */
+.bar-row.rank-1 {
+  background: linear-gradient(90deg, rgba(251, 191, 36, 0.10), rgba(251, 191, 36, 0.02));
+  box-shadow: inset 3px 0 0 #fbbf24;
+}
+.bar-row.rank-1.bar-top {
+  box-shadow: inset 3px 0 0 #fbbf24, 0 1px 8px rgba(251, 191, 36, 0.28);
+}
+.bar-row.rank-2 {
+  background: linear-gradient(90deg, rgba(203, 213, 225, 0.14), rgba(203, 213, 225, 0.02));
+  box-shadow: inset 3px 0 0 #cbd5e1;
+}
+.bar-row.rank-3 {
+  background: linear-gradient(90deg, rgba(232, 161, 124, 0.14), rgba(232, 161, 124, 0.02));
+  box-shadow: inset 3px 0 0 #e8a17c;
 }
 
 .bar-row:hover {
@@ -1428,11 +1627,163 @@ function onTrendDaysChange() {
   white-space: nowrap;
 }
 
+/* B1：今日较昨日增量趋势箭头 */
+.bar-delta {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.bar-delta .el-icon {
+  font-size: 13px;
+}
+.bar-delta.delta-up { color: #10b981; }
+.bar-delta.delta-down { color: #ef4444; }
+.bar-delta.delta-flat { color: #909399; }
+
+/* C2：排序切换头部与标题间距 */
+.bar-head {
+  gap: 8px;
+}
+
+/* A3：前三名名次徽章圆形化、略放大 */
+.bar-row.rank-1 .bar-rank,
+.bar-row.rank-2 .bar-rank,
+.bar-row.rank-3 .bar-rank {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+}
+
+/* D1：轮播当前行高亮跟随（仅轮播时生效） */
+.bar-row.is-active {
+  background: #eef3ff;
+  box-shadow: inset 3px 0 0 #2f6fed;
+}
+
+/* D2：入场渐显动画（仅首屏一次性，轮播补位行复用数据不重复触发） */
+.bar-list .bar-row {
+  animation: barRowIn 0.4s ease both;
+}
+.bar-list .bar-row:nth-child(1) { animation-delay: 0.05s; }
+.bar-list .bar-row:nth-child(2) { animation-delay: 0.11s; }
+.bar-list .bar-row:nth-child(3) { animation-delay: 0.17s; }
+.bar-list .bar-row:nth-child(4) { animation-delay: 0.23s; }
+.bar-list .bar-row:nth-child(5) { animation-delay: 0.29s; }
+.bar-list .bar-row:nth-child(6) { animation-delay: 0.35s; }
+.bar-list .bar-row:nth-child(7) { animation-delay: 0.41s; }
+.bar-list .bar-row:nth-child(8) { animation-delay: 0.47s; }
+@keyframes barRowIn {
+  from { opacity: 0; transform: translateX(-12px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .bar-list .bar-row { animation: none !important; }
+}
+
+/* B3：底部汇总条（覆盖固定在底部） */
+.bar-total-mask {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 30px;
+  height: 22px;
+  pointer-events: none;
+  background: linear-gradient(to top, rgba(255, 255, 255, 1), rgba(255, 255, 255, 0));
+  z-index: 2;
+}
+.bar-total-bar {
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  bottom: 0;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 12px;
+  border-radius: 6px;
+  background: #f7f8fa;
+  border: 1px solid #ebeef5;
+  font-size: 12px;
+  color: #606266;
+  z-index: 3;
+}
+.bar-total-bar b {
+  color: #2f6fed;
+  font-variant-numeric: tabular-nums;
+}
+.bar-total-divider {
+  flex: 1;
+}
+
+/* C3：行悬停自定义 Tooltip */
+.bar-tip {
+  position: fixed;
+  z-index: 9999;
+  min-width: 180px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(31, 45, 61, 0.94);
+  border: 1px solid rgba(47, 111, 237, 0.3);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
+  backdrop-filter: blur(4px);
+  font-size: 12px;
+  color: #e5e9f0;
+  pointer-events: none;
+}
+.bar-tip-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+.bar-tip-rank {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: #fff;
+  flex-shrink: 0;
+}
+.bar-tip-name {
+  font-weight: 600;
+  color: #fff;
+  font-size: 13px;
+}
+.bar-tip-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  line-height: 1.8;
+}
+.bar-tip-row > span:first-child {
+  color: #8b95a7;
+}
+.bar-tip-strong {
+  color: #a8c5ff;
+  font-weight: 600;
+}
+
 @media (max-width: 1100px) {
   .bar-row {
     grid-template-columns: 28px minmax(80px, 1fr) auto;
   }
   .bar-sub {
+    display: none;
+  }
+  /* 窄屏隐藏增量箭头，避免与总量/占比挤占空间 */
+  .bar-delta {
     display: none;
   }
 }
