@@ -165,5 +165,7 @@ onMounted(async () => {
 .main {
   padding: 18px;
   overflow-y: auto;
+  overflow-x: hidden; /* 杜绝数据总览等页面渲染时的横向滚动条闪现 */
+  min-width: 0;
 }
 </style>

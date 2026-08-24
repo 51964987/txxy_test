@@ -1118,6 +1118,9 @@ function onTrendDaysChange() {
   justify-content: space-between;
   margin-bottom: 6px;
   gap: 12px;
+  /* 窄屏下允许换行，避免趋势 stats + 天数切换超出卡片宽度产生横向滚动条 */
+  flex-wrap: wrap;
+  min-width: 0;
 }
 
 .chart-title {
@@ -1183,6 +1186,8 @@ function onTrendDaysChange() {
   position: relative;
   height: 320px;
   width: 100%;
+  overflow: hidden; /* 遏制 ECharts canvas 初始化瞬间的横向溢出 */
+  min-width: 0;
 }
 /* E2：折线流光动画（CSS 方案，轻量科技感） */
 .trend-chart-wrap::after {
@@ -1247,6 +1252,8 @@ function onTrendDaysChange() {
 .chart-wrap {
   position: relative;
   height: 320px; /* 与排行榜 8 行可视区等高 */
+  overflow: hidden; /* 遏制 ECharts / 排行榜容器瞬时横向溢出 */
+  min-width: 0;
 }
 
 .pie-center {

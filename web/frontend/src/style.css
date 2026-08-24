@@ -93,6 +93,12 @@ body {
   box-shadow: 0 4px 16px rgba(31, 45, 61, 0.08);
 }
 
+/* 统计卡加载态：骨架屏固定宽度，避免其内部结构瞬时撑宽引发横向滚动条闪现 */
+.stat-card .el-skeleton {
+  width: 100%;
+  min-width: 0;
+}
+
 .stat-icon {
   width: 46px;
   height: 46px;
