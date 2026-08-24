@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, shallowRef, nextTick } from 
 import { useRouter } from 'vue-router'
 import { graphic, init as echartsInit, use } from 'echarts/core'
 import { CanvasRenderer } from 'echarts/renderers'
-import { LineChart, PieChart } from 'echarts/charts'
+import { LineChart, PieChart, EffectScatterChart } from 'echarts/charts'
 import {
   DataZoomComponent,
   GridComponent,
@@ -21,6 +21,7 @@ use([
   CanvasRenderer,
   LineChart,
   PieChart,
+  EffectScatterChart,
   GridComponent,
   TooltipComponent,
   LegendComponent,
@@ -77,6 +78,18 @@ let refreshTimer: ReturnType<typeof setInterval> | null = null
 
 const fidDistTotal = computed(() => fidDist.value.reduce((s, f) => s + f.count, 0))
 
+const trendStats = computed(() => {
+  if (!trend.value.length) return null
+  const counts = trend.value.map((t) => t.count)
+  const max = Math.max(...counts)
+  const min = Math.min(...counts)
+  const maxDate = trend.value[counts.indexOf(max)]?.date ?? ''
+  const minDate = trend.value[counts.indexOf(min)]?.date ?? ''
+  const total = counts.reduce((s, v) => s + v, 0)
+  const avg = Math.round(total / counts.length)
+  return { max, min, maxDate, minDate, total, avg }
+})
+
 const totalText = computed(() => (overview.value?.total ?? 0).toLocaleString())
 
 // 指标卡副指标：环比 / 占比 / 日均
@@ -109,6 +122,7 @@ async function loadP0(initial = false) {
     overview.value = o
     trend.value = t
     fidDist.value = f
+    trendCache.set(trendDays.value, t)
     store.setUpdatedAt(o.latest_created_at ?? null)
     await nextTick()
     renderTrendChart()
@@ -144,18 +158,49 @@ function renderTrendChart() {
     trendChart.value ??= initChart(trendRef.value)
     const data = trend.value.map((t) => t.count)
     const needZoom = trend.value.length > 31
+    const avg = data.length ? Math.round(data.reduce((s, v) => s + v, 0) / data.length) : 0
+    const lastIdx = data.length - 1
     trendChart.value.setOption({
       tooltip: {
         trigger: 'axis',
+        backgroundColor: 'rgba(31, 45, 61, 0.92)',
+        borderColor: 'rgba(47, 111, 237, 0.3)',
+        borderWidth: 1,
+        padding: [12, 16],
+        textStyle: { color: '#e5e9f0', fontSize: 13 },
+        extraCssText: 'border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.25); backdrop-filter: blur(4px);',
         formatter: (params: any[]) => {
           const p = params[0]
           if (!p) return ''
           const idx = p.dataIndex
           const cur = data[idx]
-          if (idx === 0) return `${p.axisValue}<br/>新增帖子：<b>${cur}</b> 条`
-          const prev = data[idx - 1]
-          const diff = cur - prev
-          return `${p.axisValue}<br/>新增帖子：<b>${cur}</b> 条（较上日 ${diff >= 0 ? '+' : ''}${diff}）`
+          const trendUp = idx > 0 && cur >= data[idx - 1]
+          const diffColor = trendUp ? '#10b981' : '#ef4444'
+          const trendIcon = trendUp ? '▲' : '▼'
+          let html = `<div style="font-weight:600;font-size:13px;color:#a8c5ff;margin-bottom:6px">${p.axisValue}</div>`
+          html += `<div style="display:flex;align-items:baseline;gap:6px;margin-bottom:4px">`
+          html += `<span style="color:#8b95a7;font-size:12px">新增</span>`
+          html += `<span style="font-size:20px;font-weight:700;color:#fff;font-variant-numeric:tabular-nums">${cur.toLocaleString()}</span>`
+          html += `<span style="color:#8b95a7;font-size:12px">条</span>`
+          html += `</div>`
+          if (idx > 0) {
+            const prev = data[idx - 1]
+            const diff = cur - prev
+            const pct = prev > 0 ? ((diff / prev) * 100).toFixed(1) : '—'
+            html += `<div style="display:flex;align-items:center;gap:4px;font-size:12px;margin-bottom:2px">`
+            html += `<span style="color:#8b95a7">较上日</span>`
+            html += `<span style="color:${diffColor};font-weight:600">${trendIcon} ${diff >= 0 ? '+' : ''}${diff}</span>`
+            html += `<span style="color:${diffColor};opacity:0.85">(${diff >= 0 ? '+' : ''}${pct}%)</span>`
+            html += `</div>`
+          }
+          if (idx >= 6) {
+            const slice = data.slice(idx - 6, idx + 1)
+            const weekAvg = Math.round(slice.reduce((s, v) => s + v, 0) / slice.length)
+            html += `<div style="margin-top:6px;padding-top:6px;border-top:1px solid rgba(255,255,255,0.1);font-size:12px;color:#8b95a7">`
+            html += `<span>7日均</span> <span style="color:#a8c5ff;font-weight:600">${weekAvg.toLocaleString()}</span> <span>条</span>`
+            html += `</div>`
+          }
+          return html
         },
       },
       grid: { left: 44, right: 20, top: 30, bottom: needZoom ? 46 : 28 },
@@ -177,7 +222,6 @@ function renderTrendChart() {
           type: 'line',
           smooth: true,
           showSymbol: false,
-          // 数据大屏风格：入场逐点描线生长，数据更新平滑过渡
           animation: true,
           animationDuration: 900,
           animationDurationUpdate: 600,
@@ -200,8 +244,42 @@ function renderTrendChart() {
               { type: 'min', name: '最低' },
             ],
           },
+          markLine: {
+            silent: true,
+            symbol: 'none',
+            lineStyle: { color: 'rgba(239, 68, 68, 0.5)', type: 'dashed', width: 1 },
+            label: {
+              formatter: `日均 ${avg}`,
+              position: 'end',
+              fontSize: 10,
+              color: '#ef4444',
+            },
+            data: [{ yAxis: avg }],
+          },
         },
+        ...(lastIdx >= 0
+          ? [
+              {
+                name: '最新',
+                type: 'effectScatter',
+                data: [{ value: [lastIdx, data[lastIdx]] }],
+                symbolSize: 12,
+                rippleEffect: { period: 3, scale: 3, brushType: 'stroke' },
+                itemStyle: { color: '#2f6fed' },
+                z: 10,
+                tooltip: { show: false },
+              },
+            ]
+          : []),
       ],
+    })
+    trendChart.value.on('click', (params: any) => {
+      trendTipPaused = true
+      const idx = params.dataIndex
+      const point = trend.value[idx]
+      if (point) {
+        router.push({ path: '/posts', query: { date_from: point.date, date_to: point.date } })
+      }
     })
   }
 }
@@ -509,23 +587,21 @@ function stopPieCarousel() {
   pieChart.value?.dispatchAction({ type: 'downplay', seriesIndex: 0 })
 }
 
-// ---- 每日新增趋势：tooltip 自动轮播（7 → 30 → 90 天循环）----
+// ---- 每日新增趋势：tooltip 自动轮播（7 → 30 → 60 → 90 天循环）----
 // 模拟鼠标悬停效果，沿时间轴从右往左（最新日期 → 最早日期）依次展示每个数据点的 tooltip；
 // 当前维度展示完成后自动切换下一维度，循环播放；悬停暂停、移出恢复；
-// 维度切换采用「淡出旧图表 → 加载新数据 → 淡入新图表」的平滑过渡，避免生硬跳变。
-const TREND_DAYS_SEQ = [7, 30, 90]
+// 维度切换采用「保留旧图表 → 加载新数据 → ECharts 平滑过渡动画」的无缝衔接，无闪烁无跳变。
+const TREND_DAYS_SEQ = [7, 30, 60, 90]
 const TREND_TIP_INTERVAL = 900 // ms，单点停留时长
 const TREND_STAGE_GAP = 1500 // ms，阶段切换间隔
-const TREND_FADE_MS = 300 // ms，图表淡出/淡入过渡时长
-const trendFading = ref(false) // 图表是否处于淡出状态（维度切换过渡中）
+const trendSwitching = ref(false) // 数据切换中（轻量 loading 指示，不透明度过渡）
 let trendTipTimer: ReturnType<typeof setInterval> | null = null
 let trendStageTimer: ReturnType<typeof setTimeout> | null = null
 let trendStartTimer: ReturnType<typeof setTimeout> | null = null
 let trendTipIndex = 0
 let trendTipPaused = false
 let trendLoading = false
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+const trendCache = new Map<number, TrendPoint[]>()
 
 function stopTrendCarousel() {
   if (trendTipTimer) {
@@ -583,8 +659,8 @@ function beginTrendTipLoop(prevLen?: number) {
   }, TREND_TIP_INTERVAL)
 }
 
-/** 当前维度展示完成：间隔后切换到下一数据范围（7 → 30 → 90 → 7）；
- *  切换到 30/90 天时轮播起点与上一阶段终点衔接（时间轴连续向左推进），
+/** 当前维度展示完成：间隔后切换到下一数据范围（7 → 30 → 60 → 90 → 7）；
+ *  切换到 30/60/90 天时轮播起点与上一阶段终点衔接（时间轴连续向左推进），
  *  循环回 7 天时重新从最新日期（最右侧）开始 */
 function advanceTrendStage() {
   if (trendTipTimer) {
@@ -603,31 +679,37 @@ function advanceTrendStage() {
 }
 
 /** 仅刷新趋势数据（轮播维度切换 / 手动切换），避免 loadP0 全量刷新引起其他卡片重绘；
- *  切换过程：淡出旧图表 → 加载并渲染新数据 → 淡入新图表，保证过渡平滑 */
+ *  切换过程：保留旧图表可见 → 加载新数据 → ECharts 内置平滑动画过渡，无闪烁无跳变 */
 async function loadTrendOnly(prevLen?: number) {
   if (trendLoading) return
   trendLoading = true
   stopTrendCarousel()
-  // 1. 淡出旧图表
-  trendFading.value = true
-  await sleep(TREND_FADE_MS)
-  try {
-    // 2. 加载并渲染新数据
-    trend.value = await api.trend(trendDays.value)
+  const cached = trendCache.get(trendDays.value)
+  if (cached) {
+    trend.value = cached
     await nextTick()
     renderTrendChart()
-    // 3. 淡入新图表，随后重启 tooltip 轮播（起点由 prevLen 决定）
-    trendFading.value = false
-    startTrendCarousel(700, prevLen)
+    startTrendCarousel(0, prevLen)
+    trendLoading = false
+    return
+  }
+  trendSwitching.value = true
+  try {
+    const data = await api.trend(trendDays.value)
+    trendCache.set(trendDays.value, data)
+    trend.value = data
+    await nextTick()
+    renderTrendChart()
+    startTrendCarousel(400, prevLen)
   } catch (e) {
-    trendFading.value = false
     ElMessage.error(`加载趋势数据失败: ${(e as Error).message}`)
   } finally {
+    trendSwitching.value = false
     trendLoading = false
   }
 }
 
-/** 手动切换趋势天数：淡出后加载新数据，轮播重置到该维度最右侧点开始 */
+/** 手动切换趋势天数：保留旧图表，加载新数据后以 ECharts 平滑动画过渡，轮播重置到该维度最右侧点开始 */
 function onTrendDaysChange() {
   loadTrendOnly()
 }
@@ -722,23 +804,49 @@ function onTrendDaysChange() {
     <div class="page-card chart-card" style="margin-bottom: 16px">
       <div class="chart-head">
         <span class="chart-title">每日新增趋势（近 {{ trendDays }} 天）</span>
+        <div v-if="trendStats" class="trend-stats">
+          <div class="ts-card ts-peak">
+            <span class="ts-label">峰值</span>
+            <span class="ts-value">{{ trendStats.max.toLocaleString() }}</span>
+            <span class="ts-sub">{{ trendStats.maxDate.slice(5) }}</span>
+          </div>
+          <div class="ts-card ts-valley">
+            <span class="ts-label">谷值</span>
+            <span class="ts-value">{{ trendStats.min.toLocaleString() }}</span>
+            <span class="ts-sub">{{ trendStats.minDate.slice(5) }}</span>
+          </div>
+          <div class="ts-card ts-avg">
+            <span class="ts-label">日均</span>
+            <span class="ts-value">{{ trendStats.avg.toLocaleString() }}</span>
+          </div>
+          <div class="ts-card ts-total">
+            <span class="ts-label">总计</span>
+            <span class="ts-value">{{ trendStats.total.toLocaleString() }}</span>
+          </div>
+        </div>
         <el-radio-group v-model="trendDays" size="small" @change="onTrendDaysChange">
           <el-radio-button :value="7">7天</el-radio-button>
           <el-radio-button :value="30">30天</el-radio-button>
+          <el-radio-button :value="60">60天</el-radio-button>
           <el-radio-button :value="90">90天</el-radio-button>
         </el-radio-group>
       </div>
       <div v-if="!trend.length && loadingP0" class="chart chart-loading">
         <el-skeleton animated :rows="8" />
       </div>
-      <div
-        v-show="trend.length"
-        ref="trendRef"
-        class="chart"
-        :class="{ 'trend-fading': trendFading }"
-        @mouseenter="trendTipPaused = true"
-        @mouseleave="trendTipPaused = false"
-      ></div>
+      <div class="trend-chart-wrap">
+        <div
+          v-show="trend.length"
+          ref="trendRef"
+          class="chart"
+          @mouseenter="trendTipPaused = true"
+          @mouseleave="trendTipPaused = false"
+        ></div>
+        <div v-if="trendSwitching" class="chart-switch-overlay">
+          <span class="switch-dot"></span>
+          <span>数据切换中…</span>
+        </div>
+      </div>
     </div>
 
     <!-- 图表（P0）：左排行榜 + 右环形图，同时展示 -->
@@ -910,17 +1018,97 @@ function onTrendDaysChange() {
   color: #1f2d3d;
 }
 
+.trend-stats {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ts-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  padding: 4px 12px;
+  border-radius: 6px;
+  background: #f7f8fa;
+  border-left: 3px solid #2f6fed;
+  min-width: 52px;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+.ts-card:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+.ts-label {
+  font-size: 11px;
+  color: #909399;
+  line-height: 1;
+  margin-bottom: 2px;
+}
+.ts-value {
+  font-size: 16px;
+  font-weight: 700;
+  color: #1f2d3d;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+}
+.ts-sub {
+  font-size: 10px;
+  color: #b0b3b8;
+  margin-top: 1px;
+}
+.ts-peak { border-left-color: #ef4444; }
+.ts-peak .ts-value { color: #ef4444; }
+.ts-valley { border-left-color: #10b981; }
+.ts-valley .ts-value { color: #10b981; }
+.ts-avg { border-left-color: #2f6fed; }
+.ts-total { border-left-color: #8b5cf6; }
+.ts-total .ts-value { color: #8b5cf6; }
+
 .more-link {
   font-size: 12px;
 }
 
 .chart {
+  width: 100%;
+  height: 100%;
+}
+.trend-chart-wrap {
+  position: relative;
   height: 320px;
   width: 100%;
-  transition: opacity 0.3s ease; /* 趋势维度切换时的淡入淡出过渡 */
 }
-.chart.trend-fading {
-  opacity: 0;
+.chart-switch-overlay {
+  position: absolute;
+  right: 16px;
+  top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(47, 111, 237, 0.25);
+  border-radius: 14px;
+  font-size: 12px;
+  color: #2f6fed;
+  backdrop-filter: blur(4px);
+  box-shadow: 0 2px 8px rgba(47, 111, 237, 0.08);
+  animation: fade-in 0.2s ease;
+}
+.chart-switch-overlay .switch-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #2f6fed;
+  animation: pulse 1.2s ease-in-out infinite;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.7); }
+}
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 .chart-loading {

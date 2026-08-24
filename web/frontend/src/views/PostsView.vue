@@ -106,10 +106,14 @@ function copyUrl(url: string) {
 }
 
 onMounted(() => {
-  // 支持从数据总览的版块分布点击跳转：/posts?fid=xx 预选该版块
   const qfid = route.query.fid
   if (typeof qfid === 'string' && qfid) {
     filters.fid = [qfid]
+  }
+  const qDateFrom = route.query.date_from
+  const qDateTo = route.query.date_to
+  if (typeof qDateFrom === 'string' && typeof qDateTo === 'string' && qDateFrom && qDateTo) {
+    filters.dateRange = [qDateFrom, qDateTo]
   }
   loadFidMeta()
   load()
