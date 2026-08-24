@@ -169,6 +169,33 @@ function renderTrendChart() {
     const minVal = data.length ? Math.min(...data) : 0
     const maxIdx = data.indexOf(maxVal)
     const minIdx = data.indexOf(minVal)
+    // B4：智能异常标注（基于标准差检测 2σ 外的异常点）
+    const anomalyThreshold = 2
+    const anomalyPoints = data
+      .map((v, i) => ({ v, i, dev: std > 0 ? Math.abs(v - mean) / std : 0 }))
+      .filter(({ dev }) => dev > anomalyThreshold)
+      .sort((a, b) => b.dev - a.dev)
+      .slice(0, 5) // 最多标注 5 个最严重的异常
+      .map(({ i, dev, v }) => ({
+        coord: [i, v] as [number, number],
+        value: '⚠',
+        symbol: 'pin',
+        symbolSize: 36,
+        itemStyle: { color: '#f59e0b' },
+        label: {
+          show: true,
+          formatter: '⚠',
+          fontSize: 14,
+          color: '#fff',
+        },
+        tooltip: {
+          formatter: () => {
+            const direction = v > mean ? '偏高' : '偏低'
+            const deviation = ((v - mean) / std).toFixed(1)
+            return `异常值：${direction} ${Math.abs(deviation)}σ`
+          },
+        },
+      }))
     trendChart.value.setOption({
       tooltip: {
         trigger: 'axis',
@@ -279,6 +306,12 @@ function renderTrendChart() {
             },
             data: [{ yAxis: avg }],
           },
+          markPoint: anomalyPoints.length > 0 ? {
+            silent: false,
+            symbol: 'pin',
+            symbolSize: 36,
+            data: anomalyPoints,
+          } : undefined,
         },
         ...(data.length > 1
           ? [
@@ -881,21 +914,21 @@ function onTrendDaysChange() {
         <div v-if="trendStats" class="trend-stats">
           <div class="ts-card ts-peak">
             <span class="ts-label">峰值</span>
-            <span class="ts-value">{{ trendStats.max.toLocaleString() }}</span>
+            <span class="ts-value"><RollingNumber :value="trendStats.max" /></span>
             <span class="ts-sub">{{ trendStats.maxDate.slice(5) }}</span>
           </div>
           <div class="ts-card ts-valley">
             <span class="ts-label">谷值</span>
-            <span class="ts-value">{{ trendStats.min.toLocaleString() }}</span>
+            <span class="ts-value"><RollingNumber :value="trendStats.min" /></span>
             <span class="ts-sub">{{ trendStats.minDate.slice(5) }}</span>
           </div>
           <div class="ts-card ts-avg">
             <span class="ts-label">日均</span>
-            <span class="ts-value">{{ trendStats.avg.toLocaleString() }}</span>
+            <span class="ts-value"><RollingNumber :value="trendStats.avg" /></span>
           </div>
           <div class="ts-card ts-total">
             <span class="ts-label">总计</span>
-            <span class="ts-value">{{ trendStats.total.toLocaleString() }}</span>
+            <span class="ts-value"><RollingNumber :value="trendStats.total" /></span>
           </div>
         </div>
         <el-radio-group v-model="trendDays" size="small" @change="onTrendDaysChange">
@@ -1150,6 +1183,27 @@ function onTrendDaysChange() {
   position: relative;
   height: 320px;
   width: 100%;
+}
+/* E2：折线流光动画（CSS 方案，轻量科技感） */
+.trend-chart-wrap::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: linear-gradient(90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.6) 50%,
+    transparent 100%
+  );
+  animation: shine 3s infinite linear;
+  pointer-events: none;
+  z-index: 10;
+}
+@keyframes shine {
+  from { transform: translateX(-100%); }
+  to   { transform: translateX(100%); }
 }
 .chart-switch-overlay {
   position: absolute;
