@@ -40,7 +40,7 @@ txxy_test/
 │       └── src/stores/dashboard.ts  # Pinia 全局状态（自动刷新/更新时间，Header 与页面解耦）
 ├── start_web.bat       # 一键启动前端展示服务
 ├── db/posts.db         # SQLite 数据库（posts 表 title 主键去重 + run_days/run_sections 运行记录表）
-├── outputs/日期/        # 抓取结果 CSV 与进度文件
+├── outputs/日期/        # 抓取结果 CSV、进度文件与日志（文件名带批次时间 <程序名>_<日期>_<批次时间>）
 └── downloads/标题/      # 帖子页下载的图片 / 视频 / 种子及磁力·云盘清单
 ```
 
@@ -122,7 +122,7 @@ python scraper.py 2 --restart       # 忽略断点进度，强制重跑（提示
 - `--public <域名>`（可选）：指定**入库链接**使用的公开域名根地址，仅影响写入数据库/CSV 的链接拼接，不影响抓取根地址；默认与根地址相同。本地代理开启时若不传，入库链接会带 `127.0.0.1:1024`（离开本机不可访问），因此 `run_batch.py` 始终自动以 `--public <REMOTE_ROOT_URL>` 传入真实域名；
 - `--restart`（可选）：忽略断点进度，从起始页强制重跑；会先删除当天该版块已生成的 CSV/进度文件再重新抓取（删除有日志留痕），适用于提示"版块所有页面已完成，无需重复抓取"后仍想重抓的场景；与 `--public`、页码参数可自由组合；
 - 顶部配置区可调整 `REQUEST_INTERVAL`（请求间隔）、`AUTO_DETECT_END_PAGE`（动态获取末页）等；
-- 断点续写：进度写入 `*_progress.txt`，重新运行会从上次完成的页码继续；
+- 断点续写：进度写入 `<FID>_progress_<批次时间>.txt`，重新运行会从上次完成的页码继续；
 - 请求重试：网络异常（连接拒绝/超时）与 `408/429/5xx` 状态码按退避递增重试，第 N 次重试等待 `RETRY_BASE_DELAY`×N 秒，最多 `REQUEST_MAX_RETRIES` 次（默认 3）；其它 `4xx` 确定性失败不重试直接跳过；
 - 失败页不推进进度：重试后仍失败的页保留在断点进度之外，下次运行会重抓该页，避免漏数据；
 - 连续失败保护：连续 `MAX_CONSECUTIVE_FAILURES`（默认 3）页失败视为站点不可用，停止本次抓取避免空转；
@@ -133,9 +133,9 @@ python scraper.py 2 --restart       # 忽略断点进度，强制重跑（提示
 ```
 outputs/
 └── 20260812/
-    ├── 2_output_20260812.csv   # 抓取结果
-    ├── 2_progress.txt          # 进度文件（断点续写）
-    ├── 2_output_20260812.log   # 日志文件（带时间戳）
+    ├── 2_output_20260812_164347.csv   # 抓取结果（文件名带批次时间 YYYYMMDD_HHMMSS）
+    ├── 2_progress_20260812_164347.txt # 进度文件（断点续写，同批次时间）
+    ├── 2_output_20260812_164347.log   # 日志文件（带时间戳，同批次时间）
     └── ...
 ```
 
@@ -232,9 +232,9 @@ schtasks /Delete /TN "txxy_daily_batch" /F
 
 所有脚本的日志统一由 `file_logger.py` 处理（各脚本 `import file_logger` 后在打印前调用一次 `file_logger.setup("<程序名>")`）：
 
-- **双写输出**：控制台与日志文件同步写入，日志文件位于 `outputs/日期/<程序名>_<日期>.log`（UTF-8、追加模式、每行立即落盘）；子进程输出（run_batch → scraper）由调度器实时转发，同样落盘；
+- **双写输出**：控制台与日志文件同步写入，日志文件位于 `outputs/日期/<程序名>_<日期>_<批次时间>.log`（`<批次时间>` 为本次运行起始时刻 `YYYYMMDD_HHMMSS`，贯穿整个进程、保证同一次运行所有日志共享同一批次时间；UTF-8、追加模式、每行立即落盘）；子进程输出（run_batch → scraper）由调度器实时转发，同样落盘；
 - **时间戳与服务标签**：非空日志行自动添加 `[YYYY-MM-DD HH:MM:SS] [<服务名>]` 前缀（`<服务名>` 即 `setup()` 传入的程序名，如 `run_batch`、`scraper_2`、`download_files`、`init_db`），终端控制台与日志文件均生效，**每条日志一眼可辨所属服务**；
-- **run_batch 汇总日志的子进程标识**：`run_batch_<日期>.log` 中，调度器自身行带 `[run_batch]` 标签；转发的子进程行额外带 `[scraper_<版块ID>]` 前缀（如 `[scraper_2]`），并发抓取时能区分该行来自哪个版块的 scraper；
+- **run_batch 汇总日志的子进程标识**：`run_batch_<日期>_<批次时间>.log` 中，调度器自身行带 `[run_batch]` 标签；转发的子进程行额外带 `[scraper_<版块ID>]` 前缀（如 `[scraper_2]`），并发抓取时能区分该行来自哪个版块的 scraper；
 - **执行汇总不加时间戳**：汇总块、机器可读行（如 `__SUMMARY__`）用 `with file_logger.raw():` 包裹，保持原样输出（也不加服务标签）；非终端管道（子进程转发）也保持原样，保证机器解析不被破坏；
 - **过期日志清理仅在 `run_batch.py` 批次正常结束后触发**：`file_logger.cleanup_old_logs()` 会整体删除 `outputs/` 下超过保留天数（默认 3 天）的**过期日期目录**（含日志、CSV、进度文件），删除后输出留痕日志（如 `已删除过期目录: outputs/20260815（共 N 个文件）`）；异常退出（Ctrl+C / 崩溃 / 强杀）不清理，保留现场便于排查。`download_files.py`、`init_db.py` 等一次性/手动脚本**不再触发清理**，避免误删 scraper 的 CSV/进度数据。
 
@@ -247,7 +247,7 @@ schtasks /Delete /TN "txxy_daily_batch" /F
 | `内容非图片` | 图床返回广告 HTML 页：确认使用纯图片 `Accept` 头（已内置 `extract_images.IMG_HEADERS`） |
 | 下载失败提示 `ConnectionError / Read timed out` | 网络暂时性超时，脚本已自动降级重试一次；仍失败可稍后重跑（断点续传） |
 | 数据库重复数据 | `posts` 表以 `title` 为主键，重复标题自动覆盖更新，无需清理 |
-| 日志在哪里 | `outputs/日期/<程序名>_<日期>.log`（与 CSV 同目录），如 `outputs/20260812/run_batch_20260812.log` |
+| 日志在哪里 | `outputs/日期/<程序名>_<日期>_<批次时间>.log`（与 CSV 同目录），如 `outputs/20260812/run_batch_20260812_164347.log` |
 
 ## 数据说明
 

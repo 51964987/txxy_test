@@ -150,6 +150,10 @@ _raw_mode = False
 # 当前服务名标签（setup() 时设置；未启用前为空，日志行不带 [服务名] 前缀）
 _program = ""
 
+# 本次运行（批次）起始时间戳：格式 YYYYMMDD_HHMMSS，用于日志/数据文件名
+# 贯穿整个进程，保证同一次运行中所有文件共享同一批次时间（而非各自取实时时间）
+_run_batch_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+
 
 def _add_timestamps(data: str) -> str:
     """逐行添加时间戳与服务标签前缀 [YYYY-MM-DD HH:MM:SS] [<服务名>]；
@@ -248,7 +252,7 @@ def cleanup_old_logs(retention_days: int = RETENTION_DAYS) -> int:
 
 
 def _log_path(program: str) -> str:
-    return os.path.join(log_dir(), f"{program}_{datetime.now().strftime('%Y%m%d')}.log")
+    return os.path.join(log_dir(), f"{program}_{_run_batch_ts}.log")
 
 
 def setup(program: str) -> str:

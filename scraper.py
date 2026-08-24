@@ -30,9 +30,11 @@ FORCE_RESTART = False                    # 是否忽略断点进度强制重跑�
 
 # 输出目录 & 文件（统一放在 outputs/日期/ 下：最外层 outputs，再到日期目录）
 _OUTPUT_DATE = datetime.now().strftime("%Y%m%d")
+# 批次时间戳：本次运行起始时刻，格式 YYYYMMDD_HHMMSS，贯穿整个进程
+_RUN_BATCH_TS = datetime.now().strftime("%Y%m%d_%H%M%S")
 OUTPUT_DIR = f"outputs/{_OUTPUT_DATE}"
-OUTPUT_FILE = f"{OUTPUT_DIR}/{FID}_output_{_OUTPUT_DATE}.csv"
-PROGRESS_FILE = f"{OUTPUT_DIR}/{FID}_progress.txt"
+OUTPUT_FILE = f"{OUTPUT_DIR}/{FID}_output_{_RUN_BATCH_TS}.csv"
+PROGRESS_FILE = f"{OUTPUT_DIR}/{FID}_progress_{_RUN_BATCH_TS}.txt"
 DB_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "db", "posts.db")
 
 # 请求头，模拟浏览器
@@ -625,8 +627,8 @@ def _apply_cli_args() -> None:
         print(f"[配置] 入库链接使用公开域名: {PUBLIC_URL}")
     BASE_URL = ROOT_URL + "/thread0806.php"  # pyright: ignore[reportConstantRedefinition]
     OUTPUT_DIR = f"outputs/{datetime.now().strftime('%Y%m%d')}"  # pyright: ignore[reportConstantRedefinition]
-    OUTPUT_FILE = f"{OUTPUT_DIR}/{FID}_output_{datetime.now().strftime('%Y%m%d')}.csv"  # pyright: ignore[reportConstantRedefinition]
-    PROGRESS_FILE = f"{OUTPUT_DIR}/{FID}_progress.txt"  # pyright: ignore[reportConstantRedefinition]
+    OUTPUT_FILE = f"{OUTPUT_DIR}/{FID}_output_{_RUN_BATCH_TS}.csv"  # pyright: ignore[reportConstantRedefinition]
+    PROGRESS_FILE = f"{OUTPUT_DIR}/{FID}_progress_{_RUN_BATCH_TS}.txt"  # pyright: ignore[reportConstantRedefinition]
 
 
 if __name__ == "__main__":
