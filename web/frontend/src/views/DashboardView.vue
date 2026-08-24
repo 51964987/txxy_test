@@ -160,6 +160,15 @@ function renderTrendChart() {
     const needZoom = trend.value.length > 31
     const avg = data.length ? Math.round(data.reduce((s, v) => s + v, 0) / data.length) : 0
     const lastIdx = data.length - 1
+    const mean = avg
+    const variance = data.length ? data.reduce((s, v) => s + (v - mean) ** 2, 0) / data.length : 0
+    const std = Math.sqrt(variance)
+    const stdUpper = mean + std
+    const stdLower = Math.max(0, mean - std)
+    const maxVal = data.length ? Math.max(...data) : 0
+    const minVal = data.length ? Math.min(...data) : 0
+    const maxIdx = data.indexOf(maxVal)
+    const minIdx = data.indexOf(minVal)
     trendChart.value.setOption({
       tooltip: {
         trigger: 'axis',
@@ -228,21 +237,35 @@ function renderTrendChart() {
           animationEasing: 'cubicOut',
           animationDelay: (idx: number) => idx * 24,
           data,
-          lineStyle: { width: 3, color: '#2f6fed' },
+          lineStyle: {
+            width: 3,
+            color: new graphic.LinearGradient(0, 0, 1, 0, [
+              { offset: 0, color: '#2f6fed' },
+              { offset: 1, color: '#6366f1' },
+            ]),
+            shadowColor: 'rgba(47, 111, 237, 0.35)',
+            shadowBlur: 6,
+            shadowOffsetY: 2,
+          },
           itemStyle: { color: '#2f6fed' },
           areaStyle: {
             color: new graphic.LinearGradient(0, 0, 0, 1, [
-              { offset: 0, color: 'rgba(47, 111, 237, 0.22)' },
-              { offset: 1, color: 'rgba(47, 111, 237, 0.02)' },
+              { offset: 0, color: 'rgba(47, 111, 237, 0.35)' },
+              { offset: 0.3, color: 'rgba(47, 111, 237, 0.18)' },
+              { offset: 0.65, color: 'rgba(99, 102, 241, 0.10)' },
+              { offset: 1, color: 'rgba(99, 102, 241, 0.01)' },
             ]),
           },
-          markPoint: {
-            symbolSize: 46,
-            label: { fontSize: 10 },
-            data: [
-              { type: 'max', name: '最高' },
-              { type: 'min', name: '最低' },
-            ],
+          markArea: {
+            silent: true,
+            itemStyle: { color: 'rgba(47, 111, 237, 0.06)' },
+            data: data.length > 1
+              ? [[
+                  { xAxis: 0, yAxis: stdLower },
+                  { xAxis: data.length - 1, yAxis: stdUpper },
+                ]]
+              : [],
+            label: { show: false },
           },
           markLine: {
             silent: true,
@@ -257,16 +280,67 @@ function renderTrendChart() {
             data: [{ yAxis: avg }],
           },
         },
+        ...(data.length > 1
+          ? [
+              {
+                name: '峰值',
+                type: 'effectScatter',
+                coordinateSystem: 'cartesian2d',
+                zlevel: 3,
+                rippleEffect: { period: 3, scale: 5, brushType: 'stroke' },
+                symbolSize: 14,
+                itemStyle: { color: '#f59e0b' },
+                label: {
+                  show: true,
+                  position: 'top',
+                  formatter: '峰值',
+                  fontSize: 10,
+                  color: '#f59e0b',
+                  fontWeight: 600,
+                },
+                data: [{ value: [maxIdx, maxVal] }],
+                tooltip: { show: false },
+              },
+              {
+                name: '谷值',
+                type: 'effectScatter',
+                coordinateSystem: 'cartesian2d',
+                zlevel: 3,
+                rippleEffect: { period: 4, scale: 3, brushType: 'stroke' },
+                symbolSize: 10,
+                itemStyle: { color: '#ef4444' },
+                label: {
+                  show: true,
+                  position: 'bottom',
+                  formatter: '谷值',
+                  fontSize: 10,
+                  color: '#ef4444',
+                  fontWeight: 600,
+                },
+                data: [{ value: [minIdx, minVal] }],
+                tooltip: { show: false },
+              },
+            ]
+          : []),
         ...(lastIdx >= 0
           ? [
               {
                 name: '最新',
                 type: 'effectScatter',
-                data: [{ value: [lastIdx, data[lastIdx]] }],
+                coordinateSystem: 'cartesian2d',
+                zlevel: 3,
+                rippleEffect: { period: 2.5, scale: 4, brushType: 'stroke' },
                 symbolSize: 12,
-                rippleEffect: { period: 3, scale: 3, brushType: 'stroke' },
                 itemStyle: { color: '#2f6fed' },
-                z: 10,
+                label: {
+                  show: true,
+                  position: 'top',
+                  formatter: '最新',
+                  fontSize: 10,
+                  color: '#2f6fed',
+                  fontWeight: 600,
+                },
+                data: [{ value: [lastIdx, data[lastIdx]] }],
                 tooltip: { show: false },
               },
             ]
