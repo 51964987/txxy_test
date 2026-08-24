@@ -15,6 +15,7 @@ import type { ECharts } from 'echarts/core'
 import { ElMessage } from 'element-plus'
 import { api, type FidDistItem, type Overview, type Post, type TrendPoint } from '../api'
 import { useDashboardStore } from '../stores/dashboard'
+import RollingNumber from '../components/RollingNumber.vue'
 
 use([
   CanvasRenderer,
@@ -37,11 +38,9 @@ const trend = ref<TrendPoint[]>([])
 const fidDist = ref<FidDistItem[]>([])
 const loadingP0 = ref(false)
 
-// ===== P1：懒加载区块（热门榜 + 最近抓取）=====
+// ===== P1：懒加载区块（热门榜）=====
 const boards = ref<{ top_likes: Post[]; top_replies: Post[] } | null>(null)
-const recent = ref<Post[]>([])
 const loadingBoards = ref(false)
-const loadingRecent = ref(false)
 const p1AreaRef = ref<HTMLDivElement | null>(null)
 
 let trendObserver: IntersectionObserver | null = null
@@ -52,10 +51,9 @@ const pieRef = shallowRef<HTMLDivElement | null>(null)
 const trendChart = shallowRef<ECharts | null>(null)
 const pieChart = shallowRef<ECharts | null>(null)
 
-const trendDays = ref(30)
+// 默认近 7 天（与趋势 tooltip 自动轮播的起始维度一致）
+const trendDays = ref(7)
 
-// 版块分布：环形图 / 排行榜 双视图
-const distView = ref<'pie' | 'bar'>('pie')
 // 环形图中心动态信息（悬停版块时切换）
 const centerInfo = ref<{ name: string; count: string; pct: string; color: string } | null>(null)
 // 环形图中心位置随图例方向变化
@@ -80,11 +78,6 @@ let refreshTimer: ReturnType<typeof setInterval> | null = null
 const fidDistTotal = computed(() => fidDist.value.reduce((s, f) => s + f.count, 0))
 
 const totalText = computed(() => (overview.value?.total ?? 0).toLocaleString())
-const todayText = computed(() => (overview.value?.today ?? 0).toLocaleString())
-const yesterdayText = computed(() => (overview.value?.yesterday ?? 0).toLocaleString())
-const weekText = computed(() => (overview.value?.week_new ?? 0).toLocaleString())
-const totalUsersText = computed(() => (overview.value?.total_users ?? 0).toLocaleString())
-const activeUsersText = computed(() => (overview.value?.active_users ?? 0).toLocaleString())
 
 // 指标卡副指标：环比 / 占比 / 日均
 const kpiSub = computed(() => {
@@ -120,6 +113,11 @@ async function loadP0(initial = false) {
     await nextTick()
     renderTrendChart()
     renderDistChart()
+    // 数据更新后同时重启排行榜轮播与环形图轮播
+    startPieCarousel()
+    startBarScroll()
+    // 首屏：等折线逐点描线动画完成后再启动趋势 tooltip 轮播（非首屏自动刷新不中断当前轮播）
+    if (initial) startTrendCarousel(trend.value.length * 24 + 900)
   } catch (e) {
     ElMessage.error(`加载总览数据失败: ${(e as Error).message}`)
   } finally {
@@ -138,19 +136,6 @@ async function loadBoards() {
     ElMessage.error(`加载热门榜失败: ${(e as Error).message}`)
   } finally {
     loadingBoards.value = false
-  }
-}
-
-// ===== P1：懒加载最近抓取 =====
-async function loadRecent() {
-  if (recent.value.length || loadingRecent.value) return
-  loadingRecent.value = true
-  try {
-    recent.value = await api.recent(10)
-  } catch (e) {
-    ElMessage.error(`加载最近抓取失败: ${(e as Error).message}`)
-  } finally {
-    loadingRecent.value = false
   }
 }
 
@@ -192,6 +177,12 @@ function renderTrendChart() {
           type: 'line',
           smooth: true,
           showSymbol: false,
+          // 数据大屏风格：入场逐点描线生长，数据更新平滑过渡
+          animation: true,
+          animationDuration: 900,
+          animationDurationUpdate: 600,
+          animationEasing: 'cubicOut',
+          animationDelay: (idx: number) => idx * 24,
           data,
           lineStyle: { width: 3, color: '#2f6fed' },
           itemStyle: { color: '#2f6fed' },
@@ -217,7 +208,7 @@ function renderTrendChart() {
 
 /** 版块分布渲染：环形图，支持点击跳转与悬停联动 */
 function renderDistChart() {
-  if (!pieRef.value || distView.value !== 'pie') return
+  if (!pieRef.value) return
   const chart = pieChart.value ??= initChart(pieRef.value)
   const total = fidDist.value.reduce((s, f) => s + f.count, 0)
   const wide = window.innerWidth >= 1440
@@ -283,19 +274,22 @@ function renderDistChart() {
     if (match) goDist(match.fid)
   })
   chart.on('mouseover', (p: any) => {
+    // 用户悬停时暂停自动轮播，避免抢占
+    pieHover = true
     if (p.componentType === 'series' && p.data) {
-      const f = p.data
-      const pct = total ? ((f.value / total) * 100).toFixed(1) : '0'
-      centerInfo.value = {
-        name: f.labelText ?? f.name,
-        count: Number(f.value).toLocaleString(),
-        pct,
-        color: colorForFid(String(f.fid ?? '')),
-      }
+      updatePieCenter(p.data, total)
     }
   })
   chart.on('mouseout', () => {
-    centerInfo.value = null
+    pieHover = false
+    // 离开后恢复轮播展示，中心信息同步到当前轮播项
+    if (pieTimer) {
+      const f = fidDist.value[pieIndex]
+      if (f) updatePieCenter(
+        { labelText: f.name, value: f.count, fid: f.fid },
+        fidDistTotal.value,
+      )
+    }
   })
   chart.on('click', (p: any) => goDist(p.data?.fid))
 }
@@ -327,7 +321,6 @@ function syncAutoRefresh() {
 function autoRefreshTick() {
   if (overview.value || loadingP0.value) loadP0(false)
   if (boards.value) loadBoards()
-  if (recent.value.length) loadRecent()
 }
 
 onMounted(() => {
@@ -343,7 +336,6 @@ onMounted(() => {
           p1Observer?.disconnect()
           p1Observer = null
           loadBoards()
-          loadRecent()
         }
       },
       { rootMargin: '200px 0px' },
@@ -352,7 +344,6 @@ onMounted(() => {
   } else if (!hasObserver) {
     // 兼容不支持 IntersectionObserver 的旧浏览器：直接加载
     loadBoards()
-    loadRecent()
   }
 
   syncAutoRefresh()
@@ -373,15 +364,14 @@ onBeforeUnmount(() => {
     p1Observer.disconnect()
     p1Observer = null
   }
+  stopBarScroll()
+  stopPieCarousel()
+  stopTrendCarousel()
   store.registerAutoChange(null)
   window.removeEventListener('resize', onResize)
   trendChart.value?.dispose()
   pieChart.value?.dispose()
 })
-
-function openPost(p: Post) {
-  window.open(p.url, '_blank', 'noopener')
-}
 
 function openUrl(url: string) {
   window.open(url, '_blank', 'noopener')
@@ -403,22 +393,243 @@ function metricText(v: unknown): string {
   return Number.isFinite(n) && n > 0 ? n.toLocaleString() : '-'
 }
 
-// 相对时间：x 分钟前 / x 小时前 / x 天前
-function formatRelativeTime(raw?: string): string {
-  if (!raw) return '-'
-  const s = String(raw).replace('T', ' ')
-  const [datePart = '', timePart = '00:00:00'] = s.split(' ')
-  const t = new Date(`${datePart}T${timePart}`)
-  if (Number.isNaN(t.getTime())) return s.slice(0, 19)
-  const diffMs = Date.now() - t.getTime()
-  const min = Math.floor(diffMs / 60000)
-  if (min < 1) return '刚刚'
-  if (min < 60) return `${min} 分钟前`
-  const h = Math.floor(min / 60)
-  if (h < 24) return `${h} 小时前`
-  const d = Math.floor(h / 24)
-  if (d < 7) return `${d} 天前`
-  return s.slice(0, 10)
+
+
+// ============================================================
+// 动态效果模块（数据大屏风格，纯前端动画，不触发数据刷新）
+// ============================================================
+
+// ---- 版块分布排行榜：DataV 风格无缝循环单条轮播 ----
+// 容器固定显示 N 行，每隔 waitTime 平滑向上滚动一行；
+// 排行榜：固定 8 行可视区；数据超过 8 行时轮播，末尾补位 (N-1) 行实现无缝循环、无空白。
+const barListRef = ref<HTMLDivElement | null>(null)
+const BAR_ROW_HEIGHT = 40 // px，与 CSS 中 .bar-row 高度保持一致
+const BAR_VISIBLE_ROWS = 8 // 可视区固定展示行数
+const BAR_WAIT_TIME = 2000 // ms
+let barTimer: ReturnType<typeof setInterval> | null = null
+let barIndex = 0
+
+// 名次徽章按真实排名计算；末尾补位 (N-1) 行复用前几行的名次（1~N-1），实现无缝循环
+const barLoopItems = computed(() => {
+  const items = fidDist.value.map((item, i) => ({ item, rank: i + 1 }))
+  const padCount = Math.max(0, BAR_VISIBLE_ROWS - 1)
+  const pad = fidDist.value
+    .slice(0, Math.min(padCount, fidDist.value.length))
+    .map((item, i) => ({ item, rank: i + 1 }))
+  return [...items, ...pad]
+})
+
+// 固定 8 行可视区高度，与 CSS 中 .bar-list 保持一致
+const barListStyle = computed(() => ({ height: `${BAR_VISIBLE_ROWS * BAR_ROW_HEIGHT}px` }))
+
+function startBarScroll() {
+  stopBarScroll()
+  const el = barListRef.value
+  if (!el || fidDist.value.length <= BAR_VISIBLE_ROWS) return
+  barIndex = 0
+  el.scrollTop = 0
+  barTimer = setInterval(() => {
+    const maxIndex = Math.max(0, barLoopItems.value.length - BAR_VISIBLE_ROWS)
+    barIndex = barIndex >= maxIndex ? 0 : barIndex + 1
+    el.scrollTop = barIndex * BAR_ROW_HEIGHT
+  }, BAR_WAIT_TIME)
+}
+
+function stopBarScroll() {
+  if (barTimer) {
+    clearInterval(barTimer)
+    barTimer = null
+  }
+  barIndex = 0
+  const el = barListRef.value
+  if (el) el.scrollTop = 0
+}
+
+function pauseBarScroll() {
+  if (barTimer) {
+    clearInterval(barTimer)
+    barTimer = null
+  }
+}
+
+function resumeBarScroll() {
+  if (!barTimer) startBarScroll()
+}
+
+// ---- 版块分布环形图：自动轮播高亮 ----
+const PIE_CAROUSEL_INTERVAL = 2200
+let pieTimer: ReturnType<typeof setInterval> | null = null
+let pieIndex = 0
+let pieHover = false
+
+function updatePieCenter(data: any, total: number) {
+  const f = data ?? {}
+  const pct = total ? ((Number(f.value) || 0) / total) * 100 : 0
+  centerInfo.value = {
+    name: f.labelText ?? f.name ?? '',
+    count: Number(f.value || 0).toLocaleString(),
+    pct: pct.toFixed(1),
+    color: colorForFid(String(f.fid ?? '')),
+  }
+}
+
+function startPieCarousel() {
+  stopPieCarousel()
+  const chart = pieChart.value
+  if (!chart || !fidDist.value.length) return
+  const n = fidDist.value.length
+  if (n < 2) return
+  pieIndex = 0
+  pieHover = false
+  chart.dispatchAction({ type: 'highlight', seriesIndex: 0, dataIndex: 0 })
+  updatePieCenter(
+    { labelText: fidDist.value[0].name, value: fidDist.value[0].count, fid: fidDist.value[0].fid },
+    fidDistTotal.value,
+  )
+  pieTimer = setInterval(() => {
+    if (pieHover) return
+    const c = pieChart.value
+    if (!c || !fidDist.value.length) return
+    const n2 = fidDist.value.length
+    c.dispatchAction({ type: 'downplay', seriesIndex: 0 })
+    pieIndex = (pieIndex + 1) % n2
+    c.dispatchAction({ type: 'highlight', seriesIndex: 0, dataIndex: pieIndex })
+    const f = fidDist.value[pieIndex]
+    if (f) updatePieCenter({ labelText: f.name, value: f.count, fid: f.fid }, fidDistTotal.value)
+  }, PIE_CAROUSEL_INTERVAL)
+}
+
+function stopPieCarousel() {
+  if (pieTimer) {
+    clearInterval(pieTimer)
+    pieTimer = null
+  }
+  pieIndex = 0
+  pieHover = false
+  pieChart.value?.dispatchAction({ type: 'downplay', seriesIndex: 0 })
+}
+
+// ---- 每日新增趋势：tooltip 自动轮播（7 → 30 → 90 天循环）----
+// 模拟鼠标悬停效果，沿时间轴从右往左（最新日期 → 最早日期）依次展示每个数据点的 tooltip；
+// 当前维度展示完成后自动切换下一维度，循环播放；悬停暂停、移出恢复；
+// 维度切换采用「淡出旧图表 → 加载新数据 → 淡入新图表」的平滑过渡，避免生硬跳变。
+const TREND_DAYS_SEQ = [7, 30, 90]
+const TREND_TIP_INTERVAL = 900 // ms，单点停留时长
+const TREND_STAGE_GAP = 1500 // ms，阶段切换间隔
+const TREND_FADE_MS = 300 // ms，图表淡出/淡入过渡时长
+const trendFading = ref(false) // 图表是否处于淡出状态（维度切换过渡中）
+let trendTipTimer: ReturnType<typeof setInterval> | null = null
+let trendStageTimer: ReturnType<typeof setTimeout> | null = null
+let trendStartTimer: ReturnType<typeof setTimeout> | null = null
+let trendTipIndex = 0
+let trendTipPaused = false
+let trendLoading = false
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
+function stopTrendCarousel() {
+  if (trendTipTimer) {
+    clearInterval(trendTipTimer)
+    trendTipTimer = null
+  }
+  if (trendStageTimer) {
+    clearTimeout(trendStageTimer)
+    trendStageTimer = null
+  }
+  if (trendStartTimer) {
+    clearTimeout(trendStartTimer)
+    trendStartTimer = null
+  }
+  trendTipIndex = 0
+  trendChart.value?.dispatchAction({ type: 'hideTip' })
+}
+
+/** 启动趋势 tooltip 轮播；delay>0 时延迟启动（等待描线/过渡动画完成）；
+ *  prevLen 为上一维度点数，用于维度切换时让轮播起点与上一阶段终点在时间轴上衔接 */
+function startTrendCarousel(delay = 0, prevLen?: number) {
+  stopTrendCarousel()
+  if (delay > 0) {
+    trendStartTimer = setTimeout(() => {
+      trendStartTimer = null
+      beginTrendTipLoop(prevLen)
+    }, delay)
+  } else {
+    beginTrendTipLoop(prevLen)
+  }
+}
+
+function beginTrendTipLoop(prevLen?: number) {
+  const chart = trendChart.value
+  if (!chart || !trend.value.length) return
+  // 先清除可能残留的 tooltip，保证每阶段第一帧干净
+  chart.dispatchAction({ type: 'hideTip' })
+  // 从右往左（最新日期 → 最早日期）依次展示；
+  // 维度衔接时起点为「上一维度天数之前一天」：例如 7 天播到 6 天前后，30 天从 7 天前（index 22）接着往左
+  trendTipIndex = prevLen != null
+    ? Math.max(0, trend.value.length - 1 - prevLen)
+    : trend.value.length - 1
+  trendTipTimer = setInterval(() => {
+    if (trendTipPaused) return
+    const c = trendChart.value
+    if (!c || !trend.value.length) return
+    // 数据刷新导致长度变化时钳制索引，避免越界
+    if (trendTipIndex >= trend.value.length) trendTipIndex = trend.value.length - 1
+    if (trendTipIndex < 0) {
+      advanceTrendStage()
+      return
+    }
+    c.dispatchAction({ type: 'showTip', seriesIndex: 0, dataIndex: trendTipIndex })
+    trendTipIndex--
+  }, TREND_TIP_INTERVAL)
+}
+
+/** 当前维度展示完成：间隔后切换到下一数据范围（7 → 30 → 90 → 7）；
+ *  切换到 30/90 天时轮播起点与上一阶段终点衔接（时间轴连续向左推进），
+ *  循环回 7 天时重新从最新日期（最右侧）开始 */
+function advanceTrendStage() {
+  if (trendTipTimer) {
+    clearInterval(trendTipTimer)
+    trendTipTimer = null
+  }
+  trendChart.value?.dispatchAction({ type: 'hideTip' })
+  trendStageTimer = setTimeout(() => {
+    trendStageTimer = null
+    const prevLen = trend.value.length
+    const i = TREND_DAYS_SEQ.indexOf(trendDays.value)
+    const nextIdx = (i + 1) % TREND_DAYS_SEQ.length
+    trendDays.value = TREND_DAYS_SEQ[nextIdx]
+    loadTrendOnly(nextIdx === 0 ? undefined : prevLen)
+  }, TREND_STAGE_GAP)
+}
+
+/** 仅刷新趋势数据（轮播维度切换 / 手动切换），避免 loadP0 全量刷新引起其他卡片重绘；
+ *  切换过程：淡出旧图表 → 加载并渲染新数据 → 淡入新图表，保证过渡平滑 */
+async function loadTrendOnly(prevLen?: number) {
+  if (trendLoading) return
+  trendLoading = true
+  stopTrendCarousel()
+  // 1. 淡出旧图表
+  trendFading.value = true
+  await sleep(TREND_FADE_MS)
+  try {
+    // 2. 加载并渲染新数据
+    trend.value = await api.trend(trendDays.value)
+    await nextTick()
+    renderTrendChart()
+    // 3. 淡入新图表，随后重启 tooltip 轮播（起点由 prevLen 决定）
+    trendFading.value = false
+    startTrendCarousel(700, prevLen)
+  } catch (e) {
+    trendFading.value = false
+    ElMessage.error(`加载趋势数据失败: ${(e as Error).message}`)
+  } finally {
+    trendLoading = false
+  }
+}
+
+/** 手动切换趋势天数：淡出后加载新数据，轮播重置到该维度最右侧点开始 */
+function onTrendDaysChange() {
+  loadTrendOnly()
 }
 </script>
 
@@ -445,7 +656,7 @@ function formatRelativeTime(raw?: string): string {
           </div>
           <div class="stat-body">
             <div class="stat-label">今日新增</div>
-            <div class="stat-value">{{ todayText }}</div>
+            <div class="stat-value"><RollingNumber :value="overview.today" /></div>
             <div v-if="kpiSub" class="stat-sub">
               <span :class="kpiSub.todayDiff.cls">{{ kpiSub.todayDiff.text }}</span>
             </div>
@@ -457,7 +668,7 @@ function formatRelativeTime(raw?: string): string {
           </div>
           <div class="stat-body">
             <div class="stat-label">昨日新增</div>
-            <div class="stat-value">{{ yesterdayText }}</div>
+            <div class="stat-value"><RollingNumber :value="overview.yesterday" /></div>
             <div v-if="kpiSub" class="stat-sub">
               <span class="sub-neutral">占近 7 日 {{ kpiSub.yesterdayShare ?? 0 }}%</span>
             </div>
@@ -469,7 +680,7 @@ function formatRelativeTime(raw?: string): string {
           </div>
           <div class="stat-body">
             <div class="stat-label">近 7 日新增</div>
-            <div class="stat-value">{{ weekText }}</div>
+            <div class="stat-value"><RollingNumber :value="overview.week_new" /></div>
             <div v-if="kpiSub" class="stat-sub">
               <span class="sub-neutral">日均 {{ kpiSub.weekAvg }} 条</span>
             </div>
@@ -481,7 +692,7 @@ function formatRelativeTime(raw?: string): string {
           </div>
           <div class="stat-body">
             <div class="stat-label">累计用户</div>
-            <div class="stat-value">{{ totalUsersText }}</div>
+            <div class="stat-value"><RollingNumber :value="overview.total_users" /></div>
             <div class="stat-sub">
               <span class="sub-neutral">今日活跃 {{ overview.active_users.toLocaleString() }}</span>
             </div>
@@ -493,7 +704,7 @@ function formatRelativeTime(raw?: string): string {
           </div>
           <div class="stat-body">
             <div class="stat-label">活跃用户</div>
-            <div class="stat-value">{{ activeUsersText }}</div>
+            <div class="stat-value"><RollingNumber :value="overview.active_users" /></div>
             <div v-if="kpiSub" class="stat-sub">
               <span class="sub-neutral">占累计 {{ kpiSub.activeShare ?? 0 }}%</span>
             </div>
@@ -507,37 +718,80 @@ function formatRelativeTime(raw?: string): string {
       </template>
     </div>
 
-    <!-- 图表（P0） -->
+    <!-- 每日新增趋势（整行全宽，位于 6 个指标卡下方） -->
+    <div class="page-card chart-card" style="margin-bottom: 16px">
+      <div class="chart-head">
+        <span class="chart-title">每日新增趋势（近 {{ trendDays }} 天）</span>
+        <el-radio-group v-model="trendDays" size="small" @change="onTrendDaysChange">
+          <el-radio-button :value="7">7天</el-radio-button>
+          <el-radio-button :value="30">30天</el-radio-button>
+          <el-radio-button :value="90">90天</el-radio-button>
+        </el-radio-group>
+      </div>
+      <div v-if="!trend.length && loadingP0" class="chart chart-loading">
+        <el-skeleton animated :rows="8" />
+      </div>
+      <div
+        v-show="trend.length"
+        ref="trendRef"
+        class="chart"
+        :class="{ 'trend-fading': trendFading }"
+        @mouseenter="trendTipPaused = true"
+        @mouseleave="trendTipPaused = false"
+      ></div>
+    </div>
+
+    <!-- 图表（P0）：左排行榜 + 右环形图，同时展示 -->
     <div class="chart-row">
       <div class="page-card chart-card">
         <div class="chart-head">
-          <span class="chart-title">每日新增趋势（近 {{ trendDays }} 天）</span>
-          <el-radio-group v-model="trendDays" size="small" @change="() => loadP0(false)">
-            <el-radio-button :value="7">7天</el-radio-button>
-            <el-radio-button :value="30">30天</el-radio-button>
-            <el-radio-button :value="90">90天</el-radio-button>
-          </el-radio-group>
+          <span class="chart-title">版块分布 · 排行榜</span>
         </div>
-        <div v-if="!trend.length && loadingP0" class="chart chart-loading">
-          <el-skeleton animated :rows="8" />
+        <div class="chart-wrap">
+          <div v-if="!fidDist.length && loadingP0" class="chart chart-loading">
+            <el-skeleton animated :rows="8" />
+          </div>
+          <!-- 排行榜：DataV 风格排名列表；固定 8 行可视区轮播，末尾补位实现无缝循环、无空白 -->
+          <div
+            v-else
+            ref="barListRef"
+            class="bar-list"
+            :style="barListStyle"
+            @mouseenter="pauseBarScroll"
+            @mouseleave="resumeBarScroll"
+          >
+            <div
+              v-for="(row, i) in barLoopItems"
+              :key="`${row.item.fid}-${i}`"
+              class="bar-row"
+              :title="`最近抓取：${row.item.latest_date ?? '-'}，今日新增：${row.item.today_count ?? 0}，昨日新增：${row.item.yesterday_count ?? 0}`"
+              @click="goDist(row.item.fid)"
+            >
+              <span :class="rankClass(row.rank - 1)" class="bar-rank">{{ row.rank }}</span>
+              <span class="bar-name">{{ row.item.name }}({{ row.item.fid }})</span>
+              <span class="bar-sub">
+                <template v-if="row.item.today_count != null">今日新增 {{ row.item.today_count.toLocaleString() }}</template>
+                <template v-else>最新 {{ row.item.latest_date ?? '-' }}</template>
+              </span>
+              <div class="bar-metric">
+                <span class="bar-value">{{ row.item.count.toLocaleString() }} 条</span>
+                <span class="bar-pct">({{ fidDistTotal ? ((row.item.count / fidDistTotal) * 100).toFixed(1) : 0 }}%)</span>
+              </div>
+            </div>
+          </div>
         </div>
-        <div v-show="trend.length" ref="trendRef" class="chart"></div>
       </div>
       <div class="page-card chart-card">
         <div class="chart-head">
-          <span class="chart-title">版块分布</span>
-          <el-radio-group v-model="distView" size="small" @change="renderDistChart">
-            <el-radio-button value="pie">环形图</el-radio-button>
-            <el-radio-button value="bar">排行榜</el-radio-button>
-          </el-radio-group>
+          <span class="chart-title">版块分布 · 环形图</span>
         </div>
         <div class="chart-wrap">
           <div v-if="!fidDist.length && loadingP0" class="chart chart-loading">
             <el-skeleton animated :rows="8" />
           </div>
           <template v-else>
-            <div v-show="distView === 'pie'" ref="pieRef" class="chart"></div>
-            <div v-if="overview && distView === 'pie'" class="pie-center" :style="pieCenterStyle">
+            <div ref="pieRef" class="chart"></div>
+            <div v-if="overview" class="pie-center" :style="pieCenterStyle">
               <template v-if="centerInfo">
                 <div class="pie-center-value" :style="{ color: centerInfo.color }">{{ centerInfo.count }}</div>
                 <div class="pie-center-label">{{ centerInfo.name }} · {{ centerInfo.pct }}%</div>
@@ -546,26 +800,6 @@ function formatRelativeTime(raw?: string): string {
                 <div class="pie-center-value">{{ totalText }}</div>
                 <div class="pie-center-label">累计帖子</div>
               </template>
-            </div>
-            <!-- 排行榜：纯 HTML 列表，避免窄卡片 ECharts bar 渲染问题，并支持展示更多字段 -->
-            <div v-if="distView === 'bar'" class="bar-list">
-              <div
-                v-for="f in fidDist"
-                :key="f.fid"
-                class="bar-row"
-                :title="`最近抓取：${f.latest_date ?? '-'}，今日新增：${f.today_count ?? 0}，昨日新增：${f.yesterday_count ?? 0}`"
-                @click="goDist(f.fid)"
-              >
-                <span class="bar-name">{{ f.name }}({{ f.fid }})</span>
-                <div class="bar-track">
-                  <div
-                    class="bar-fill"
-                    :style="{ width: `${fidDistTotal ? (f.count / fidDistTotal) * 100 : 0}%`, backgroundColor: colorForFid(f.fid) }"
-                  ></div>
-                </div>
-                <span class="bar-value">{{ f.count.toLocaleString() }} 条</span>
-                <span class="bar-pct">({{ fidDistTotal ? ((f.count / fidDistTotal) * 100).toFixed(1) : 0 }}%)</span>
-              </div>
             </div>
           </template>
         </div>
@@ -626,44 +860,6 @@ function formatRelativeTime(raw?: string): string {
         </div>
       </div>
 
-      <!-- 最近抓取 -->
-      <div class="page-card">
-        <div class="chart-head" style="margin-bottom: 12px">
-          <span class="chart-title">最近抓取 Top 10</span>
-        </div>
-        <div v-if="loadingRecent" class="recent-loading">
-          <el-skeleton animated :rows="8" />
-        </div>
-        <el-table v-else :data="recent" size="small" empty-text="暂无数据" style="width: 100%">
-          <el-table-column type="index" label="#" width="50" align="center" />
-          <el-table-column prop="title" label="标题" min-width="380" show-overflow-tooltip>
-            <template #default="{ row }">
-              <a class="title-link" @click.prevent="openPost(row)">{{ row.title }}</a>
-            </template>
-          </el-table-column>
-          <el-table-column prop="fid" label="版块" width="90">
-            <template #default="{ row }">
-              <el-tag size="small" type="info">{{ row.fid }}</el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column prop="likes" label="点赞" width="80" align="center">
-            <template #default="{ row }">{{ row.likes || '-' }}</template>
-          </el-table-column>
-          <el-table-column prop="author" label="作者" width="130" show-overflow-tooltip>
-            <template #default="{ row }">{{ row.author || '-' }}</template>
-          </el-table-column>
-          <el-table-column prop="replies" label="回复" width="80" align="center">
-            <template #default="{ row }">{{ row.replies || '-' }}</template>
-          </el-table-column>
-          <el-table-column label="抓取时间" width="130">
-            <template #default="{ row }">
-              <el-tooltip :content="row.created_at || '-'" placement="top">
-                <span class="text-muted">{{ formatRelativeTime(row.created_at) }}</span>
-              </el-tooltip>
-            </template>
-          </el-table-column>
-        </el-table>
-      </div>
     </div>
   </div>
 </template>
@@ -721,6 +917,10 @@ function formatRelativeTime(raw?: string): string {
 .chart {
   height: 320px;
   width: 100%;
+  transition: opacity 0.3s ease; /* 趋势维度切换时的淡入淡出过渡 */
+}
+.chart.trend-fading {
+  opacity: 0;
 }
 
 .chart-loading {
@@ -730,7 +930,7 @@ function formatRelativeTime(raw?: string): string {
 
 .chart-wrap {
   position: relative;
-  height: 320px;
+  height: 320px; /* 与排行榜 8 行可视区等高 */
 }
 
 .pie-center {
@@ -831,34 +1031,44 @@ function formatRelativeTime(raw?: string): string {
   font-weight: 600;
 }
 
-.recent-loading {
-  padding: 8px 0;
-}
-
-/* 版块分布 - 排行榜模式 */
 .bar-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 8px 4px;
-  height: 320px;
-  overflow-y: auto;
+  padding: 0 4px;
+  height: 320px; /* 8 行 * 40px，与 JS 常量 BAR_VISIBLE_ROWS * BAR_ROW_HEIGHT 保持一致 */
+  overflow: hidden;
+  scroll-behavior: smooth;
 }
 
 .bar-row {
   display: grid;
-  grid-template-columns: minmax(80px, 1fr) 120px auto auto;
+  grid-template-columns: 28px minmax(80px, 1fr) auto auto;
   align-items: center;
-  gap: 8px;
-  padding: 7px 10px;
+  gap: 10px;
+  padding: 8px 10px;
+  height: 40px;
+  box-sizing: border-box;
   border-radius: 6px;
   cursor: pointer;
   transition: background 0.15s ease;
   font-size: 13px;
+  flex-shrink: 0;
 }
 
 .bar-row:hover {
   background: #f0f4ff;
+}
+
+.bar-rank {
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+  flex-shrink: 0;
 }
 
 .bar-name {
@@ -869,18 +1079,18 @@ function formatRelativeTime(raw?: string): string {
   font-weight: 500;
 }
 
-.bar-track {
-  position: relative;
-  height: 10px;
-  background: #ebeef5;
-  border-radius: 5px;
-  overflow: hidden;
+.bar-sub {
+  color: #909399;
+  font-size: 12px;
+  white-space: nowrap;
 }
 
-.bar-fill {
-  height: 100%;
-  border-radius: 5px;
-  transition: width 0.4s ease;
+.bar-metric {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  white-space: nowrap;
 }
 
 .bar-value {
@@ -897,7 +1107,10 @@ function formatRelativeTime(raw?: string): string {
 
 @media (max-width: 1100px) {
   .bar-row {
-    grid-template-columns: minmax(80px, 1fr) 1fr auto auto;
+    grid-template-columns: 28px minmax(80px, 1fr) auto;
+  }
+  .bar-sub {
+    display: none;
   }
 }
 </style>

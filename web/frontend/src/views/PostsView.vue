@@ -4,6 +4,7 @@ import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { CopyDocument, Download, Search, View } from '@element-plus/icons-vue'
 import { api, exportCsvUrl, type FidMeta, type PostsPage } from '../api'
+import { formatRelativeTime } from '../utils/time'
 
 const route = useRoute()
 
@@ -216,6 +217,13 @@ onMounted(() => {
         </el-table-column>
         <el-table-column prop="replies" label="回复" min-width="70" align="center">
           <template #default="{ row }">{{ row.replies || '-' }}</template>
+        </el-table-column>
+        <el-table-column label="抓取时间" width="130">
+          <template #default="{ row }">
+            <el-tooltip :content="row.created_at || '-'" placement="top">
+              <span class="text-muted">{{ formatRelativeTime(row.created_at) }}</span>
+            </el-tooltip>
+          </template>
         </el-table-column>
         <el-table-column label="操作" min-width="90" align="center">
           <template #default="{ row }">
