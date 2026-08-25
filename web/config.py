@@ -26,10 +26,10 @@ LOCAL_PROXY_PREFIX = "http://127.0.0.1:1024"
 HOST = os.environ.get("TXXY_WEB_HOST", "127.0.0.1")
 PORT = int(os.environ.get("TXXY_WEB_PORT", "8088"))
 
-# 数据总览【自动刷新】总开关：当前默认关闭（Header 不显示自动刷新开关、不启动轮询），
-# 需要恢复时设置环境变量 TXXY_ENABLE_AUTO_REFRESH=1（或改为 True）。
+# 数据总览【自动刷新】总开关：默认开启（Header 显示自动刷新开关并启动轮询，
+# 抓取过程中 KPI 准实时更新）。如需关闭可设环境变量 TXXY_ENABLE_AUTO_REFRESH=0。
 # 前端 /api/config 读取该值，为 False 时不显示自动刷新开关、不启动轮询。
-ENABLE_AUTO_REFRESH = os.environ.get("TXXY_ENABLE_AUTO_REFRESH", "0").strip().lower() in ("1", "true", "yes", "on")
+ENABLE_AUTO_REFRESH = os.environ.get("TXXY_ENABLE_AUTO_REFRESH", "1").strip().lower() in ("1", "true", "yes", "on")
 
 # 版块名称映射（与 run_batch.SECTIONS 保持一致；未知 fid 显示为 版块<n>）
 FID_NAMES: dict[str, str] = {

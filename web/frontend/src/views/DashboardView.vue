@@ -93,7 +93,7 @@ function colorForFid(fid: string): string {
 
 // 自动刷新：开关状态存于 dashboard store（header 控件共享），每 30 秒静默刷新一次
 // 仅刷新已加载的区块，未进入视口的懒加载区块保持不动
-const REFRESH_INTERVAL = 30000
+const REFRESH_INTERVAL = 5000
 let refreshTimer: ReturnType<typeof setInterval> | null = null
 
 const fidDistTotal = computed(() => fidDist.value.reduce((s, f) => s + f.count, 0))
@@ -1306,7 +1306,7 @@ function renderFidTrendChart() {
           </div>
           <div class="stat-body">
             <div class="stat-label">累计帖子</div>
-            <div class="stat-value">{{ totalText }}</div>
+            <div class="stat-value"><RollingNumber :value="overview.total" /></div>
             <div class="stat-sub">
               <span class="sub-up">今日新增 +{{ overview.today.toLocaleString() }}</span>
             </div>

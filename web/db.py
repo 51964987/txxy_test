@@ -66,9 +66,9 @@ def row_to_post(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
     }
 
 
-# ---- 简单 TTL 缓存（统计接口 60s，避免高频刷新打库） ----
+# ---- 简单 TTL 缓存（统计接口 5s，配合前端 5s 轮询实现抓取进度准实时刷新） ----
 _cache: dict[str, tuple[float, Any]] = {}
-_TTL = 60
+_TTL = 5
 
 
 def cached(key: str, fn):
