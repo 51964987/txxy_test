@@ -31,7 +31,7 @@ txxy_test/
 ├── requirements.txt
 ├── web/                # 前端数据展示服务（FastAPI + Vue3 SPA，只读访问 db/posts.db）
 │   ├── app.py          # 服务入口（托管 /api 接口 + 前端静态资源）
-│   ├── api.py          # REST 接口（/api/config、stats、posts、runs、resources，60s 缓存）
+│   ├── api.py          # REST 接口（/api/config、stats、posts、runs、resources，统计接口 5s 缓存）
 │   ├── config.py       # 服务配置（端口/公开域名/路径/自动刷新开关，可用环境变量覆盖）
 │   ├── db.py           # 只读 SQLite 访问层（PRAGMA query_only + 缓存 + URL 归一化）
 │   ├── runs.py         # 运行记录读取（SQLite run_days/run_sections 优先，日志兼容回退）
@@ -195,7 +195,7 @@ python -X utf8 web/app.py          # 启动后访问 http://127.0.0.1:8088（需
 - **技术栈**：FastAPI 后端 + Vue3 / Vite / TypeScript / Element Plus / Pinia / ECharts 前端（SPA）；
 - **页面**：
   - 数据总览：
-    - **顶部 Header（全局布局）**：左侧显示最后更新时间，右侧"自动刷新"操作卡片——由后端配置 `TXXY_ENABLE_AUTO_REFRESH` 控制（**默认关闭**，开启时才显示开关并启用 30s 轮询）；
+    - **顶部 Header（全局布局）**：左侧显示最后更新时间，右侧"自动刷新"操作卡片——由后端配置 `TXXY_ENABLE_AUTO_REFRESH` 控制（**默认开启**，显示开关并启用 5s 轮询，抓取过程中 KPI 准实时更新）；
     - KPI 统计卡片：累计 / 今日 / 昨日 / 近 7 日新增 + 累计用户 / 活跃用户，副指标展示环比与今日新增；
     - 每日新增趋势：折线图（渐变面积 + 峰值标注），7/30/90 天切换，90 天支持缩放；
     - 版块分布：**环形图 / 排行榜双视图**切换，扇区与图例点击跳转帖子浏览并按版块预筛选，悬停显示中心动态（最近抓取/今日/昨日）；排行榜行为纯 HTML 渲染，标题 tooltip 展示副指标；
@@ -208,7 +208,7 @@ python -X utf8 web/app.py          # 启动后访问 http://127.0.0.1:8088（需
 - **只读安全**：后端以 `PRAGMA query_only=ON` 只读访问 `db/posts.db`，绝不写库，与抓取写进程（WAL 模式）安全并发；
 - **URL 归一化**：旧数据中 `http://127.0.0.1:1024` 前缀在展示层统一替换为 `PUBLIC_ROOT`（`web/config.py`，默认 `https://txxy.com`，与 `run_batch.REMOTE_ROOT_URL` 一致），**不改数据库**；
 - **配置**：`web/config.py` 顶部可用环境变量覆盖（`TXXY_WEB_HOST` 地址 / `TXXY_WEB_PORT` 端口 / `PUBLIC_ROOT` 域名 / `POSTS_DB` 数据库路径等），默认监听 `127.0.0.1:8088`（8080 常被本机其他程序占用）；
-- **自动刷新开关**：`TXXY_ENABLE_AUTO_REFRESH`（默认 `0` 关闭）控制数据总览的自动刷新功能——关闭时 Header 不显示"自动刷新"开关、前端不启动 30s 轮询，也没有手动"刷新"按钮（进入页面仅在首次加载数据）；需要恢复时启动前设置 `TXXY_ENABLE_AUTO_REFRESH=1`（或直接改 `web/config.py` 为 `True`）；
+- **自动刷新开关**：`TXXY_ENABLE_AUTO_REFRESH`（默认 `1` 开启）控制数据总览的自动刷新功能——开启时 Header 显示"自动刷新"开关、前端启动 5s 轮询（`REFRESH_INTERVAL=5000`），抓取过程中 KPI 卡与折线图准实时更新；后端统计接口配套 5s TTL 缓存（`web/db.py` 的 `_TTL=5`），避免轮询空转打库；如需关闭，启动前设置 `TXXY_ENABLE_AUTO_REFRESH=0`（或直接改 `web/config.py` 为 `False`）。
 - **开发模式**：`cd web/frontend && npm run dev` 启动 Vite（端口 5173，`/api` 自动代理到 8088）热更新；改完执行 `npm run build` 重新构建，再启动 `python -X utf8 web/app.py` 生效。
 
 ## 定时任务（Windows）
