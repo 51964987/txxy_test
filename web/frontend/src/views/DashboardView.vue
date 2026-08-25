@@ -13,7 +13,7 @@ import {
 } from 'echarts/components'
 import type { ECharts } from 'echarts/core'
 import { ElMessage } from 'element-plus'
-import { api, type FidDistItem, type Overview, type Post, type TrendPoint } from '../api'
+import { api, type Boards, type FidDistItem, type Overview, type TrendPoint } from '../api'
 import { useDashboardStore } from '../stores/dashboard'
 import RollingNumber from '../components/RollingNumber.vue'
 
@@ -40,7 +40,7 @@ const fidDist = ref<FidDistItem[]>([])
 const loadingP0 = ref(false)
 
 // ===== P1：懒加载区块（热门榜）=====
-const boards = ref<{ top_likes: Post[]; top_replies: Post[] } | null>(null)
+const boards = ref<Boards | null>(null)
 const loadingBoards = ref(false)
 const p1AreaRef = ref<HTMLDivElement | null>(null)
 
@@ -192,7 +192,7 @@ function renderTrendChart() {
           formatter: () => {
             const direction = v > mean ? '偏高' : '偏低'
             const deviation = ((v - mean) / std).toFixed(1)
-            return `异常值：${direction} ${Math.abs(deviation)}σ`
+            return `异常值：${direction} ${Math.abs(Number(deviation))}σ`
           },
         },
       }))
@@ -795,7 +795,7 @@ let trendTipTimer: ReturnType<typeof setInterval> | null = null
 let trendStageTimer: ReturnType<typeof setTimeout> | null = null
 let trendStartTimer: ReturnType<typeof setTimeout> | null = null
 let trendTipIndex = 0
-let trendTipPaused = false
+let trendTipPaused: boolean = false
 let trendLoading = false
 const trendCache = new Map<number, TrendPoint[]>()
 
