@@ -52,8 +52,8 @@ const pieChart = shallowRef<ECharts | null>(null)
 
 // 默认近 7 天（与趋势 tooltip 自动轮播的起始维度一致）
 const trendDays = ref(7)
-// 天数切换选项（下拉框）
-const trendDayOptions = [7, 14, 21, 28]
+// 天数切换选项（下拉框，支持预设 + 自定义输入）
+const trendDayOptions = ref([7, 14, 21, 28])
 
 // ===== 各版块每日趋势（多系列折线，懒加载）=====
 // 各版块天数由总版块联动下钻控制，不再单独切换
@@ -969,6 +969,17 @@ async function loadTrendOnly(prevLen?: number) {
 
 /** 手动切换趋势天数：保留旧图表，加载新数据后以 ECharts 平滑动画过渡，轮播重置到该维度最右侧点开始 */
 function onTrendDaysChange() {
+  // 兼容自定义输入天数（allow-create 可能为字符串），统一为整数并校验
+  let n = Number(trendDays.value)
+  if (!Number.isFinite(n) || !Number.isInteger(n) || n < 1 || n > 365) {
+    trendDays.value = 7
+    return
+  }
+  n = Math.floor(n)
+  if (!trendDayOptions.value.includes(n)) {
+    trendDayOptions.value = [...trendDayOptions.value, n]
+  }
+  trendDays.value = n
   loadTrendOnly()
   // 各版块由总版块联动下钻：已加载或可见时同步刷新
   if (fidTrendVisible.value || fidTrend.value.dates.length) {
@@ -1214,6 +1225,21 @@ function renderFidTrendChart() {
       borderWidth: 1,
       textStyle: { color: '#e6ebf5', fontSize: 12 },
       axisPointer: { type: 'line', lineStyle: { color: 'rgba(0,0,0,0.35)' } },
+      // 各版块按当日新增从大到小排序展示
+      formatter: (params: any) => {
+        if (!Array.isArray(params) || !params.length) return ''
+        const rows = [...params]
+          .filter((s) => s.value != null && !Number.isNaN(Number(s.value)))
+          .sort((a, b) => Number(b.value) - Number(a.value))
+        const date = params[0].axisValueLabel ?? params[0].axisValue ?? ''
+        const lines = rows
+          .map(
+            (s) =>
+              `${s.marker}${s.seriesName}：<b>${Number(s.value).toLocaleString()}</b>`,
+          )
+          .join('<br/>')
+        return `${date}<br/>${lines}`
+      },
     },
     legend: {
       show: false,
@@ -1358,41 +1384,45 @@ function renderFidTrendChart() {
     <div class="trend-row">
     <div class="page-card chart-card trend-half">
       <div class="chart-head">
-        <span class="chart-title">总版块</span>
-        <span v-if="linkedFid" class="link-badge" :style="{ '--link-color': linkedFid.color }">
-          <span class="link-dot"></span>
-          联动聚焦：{{ linkedFid.name }}
-          <span class="link-close" @click="clearFidLink">✕</span>
-        </span>
-        <div v-if="trendStats" class="trend-stats">
-          <div class="ts-card ts-peak">
-            <span class="ts-label">峰值</span>
-            <span class="ts-value"><RollingNumber :value="trendStats.max" /></span>
-            <span class="ts-sub">{{ trendStats.maxDate.slice(5) }}</span>
-          </div>
-          <div class="ts-card ts-valley">
-            <span class="ts-label">谷值</span>
-            <span class="ts-value"><RollingNumber :value="trendStats.min" /></span>
-            <span class="ts-sub">{{ trendStats.minDate.slice(5) }}</span>
-          </div>
-          <div class="ts-card ts-avg">
-            <span class="ts-label">日均</span>
-            <span class="ts-value"><RollingNumber :value="trendStats.avg" /></span>
-          </div>
-          <div class="ts-card ts-total">
-            <span class="ts-label">总计</span>
-            <span class="ts-value"><RollingNumber :value="trendStats.total" /></span>
-          </div>
+        <div class="chart-head-left">
+          <span class="chart-title">总版块</span>
+          <span v-if="linkedFid" class="link-badge" :style="{ '--link-color': linkedFid.color }">
+            <span class="link-dot"></span>
+            联动聚焦：{{ linkedFid.name }}
+            <span class="link-close" @click="clearFidLink">✕</span>
+          </span>
         </div>
-        <el-select
-          v-model="trendDays"
-          size="small"
-          class="day-select"
-          v-show="false"
-          @change="onTrendDaysChange"
-        >
-          <el-option v-for="d in trendDayOptions" :key="d" :label="`${d}天`" :value="d" />
-        </el-select>
+        <div class="chart-head-right">
+          <div v-if="trendStats" class="trend-stats">
+            <div class="ts-card ts-peak">
+              <span class="ts-label">峰值</span>
+              <span class="ts-value"><RollingNumber :value="trendStats.max" /></span>
+              <span class="ts-sub">{{ trendStats.maxDate.slice(5) }}</span>
+            </div>
+            <div class="ts-card ts-valley">
+              <span class="ts-label">谷值</span>
+              <span class="ts-value"><RollingNumber :value="trendStats.min" /></span>
+              <span class="ts-sub">{{ trendStats.minDate.slice(5) }}</span>
+            </div>
+            <div class="ts-card ts-avg">
+              <span class="ts-label">日均</span>
+              <span class="ts-value"><RollingNumber :value="trendStats.avg" /></span>
+            </div>
+            </div>
+            <el-select
+            v-model="trendDays"
+            size="small"
+            class="day-select"
+            filterable
+            allow-create
+            reserve-keyword="false"
+            default-first-option
+            placeholder="选择/输入天数"
+            @change="onTrendDaysChange"
+          >
+            <el-option v-for="d in trendDayOptions" :key="d" :label="`${d}天`" :value="d" />
+          </el-select>
+        </div>
       </div>
       <div v-if="!trend.length && loadingP0" class="chart chart-loading">
         <el-skeleton animated :rows="8" />
@@ -1415,24 +1445,28 @@ function renderFidTrendChart() {
     <!-- 每日新增趋势（各版块）：同行右侧 1/2 宽，懒加载 -->
     <div ref="fidTrendBlockRef" class="page-card chart-card trend-half">
       <div class="chart-head">
-        <span class="chart-title">各版块</span>
-        <span v-if="linkedDay" class="link-badge" style="--link-color: #e6ebf5">
-          <span class="link-dot"></span>
-          联动聚焦日：{{ linkedDay.slice(5) }}
-          <span class="link-close" @click="clearDayLink">✕</span>
-        </span>
-        <div v-if="fidTrendStats" class="trend-stats">
-          <div class="ts-card ts-total">
-            <span class="ts-label">对比版块</span>
-            <span class="ts-value"><RollingNumber :value="fidTrendStats.fidCount" /></span>
-          </div>
-          <div class="ts-card ts-peak">
-            <span class="ts-label">最活版块</span>
-            <span class="ts-value ts-name">{{ fidTrendStats.topName }}</span>
-          </div>
-          <div class="ts-card ts-avg">
-            <span class="ts-label">峰值日增</span>
-            <span class="ts-value"><RollingNumber :value="fidTrendStats.peak" /></span>
+        <div class="chart-head-left">
+          <span class="chart-title">各版块</span>
+          <span v-if="linkedDay" class="link-badge" style="--link-color: #e6ebf5">
+            <span class="link-dot"></span>
+            联动聚焦日：{{ linkedDay.slice(5) }}
+            <span class="link-close" @click="clearDayLink">✕</span>
+          </span>
+        </div>
+        <div class="chart-head-right">
+          <div v-if="fidTrendStats" class="trend-stats">
+            <div class="ts-card ts-total">
+              <span class="ts-label">对比版块</span>
+              <span class="ts-value"><RollingNumber :value="fidTrendStats.fidCount" /></span>
+            </div>
+            <div class="ts-card ts-peak">
+              <span class="ts-label">最活版块</span>
+              <span class="ts-value ts-name">{{ fidTrendStats.topName }}</span>
+            </div>
+            <div class="ts-card ts-avg">
+              <span class="ts-label">峰值日增</span>
+              <span class="ts-value"><RollingNumber :value="fidTrendStats.peak" /></span>
+            </div>
           </div>
         </div>
       </div>
@@ -1713,6 +1747,19 @@ function renderFidTrendChart() {
 .chart-title {
   font-weight: 600;
   color: #1f2d3d;
+}
+.chart-head-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.chart-head-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 .link-badge {
   display: inline-flex;
