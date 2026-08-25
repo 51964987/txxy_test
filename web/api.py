@@ -168,6 +168,63 @@ def stats_trend(days: int = Query(30, ge=1, le=365)):
     return out
 
 
+@router.get("/stats/trend_by_fid")
+def stats_trend_by_fid(
+    days: int = Query(30, ge=1, le=365),
+    top: int = Query(8, ge=1, le=30),
+):
+    """各版块每日新增趋势（多系列折线图用）。
+
+    返回最近 days 天、累计量 Top `top` 个版块的逐日新增数，
+    按版块累计量降序排列，便于折线图直接取色板着色。
+    日期维度与 /stats/trend 保持一致（连续补齐缺日期为 0）。
+    """
+    start = (date_cls.today() - timedelta(days=days - 1)).isoformat()
+    dates = [
+        (date_cls.today() - timedelta(days=days - 1 - i)).isoformat()
+        for i in range(days)
+    ]
+
+    def _calc():
+        conn = db.open_conn()
+        try:
+            # Top K 版块（按累计新增量降序）
+            top_fids = [
+                r["fid"]
+                for r in conn.execute(
+                    "SELECT fid, COUNT(*) AS c FROM posts WHERE date >= ? GROUP BY fid"
+                    " ORDER BY c DESC LIMIT ?",
+                    (start, top),
+                )
+            ]
+            by_fid: dict[str, dict[str, int]] = {}
+            if top_fids:
+                rows = conn.execute(
+                    "SELECT fid, date, COUNT(*) AS c FROM posts"
+                    " WHERE date >= ? AND fid IN ({})"
+                    " GROUP BY fid, date".format(",".join("?" * len(top_fids))),
+                    (start, *top_fids),
+                )
+                for r in rows:
+                    by_fid.setdefault(r["fid"], {})[r["date"]] = r["c"]
+        finally:
+            conn.close()
+
+        series = []
+        for fid in top_fids:
+            daily = by_fid.get(fid, {})
+            series.append(
+                {
+                    "fid": fid,
+                    "name": config.fid_name(fid),
+                    "data": [daily.get(d, 0) for d in dates],
+                }
+            )
+        return {"dates": dates, "series": series}
+
+    return db.cached(f"trend_by_fid_{days}_{top}", _calc)
+
+
 @router.get("/stats/fid_dist")
 def stats_fid_dist():
     def _calc():

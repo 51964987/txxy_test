@@ -72,6 +72,11 @@ export interface TrendPoint {
   count: number
 }
 
+export interface TrendByFid {
+  dates: string[]
+  series: { fid: number; name: string; data: number[] }[]
+}
+
 export interface FidDistItem {
   fid: string
   name: string
@@ -161,6 +166,8 @@ export const api = {
   overview: () => get<Overview>('/stats/overview'),
   boards: () => get<Boards>('/stats/boards'),
   trend: (days: number) => get<TrendPoint[]>('/stats/trend', { days }),
+  trendByFid: (days: number, top = 8) =>
+    get<TrendByFid>('/stats/trend_by_fid', { days, top }),
   fidDist: () => get<FidDistItem[]>('/stats/fid_dist'),
   recent: (limit = 10) => get<Post[]>('/stats/recent', { limit }),
   fidMeta: () => get<FidMeta[]>('/posts/fid'),
