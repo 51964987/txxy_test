@@ -1308,7 +1308,8 @@ function renderFidTrendChart() {
             <div class="stat-label">累计帖子</div>
             <div class="stat-value"><RollingNumber :value="overview.total" /></div>
             <div class="stat-sub">
-              <span class="sub-up">今日新增 +{{ overview.today.toLocaleString() }}</span>
+              <span class="sub-up">今日 +{{ overview.today.toLocaleString() }}</span>
+              <span class="sub-neutral">覆盖 {{ fidDist.length }} 个版块</span>
             </div>
           </div>
         </div>
@@ -1321,18 +1322,7 @@ function renderFidTrendChart() {
             <div class="stat-value"><RollingNumber :value="overview.today" /></div>
             <div v-if="kpiSub" class="stat-sub">
               <span :class="kpiSub.todayDiff.cls">{{ kpiSub.todayDiff.text }}</span>
-            </div>
-          </div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-icon" style="background: linear-gradient(135deg, #fbbf24, #f59e0b)">
-            <el-icon><Calendar /></el-icon>
-          </div>
-          <div class="stat-body">
-            <div class="stat-label">昨日新增</div>
-            <div class="stat-value"><RollingNumber :value="overview.yesterday" /></div>
-            <div v-if="kpiSub" class="stat-sub">
-              <span class="sub-neutral">占近 7 日 {{ kpiSub.yesterdayShare ?? 0 }}%</span>
+              <span class="sub-neutral">昨日 {{ overview.yesterday.toLocaleString() }}</span>
             </div>
           </div>
         </div>
@@ -1345,6 +1335,7 @@ function renderFidTrendChart() {
             <div class="stat-value"><RollingNumber :value="overview.week_new" /></div>
             <div v-if="kpiSub" class="stat-sub">
               <span class="sub-neutral">日均 {{ kpiSub.weekAvg }} 条</span>
+              <span class="sub-neutral">昨日占 {{ kpiSub.yesterdayShare ?? 0 }}%</span>
             </div>
           </div>
         </div>
@@ -1355,26 +1346,15 @@ function renderFidTrendChart() {
           <div class="stat-body">
             <div class="stat-label">累计用户</div>
             <div class="stat-value"><RollingNumber :value="overview.total_users" /></div>
-            <div class="stat-sub">
-              <span class="sub-neutral">今日活跃 {{ overview.active_users.toLocaleString() }}</span>
-            </div>
-          </div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-icon" style="background: linear-gradient(135deg, #22d3ee, #06b6d4)">
-            <el-icon><UserFilled /></el-icon>
-          </div>
-          <div class="stat-body">
-            <div class="stat-label">活跃用户</div>
-            <div class="stat-value"><RollingNumber :value="overview.active_users" /></div>
             <div v-if="kpiSub" class="stat-sub">
-              <span class="sub-neutral">占累计 {{ kpiSub.activeShare ?? 0 }}%</span>
+              <span class="sub-neutral">活跃 {{ overview.active_users.toLocaleString() }}</span>
+              <span class="sub-neutral">活跃率 {{ kpiSub.activeShare ?? 0 }}%</span>
             </div>
           </div>
         </div>
       </template>
       <template v-else>
-        <div v-for="i in 6" :key="i" class="stat-card">
+        <div v-for="i in 4" :key="i" class="stat-card">
           <el-skeleton animated :rows="3" />
         </div>
       </template>
