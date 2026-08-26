@@ -180,8 +180,20 @@ async function loadBoards() {
   }
 }
 
+/** P1-8：各图表数据指纹缓存，数据未变化时跳过重复 setOption，避免轮询期间空重绘 */
+let lastTrendKey = ''
+let lastDistKey = ''
+let lastFidTrendKey = ''
+
 function renderTrendChart() {
   if (trendRef.value) {
+    // P1-8：数据指纹（含联动配色依赖），无变化跳过 setOption
+    const trendKey =
+      trend.value.map((t) => `${t.date}:${t.count}`).join('|') +
+      `|${linkedFid.value?.color ?? ''}`
+    if (trendKey === lastTrendKey) return
+    lastTrendKey = trendKey
+
     trendChart.value ??= initChart(trendRef.value)
     // 双向 Tooltip 联动：总版块 ⟷ 各版块（仅注册一次）
     if (!trendTipSynced) {
@@ -192,6 +204,17 @@ function renderTrendChart() {
         tipSyncing = true
         fidTrendChart.value?.dispatchAction({ type: 'hideTip' })
         tipSyncing = false
+      })
+      // 反向联动 click 同样仅注册一次，避免数据刷新后重复绑定累积
+      trendChart.value.on('click', (params: any) => {
+        trendTipPaused = true
+        const idx = params.dataIndex
+        const point = trend.value[idx]
+        if (point) {
+          // 反向联动：点总趋势某天 -> 各版块同天高亮（取消下钻，仅保留联动）
+          linkedDay.value = point.date
+          renderFidTrendChart()
+        }
       })
     }
     // 联动配色：当各版块图例聚焦某版块时，总趋势同步换为该版块色
@@ -404,22 +427,19 @@ function renderTrendChart() {
           : []),
       ],
     })
-    trendChart.value.on('click', (params: any) => {
-      trendTipPaused = true
-      const idx = params.dataIndex
-      const point = trend.value[idx]
-      if (point) {
-        // 反向联动：点总趋势某天 -> 各版块同天高亮（取消下钻，仅保留联动）
-        linkedDay.value = point.date
-        renderFidTrendChart()
-      }
-    })
   }
 }
 
 /** 版块分布渲染：环形图，支持点击跳转与悬停联动 */
 function renderDistChart() {
   if (!pieRef.value) return
+  // P1-8：数据指纹（含视口宽度布局依赖），无变化跳过重绘
+  const distKey =
+    fidDist.value.map((f) => `${f.fid}:${f.count}`).join('|') +
+    `|${window.innerWidth >= 1440}`
+  if (distKey === lastDistKey) return
+  lastDistKey = distKey
+
   const chart = pieChart.value ??= initChart(pieRef.value)
   const total = fidDist.value.reduce((s, f) => s + f.count, 0)
   const wide = window.innerWidth >= 1440
@@ -894,6 +914,14 @@ let trendStartTimer: ReturnType<typeof setTimeout> | null = null
 let trendTipIndex = 0
 let trendTipPaused: boolean = false
 let trendLoading = false
+/** 总版块趋势图 Tooltip 轮播：悬停暂停 / 移出恢复（方法包装，规避 ts-plugin 对 let 变量模板内联赋值的类型收窄误报） */
+function setTrendTipPaused(paused: boolean) {
+  trendTipPaused = paused
+}
+/** 各版块趋势图 Tooltip 轮播：悬停暂停 / 移出恢复（同上） */
+function setFidTrendTipPaused(paused: boolean) {
+  fidTrendTipPaused = paused
+}
 // 总版块与各版块 Tooltip 联动：仅注册一次
 let trendTipSynced = false
 let fidTipSynced = false
@@ -1165,6 +1193,15 @@ function renderFidTrendChart() {
   const dates = fidTrend.value.dates
   const series = fidTrend.value.series
   if (!dates.length || !series.length) return
+
+  // P1-8：数据指纹（含联动聚焦/日期依赖），无变化跳过 setOption
+  const fidKey =
+    dates.join('|') +
+    '|' +
+    series.map((s) => `${s.name}:${s.data.join(',')}`).join('|') +
+    `|${linkedDay.value ?? ''}|${linkedFid.value?.name ?? ''}`
+  if (fidKey === lastFidTrendKey) return
+  lastFidTrendKey = fidKey
 
   const palette = FID_PALETTE
   const colorByName: Record<string, string> = {}
@@ -1463,8 +1500,8 @@ function renderFidTrendChart() {
           v-show="trend.length"
           ref="trendRef"
           class="chart"
-          @mouseenter="trendTipPaused = true"
-          @mouseleave="trendTipPaused = false"
+          @mouseenter="setTrendTipPaused(true)"
+          @mouseleave="setTrendTipPaused(false)"
         ></div>
         <div v-if="trendSwitching" class="chart-switch-overlay">
           <span class="switch-dot"></span>
@@ -1509,8 +1546,8 @@ function renderFidTrendChart() {
           v-show="fidTrend.series.length"
           ref="fidTrendRef"
           class="chart"
-          @mouseenter="fidTrendTipPaused = true"
-          @mouseleave="fidTrendTipPaused = false"
+          @mouseenter="setFidTrendTipPaused(true)"
+          @mouseleave="setFidTrendTipPaused(false)"
         ></div>
         <div v-if="fidTrendSwitching" class="chart-switch-overlay">
           <span class="switch-dot"></span>

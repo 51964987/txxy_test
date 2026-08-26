@@ -6,6 +6,7 @@ from datetime import timedelta
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 
 import config
 import db
@@ -13,6 +14,84 @@ import resources
 import runs
 
 router = APIRouter()
+
+# ================= 响应模型（P1-10） =================
+# 仅覆盖结构稳定的核心接口；/runs、/resources 因字段条件性存在（运行中 / 日志回退等）不强制
+# response_model，避免模型静默丢弃字段破坏前端契约（前端已用 TS 类型约束）。
+class ConfigResp(BaseModel):
+    enable_auto_refresh: bool
+
+
+class OverviewResp(BaseModel):
+    total: int
+    today: int
+    yesterday: int
+    week_new: int
+    latest_created_at: str | None = None
+    latest_date: str | None = None
+    today_str: str
+    total_users: int
+    active_users: int
+
+
+class BoardTopResp(BaseModel):
+    fid: str | None = None
+    name: str
+    title: str
+    url: str
+    value: str
+
+
+class BoardsResp(BaseModel):
+    top_likes: list[BoardTopResp]
+    top_replies: list[BoardTopResp]
+
+
+class TrendPointResp(BaseModel):
+    date: str
+    count: int
+
+
+class TrendByFidResp(BaseModel):
+    dates: list[str]
+    series: list[dict]
+
+
+class FidDistItemResp(BaseModel):
+    fid: str | None = None
+    name: str
+    count: int
+    latest_date: str | None = None
+    today_count: int | None = None
+    yesterday_count: int | None = None
+
+
+class FidMetaResp(BaseModel):
+    fid: str | None = None
+    name: str
+    count: int
+    latest_date: str | None = None
+
+
+class PostResp(BaseModel):
+    title: str
+    fid: str | None = None
+    date: str
+    url: str
+    likes: str | None = None
+    author: str | None = None
+    replies: str | None = None
+    created_at: str
+    update_at: str | None = None
+    update_date: str | None = None
+
+
+class PostsPageResp(BaseModel):
+    total: int
+    page: int
+    page_size: int
+    items: list[PostResp]
+
 
 _SORTS = {
     "date_desc": "date DESC, created_at DESC",
@@ -98,7 +177,7 @@ def _board_top(field: str) -> list[dict]:
 
 
 @router.get("/config")
-def app_config():
+def app_config() -> ConfigResp:
     """前端运行时配置（自动刷新总开关等）。"""
     return {
         "enable_auto_refresh": config.ENABLE_AUTO_REFRESH,
@@ -108,31 +187,42 @@ def app_config():
 # ---------------- 统计 ----------------
 
 @router.get("/stats/overview")
-def stats_overview():
+def stats_overview() -> OverviewResp:
     today = date_cls.today().isoformat()
     yesterday = (date_cls.today() - timedelta(days=1)).isoformat()
     week_ago = (date_cls.today() - timedelta(days=6)).isoformat()
 
     def _calc():
-        total = db.query("SELECT COUNT(*) AS c FROM posts")[0]["c"]
-        today_c = db.query("SELECT COUNT(*) AS c FROM posts WHERE date = ?", (today,))[0]["c"]
-        yesterday_c = db.query("SELECT COUNT(*) AS c FROM posts WHERE date = ?", (yesterday,))[0]["c"]
-        week_c = db.query("SELECT COUNT(*) AS c FROM posts WHERE date >= ?", (week_ago,))[0]["c"]
-        latest = db.query("SELECT MAX(created_at) AS created_at, MAX(date) AS date FROM posts")[0]
-        # 用户指标：author 非空去重（累计用户 = 全部帖子的去重作者，活跃用户 = 当日帖子的去重作者）
-        user_where = "author IS NOT NULL AND author <> ''"
-        total_users = db.query(
-            f"SELECT COUNT(DISTINCT author) AS c FROM posts WHERE {user_where}"
-        )[0]["c"]
-        active_users = db.query(
-            f"SELECT COUNT(DISTINCT author) AS c FROM posts WHERE {user_where} AND date = ?",
-            (today,),
-        )[0]["c"]
+        # P1-7：单连接内依次执行，避免 7 次独立 open/close；total/today/yesterday/week 合并为一条条件聚合
+        conn = db.open_conn()
+        try:
+            agg = conn.execute(
+                "SELECT COUNT(*) AS total,"
+                " COUNT(CASE WHEN date = ? THEN 1 END) AS today_c,"
+                " COUNT(CASE WHEN date = ? THEN 1 END) AS yesterday_c,"
+                " COUNT(CASE WHEN date >= ? THEN 1 END) AS week_c"
+                " FROM posts",
+                (today, yesterday, week_ago),
+            ).fetchone()
+            latest = conn.execute(
+                "SELECT MAX(created_at) AS created_at, MAX(date) AS date FROM posts"
+            ).fetchone()
+            # 用户指标：author 非空去重（累计用户 = 全部帖子的去重作者，活跃用户 = 当日帖子的去重作者）
+            user_where = "author IS NOT NULL AND author <> ''"
+            total_users = conn.execute(
+                f"SELECT COUNT(DISTINCT author) AS c FROM posts WHERE {user_where}"
+            ).fetchone()["c"]
+            active_users = conn.execute(
+                f"SELECT COUNT(DISTINCT author) AS c FROM posts WHERE {user_where} AND date = ?",
+                (today,),
+            ).fetchone()["c"]
+        finally:
+            conn.close()
         return {
-            "total": total,
-            "today": today_c,
-            "yesterday": yesterday_c,
-            "week_new": week_c,
+            "total": agg["total"],
+            "today": agg["today_c"],
+            "yesterday": agg["yesterday_c"],
+            "week_new": agg["week_c"],
             "latest_created_at": latest["created_at"],
             "latest_date": latest["date"],
             "today_str": today,
@@ -144,7 +234,7 @@ def stats_overview():
 
 
 @router.get("/stats/boards")
-def stats_boards():
+def stats_boards() -> BoardsResp:
     """各版块点赞 / 回复最高帖（方案 C：前端热门榜区块懒加载时单独请求）。"""
 
     def _calc():
@@ -154,7 +244,7 @@ def stats_boards():
 
 
 @router.get("/stats/trend")
-def stats_trend(days: int = Query(30, ge=1, le=365)):
+def stats_trend(days: int = Query(30, ge=1, le=365)) -> list[TrendPointResp]:
     start = (date_cls.today() - timedelta(days=days - 1)).isoformat()
 
     def _calc():
@@ -176,7 +266,7 @@ def stats_trend(days: int = Query(30, ge=1, le=365)):
 def stats_trend_by_fid(
     days: int = Query(30, ge=1, le=365),
     top: int = Query(8, ge=1, le=30),
-):
+) -> TrendByFidResp:
     """各版块每日新增趋势（多系列折线图用）。
 
     返回最近 days 天、累计量 Top `top` 个版块的逐日新增数，
@@ -230,7 +320,7 @@ def stats_trend_by_fid(
 
 
 @router.get("/stats/fid_dist")
-def stats_fid_dist():
+def stats_fid_dist() -> list[FidDistItemResp]:
     def _calc():
         today = date_cls.today().isoformat()
         yesterday = (date_cls.today() - timedelta(days=1)).isoformat()
@@ -257,7 +347,7 @@ def stats_fid_dist():
 
 
 @router.get("/stats/recent")
-def stats_recent(limit: int = Query(10, ge=1, le=50)):
+def stats_recent(limit: int = Query(10, ge=1, le=50)) -> list[PostResp]:
     def _calc():
         rows = db.query(
             "SELECT title, fid, date, url, likes, author, replies, created_at, update_at, update_date FROM posts"
@@ -272,7 +362,7 @@ def stats_recent(limit: int = Query(10, ge=1, le=50)):
 # ---------------- 帖子 ----------------
 
 @router.get("/posts/fid")
-def posts_fid():
+def posts_fid() -> list[FidMetaResp]:
     def _calc():
         rows = db.query(
             "SELECT fid, COUNT(*) AS c, MAX(date) AS latest FROM posts"

@@ -42,6 +42,7 @@ alwaysApply: true
 6. **迁移先 copy 再改写**：做代码迁移/重构时，先复制原文件再在其上修改，不要从头重复写一遍（避免遗漏或引入错误）。
 7. **不考虑 fallback 与旧兼容**：本项目没有老用户，不做向后兼容与兼容层；处理思路是「消除 fallback 触发场景」，而非「加更多兜底分支」。
 8. **不盲目折中**：方案清晰合理即可，不必为了稳妥而给折中方案（折中往往意味着还没想清楚）；不过度优化、不预支复杂度。
+9. **批量编辑防写锁超时**：对同一文件的批量修改分批提交（单批 ≤ 4-5 处），避免并行写锁竞争触发 `Acquire write lock ... timeout`；某处失败后先 `read_file` 重读该文件再重试，不要盲目重发。
 
 # 项目上下文（txxy 数据展示项目 · 自动加载）
 ## 技术栈
@@ -69,7 +70,8 @@ txxy_test/web/
 3. **图表网格线规则**：Y 轴横向线显示（色 `rgba(0,0,0,0.08)`），X 轴竖向线隐藏；`axisPointer` 悬停纵向线必须为深色（非白色）。
 4. **Tooltip 顶层**：所有 ECharts `tooltip` 必须 `appendToBody: true`，防遮挡。
 5. **接口一致性**：后端新接口加在 `api.py` 并用 `db.cached` 包裹统计查询；前端在 `src/api/index.ts` 加同名方法。
-6. **错误处理**：沿用现有——后端返回 `{ok:false,msg}` 或状态码；前端 `try/catch` 后 `ElMessage.error`，禁止裸抛或静默吞错。
+6. **错误处理**：后端已统一 `HTTPException(detail)`（无 `{ok:false,msg}` 形态），前端 `src/api/index.ts` 的 `get()` 已统一解析 `detail`；前端 `try/catch` 后 `ElMessage.error`，禁止裸抛或静默吞错。
 7. **状态管理**：跨页状态归并 `useAppStore`（全局刷新版本号/最后更新）+ `useDashboardStore`（总览/自动刷新/选中版块），禁新建分散 store。
 8. **禁止**：引入项目未用新依赖（React/Tailwind/Redux 等）、Web 写库、改动既有路由路径与 history 模式、`<script setup>` 外使用 Options API。
-9. **交付自检**：前端改动后 `cd web/frontend && npx vue-tsc --noEmit` 必须 0 错误；后端 `python web/app.py` 可启动且既有接口行为不变。
+9. **交付自检**：前端改动后 `cd web/frontend && npx vue-tsc --noEmit` 必须 0 错误，且 `read_lints`（ts-plugin IDE 诊断）也必须 0 错误——两者对模板的类型检查严格度不同，需双通道都通过；后端 `python web/app.py` 可启动且既有接口行为不变。
+10. **模板禁止对 setup 变量内联赋值**：`<script setup>` 顶层 `let` 变量（带字面量初始值，如 `let x: boolean = false`）在模板中直接写 `@mouseenter="x = true"`，会被 ts-plugin 按初始值收窄为字面量类型 `false` 而误报「不能将类型 true 分配给类型 false」（vue-tsc 不报此错）；一律用方法包装，如 `@mouseenter="setPaused(true)"`。
