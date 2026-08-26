@@ -11,6 +11,7 @@ import 'element-plus/dist/index.css'
 
 import App from './App.vue'
 import router from './router'
+import { initWebVitals } from './utils/web-vitals'
 import './style.css'
 
 const app = createApp(App)
@@ -25,5 +26,8 @@ for (const [key, component] of Object.entries({
 })) {
   app.component(key, component)
 }
+
+// 初始化轻量 Web Vitals 采集（console 输出，便于定位前端性能问题）
+initWebVitals()
 
 app.mount('#app')

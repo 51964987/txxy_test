@@ -44,8 +44,12 @@ HEADERS = {
     "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
 }
 
-# 请求间隔（秒），避免请求过快被封
-REQUEST_INTERVAL = 3
+# 页间请求间隔自适应（秒）：站点响应顺利时逐渐逼近下限，请求重试/失败后立即放大，
+# 降低被封风险；初始值沿用原固定 3s
+REQUEST_INTERVAL_MIN = 1.0
+REQUEST_INTERVAL_MAX = 10.0
+REQUEST_INTERVAL_INIT = 3.0
+REQUEST_INTERVAL_STEP = 0.5
 # 单页请求最大重试次数（网络异常 / 超时 / 5xx / 429 时重试）
 REQUEST_MAX_RETRIES = 3
 # 重试基础等待秒数，实际等待 = 基础值 × 第几次重试（第1次重试等3s，第2次等6s）
@@ -62,6 +66,25 @@ SQLITE_BATCH_ROWS = 500
 
 BLOCKED_TEXT = "您沒有登錄或者您沒有權限訪問此頁面，可能有如下幾個原因"
 
+# 请求间隔自适应运行状态
+_current_interval = REQUEST_INTERVAL_INIT  # 当前页间间隔，随站点状态动态调整
+_retried_this_page = False  # 本页请求是否发生过重试/失败
+
+
+def _adjust_interval(retried: bool) -> float:
+    """根据本页请求是否发生重试，调整下一页的请求间隔（秒）。
+
+    - 重试过（站点压力大 / 异常）：间隔翻倍，上限 REQUEST_INTERVAL_MAX
+    - 顺利：间隔按步长递减，下限 REQUEST_INTERVAL_MIN
+    """
+    global _current_interval
+    if retried:
+        _current_interval = min(_current_interval * 2, REQUEST_INTERVAL_MAX)
+        print(f"[FID={FID}] [限速] 本页请求异常，请求间隔上调至 {_current_interval:.1f}s")
+    else:
+        _current_interval = max(_current_interval - REQUEST_INTERVAL_STEP, REQUEST_INTERVAL_MIN)
+    return _current_interval
+
 
 def fetch_page(page_num: int) -> str | None:
     """获取单页HTML内容，带重试。
@@ -70,6 +93,7 @@ def fetch_page(page_num: int) -> str | None:
     - 网络异常（连接拒绝 / 超时等）与 408/429/5xx 状态码：按退避递增重试，最多 REQUEST_MAX_RETRIES 次
     - 其它状态码（4xx 等）：属于确定性失败，不重试，直接返回 None
     """
+    global _retried_this_page
     params: dict[str, str | int] = {
         "fid": FID,
         "search": "",
@@ -88,12 +112,14 @@ def fetch_page(page_num: int) -> str | None:
                 return resp.text
             if resp.status_code in (408, 429) or resp.status_code >= 500:
                 # 服务端瞬时故障，值得重试
+                _retried_this_page = True
                 print(f"[FID={FID}] [警告] 第 {page_num} 页返回状态码 {resp.status_code}（第 {attempt}/{REQUEST_MAX_RETRIES} 次），稍后重试")
             else:
                 # 4xx 等确定性失败，重试无意义
                 print(f"[FID={FID}] [警告] 第 {page_num} 页返回状态码: {resp.status_code}，跳过")
                 return None
         except Exception as e:
+            _retried_this_page = True
             print(f"[FID={FID}] [错误] 第 {page_num} 页请求失败（第 {attempt}/{REQUEST_MAX_RETRIES} 次）: {e}")
         if attempt < REQUEST_MAX_RETRIES:
             time.sleep(RETRY_BASE_DELAY * attempt)
@@ -483,9 +509,12 @@ def main() -> None:
                     print(f"[FID={FID}] 版块[已保存] 前 {page} 页数据已写入磁盘（累计 {total_rows} 条）\n")
                     batch_count = 0
 
-                # 页间延时
+                # 页间延时（自适应：本页发生过重试则拉大间隔，否则逐步收敛到下限）
                 if page < end_page:
-                    time.sleep(REQUEST_INTERVAL)
+                    global _retried_this_page
+                    interval = _adjust_interval(_retried_this_page)
+                    _retried_this_page = False
+                    time.sleep(interval)
 
         except KeyboardInterrupt:
             run_status = "cancelled"

@@ -6,16 +6,22 @@ from datetime import timedelta
 
 from typing import Annotated, Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 import config
 import db
+import ratelimit
 import resources
 import runs
 
 router = APIRouter()
+
+# P2-13 接口限流：按 (client_ip, 路径) 固定窗口计数，超限返回 429
+# /posts/export 导出为较重操作，限 5 次/分；/resources 扫描较快，限 60 次/分
+ExportRateLimit = Annotated[None, Depends(ratelimit.rate_limit(5, 60))]
+ResourcesRateLimit = Annotated[None, Depends(ratelimit.rate_limit(60, 60))]
 
 # ================= 响应模型（P1-10） =================
 # 仅覆盖结构稳定的核心接口；/runs、/resources 因字段条件性存在（运行中 / 日志回退等）不强制
@@ -417,6 +423,7 @@ def posts_list(
 
 @router.get("/posts/export")
 def posts_export(
+    _: ExportRateLimit,
     fid: str | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
@@ -495,5 +502,5 @@ def runs_detail(date_str: str) -> dict[str, Any]:
 
 
 @router.get("/resources")
-def resources_list() -> dict[str, Any]:
+def resources_list(_: ResourcesRateLimit) -> dict[str, Any]:
     return resources.scan()

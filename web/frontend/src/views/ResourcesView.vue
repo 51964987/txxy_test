@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
-import { ElMessage } from 'element-plus'
-import { api, formatSize, isAborted, type Resources } from '../api'
+import { computed, h, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { ElButton, ElMessage, ElTag } from 'element-plus'
+import type { Columns } from 'element-plus'
+import { api, formatSize, isAborted, type ResourceFile, type Resources } from '../api'
 
 const data = ref<Resources | null>(null)
 const loading = ref(false)
@@ -47,7 +48,90 @@ function fmtTime(ts: number): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
 }
 
+// ---- P2-14 大列表虚拟滚动：展开文件夹的文件列表改用 el-table-v2 ----
+// 当前展开文件夹及其文件列表
+const activeFolder = computed(() => data.value?.items.find((i) => i.name === active.value) ?? null)
+const activeFiles = computed<ResourceFile[]>(() => activeFolder.value?.files ?? [])
+
+// 表格高度按行数自适应，上限 420px（含表头），文件少时贴合内容、多时固定高度滚动
+const tableHeight = computed(() => {
+  const rows = activeFiles.value.length
+  if (rows === 0) return 0
+  return Math.min(rows * 36 + 40, 420)
+})
+// 表格宽度跟随容器（仅展开的文件夹绑定，用 :ref 函数避免 v-for 重复 ref）
+const tableWidth = ref(900)
+let tableWrapRef: HTMLDivElement | null = null
+let resizeObserver: ResizeObserver | null = null
+
+function setTableWrapRef(el: unknown, name: string) {
+  if (name === active.value) tableWrapRef = (el as HTMLDivElement) ?? null
+}
+
+function measureWidth() {
+  if (tableWrapRef) tableWidth.value = Math.floor(tableWrapRef.getBoundingClientRect().width)
+}
+
+const columns: Columns<ResourceFile> = [
+  {
+    key: 'name',
+    dataKey: 'name',
+    title: '文件名',
+    width: 340,
+    ellipsis: true,
+    cellRenderer: ({ rowData }) => h('span', { title: rowData.name }, rowData.name),
+  },
+  {
+    key: 'category',
+    dataKey: 'category',
+    title: '类型',
+    width: 90,
+    cellRenderer: ({ cellData }) => {
+      const meta = categoryMeta[String(cellData)]
+      return h(ElTag, { size: 'small', type: (meta?.type as any) ?? 'info' }, () => meta?.label ?? '其他')
+    },
+  },
+  {
+    key: 'size',
+    dataKey: 'size',
+    title: '大小',
+    width: 110,
+    cellRenderer: ({ cellData }) => h('span', formatSize(Number(cellData))),
+  },
+  {
+    key: 'rel_path',
+    dataKey: 'rel_path',
+    title: '相对路径',
+    width: 280,
+    ellipsis: true,
+    cellRenderer: ({ rowData }) => h('span', { class: 'text-muted' }, `downloads/${rowData.rel_path}`),
+  },
+  {
+    key: 'actions',
+    title: '操作',
+    width: 120,
+    cellRenderer: ({ rowData }) =>
+      h(ElButton, { link: true, onClick: () => copyPath(rowData.rel_path) }, () => '复制路径'),
+  },
+]
+
+// 展开文件夹后测量容器宽度，并监听窗口尺寸变化
+watch(active, async () => {
+  await nextTick()
+  measureWidth()
+  if (typeof ResizeObserver !== 'undefined') {
+    if (!resizeObserver) resizeObserver = new ResizeObserver(measureWidth)
+    resizeObserver.disconnect()
+    if (tableWrapRef) resizeObserver.observe(tableWrapRef)
+  }
+})
+
 onMounted(load)
+
+onBeforeUnmount(() => {
+  resizeObserver?.disconnect()
+  resizeObserver = null
+})
 </script>
 
 <template>
@@ -108,29 +192,17 @@ onMounted(load)
 
           <el-collapse-transition>
             <div v-show="active === item.name" class="folder-body">
-              <el-table :data="item.files" size="small">
-                <el-table-column prop="name" label="文件名" min-width="320" show-overflow-tooltip />
-                <el-table-column label="类型" width="90">
-                  <template #default="{ row }">
-                    <el-tag size="small" :type="(categoryMeta[row.category]?.type as any) ?? 'info'">
-                      {{ categoryMeta[row.category]?.label ?? '其他' }}
-                    </el-tag>
-                  </template>
-                </el-table-column>
-                <el-table-column label="大小" width="110">
-                  <template #default="{ row }">{{ formatSize(row.size) }}</template>
-                </el-table-column>
-                <el-table-column label="相对路径" min-width="280" show-overflow-tooltip>
-                  <template #default="{ row }">
-                    <span class="text-muted">downloads/{{ row.rel_path }}</span>
-                  </template>
-                </el-table-column>
-                <el-table-column label="操作" width="120">
-                  <template #default="{ row }">
-                    <el-button link @click="copyPath(row.rel_path)">复制路径</el-button>
-                  </template>
-                </el-table-column>
-              </el-table>
+              <div :ref="(el) => setTableWrapRef(el, item.name)">
+                <el-table-v2
+                  v-if="active === item.name && activeFiles.length > 0"
+                  :columns="columns"
+                  :data="activeFiles"
+                  :width="tableWidth"
+                  :height="tableHeight"
+                  :row-height="36"
+                  :header-height="40"
+                />
+              </div>
             </div>
           </el-collapse-transition>
         </div>

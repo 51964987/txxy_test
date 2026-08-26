@@ -4,12 +4,16 @@
 若 web/frontend/dist 已构建，则同时托管前端 SPA；否则仅提供 API（/api/docs 可调试）。
 """
 from pathlib import Path
+import logging
 import sys
+import time
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import RequestResponseEndpoint
+from starlette.responses import Response
 
 # Windows 下控制台若为 chcp 65001（UTF-8），而 Python 默认按 GBK 输出会导致中文日志乱码，
 # 这里统一强制 stdout/stderr 为 UTF-8（start_web.bat 已用 -X utf8，此处为直接运行时兜底）。
@@ -30,6 +34,36 @@ app = FastAPI(
     docs_url="/api/docs",
     openapi_url="/api/openapi.json",
 )
+# 请求耗时监控日志（便于定位慢接口：方法 / 路径 / 状态码 / 耗时，>500ms 记为 WARNING）
+_monitor_logger = logging.getLogger("monitor")
+if not _monitor_logger.handlers:
+    _monitor_handler = logging.StreamHandler()
+    _monitor_handler.setFormatter(logging.Formatter("%(asctime)s [monitor] %(message)s"))
+    _monitor_logger.addHandler(_monitor_handler)
+_monitor_logger.setLevel(logging.INFO)
+_monitor_logger.propagate = False
+
+
+@app.middleware("http")
+async def request_monitor(request: Request, call_next: RequestResponseEndpoint) -> Response:
+    """记录 /api/ 请求耗时，超过 500ms 记为 WARNING，便于定位慢接口。"""
+    start = time.perf_counter()
+    try:
+        response = await call_next(request)
+        status = response.status_code
+    except Exception:
+        elapsed = (time.perf_counter() - start) * 1000
+        _monitor_logger.warning("%s %s 异常 %.0fms", request.method, request.url.path, elapsed)
+        raise
+    elapsed = (time.perf_counter() - start) * 1000
+    if request.url.path.startswith("/api/"):
+        if elapsed >= 500:
+            _monitor_logger.warning("%s %s %s %.0fms", request.method, request.url.path, status, elapsed)
+        else:
+            _monitor_logger.info("%s %s %s %.0fms", request.method, request.url.path, status, elapsed)
+    return response
+
+
 # 文本类响应（JSON / CSV 导出等）>1KB 自动 gzip，浏览器自动解压
 app.add_middleware(GZipMiddleware, minimum_size=1024)
 app.include_router(api_router, prefix="/api")
