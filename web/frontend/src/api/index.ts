@@ -1,6 +1,46 @@
 const BASE = '/api'
 
-async function get<T>(path: string, params?: Record<string, string | number | undefined | null>): Promise<T> {
+/** 统一 API 请求错误类型：超时 / 网络故障 / HTTP 错误 / 主动取消 */
+export type ApiErrorType = 'timeout' | 'network' | 'http' | 'aborted'
+
+/** 统一 API 请求错误 */
+export class ApiError extends Error {
+  readonly type: ApiErrorType
+  readonly status?: number
+
+  constructor(type: ApiErrorType, message: string, status?: number) {
+    super(message)
+    this.name = 'ApiError'
+    this.type = type
+    this.status = status
+  }
+}
+
+/** 判断是否为「主动取消 / 被新请求顶替」的请求错误，view 的 catch 中可直接忽略 */
+export function isAborted(e: unknown): boolean {
+  return e instanceof ApiError && e.type === 'aborted'
+}
+
+/** 默认请求超时（毫秒）：防止网络异常时请求无限挂起、轮询堆积 */
+const DEFAULT_TIMEOUT = 10_000
+
+/** 进行中的请求表：key -> AbortController；同 key 新请求会取消旧请求（防轮询堆积） */
+const inflight = new Map<string, AbortController>()
+
+interface RequestOptions {
+  /** 超时毫秒，默认 10000；传 0 表示不设超时 */
+  timeout?: number
+  /** 请求去重 key；缺省由 path + query 自动计算 */
+  key?: string
+  /** 同 key 新请求是否取消旧请求，默认 true */
+  dedupe?: boolean
+}
+
+async function request<T>(
+  path: string,
+  params?: Record<string, string | number | undefined | null>,
+  opts: RequestOptions = {},
+): Promise<T> {
   const qs = new URLSearchParams()
   if (params) {
     for (const [k, v] of Object.entries(params)) {
@@ -8,18 +48,62 @@ async function get<T>(path: string, params?: Record<string, string | number | un
     }
   }
   const s = qs.toString()
-  const res = await fetch(BASE + path + (s ? `?${s}` : ''))
-  if (!res.ok) {
-    let msg = `${res.status} ${res.statusText}`
-    try {
-      const j = await res.json()
-      if (j && j.detail) msg = String(j.detail)
-    } catch {
-      /* ignore */
-    }
-    throw new Error(msg)
+  const url = BASE + path + (s ? `?${s}` : '')
+  const key = opts.key ?? `${path}?${s}`
+
+  // 同 key 并发时：新请求顶掉旧请求，防止轮询期间请求堆积
+  const controller = new AbortController()
+  if (opts.dedupe !== false) {
+    inflight.get(key)?.abort()
+    inflight.set(key, controller)
   }
-  return res.json() as Promise<T>
+
+  // 超时控制：到期主动 abort，并标记为超时（区别于被新请求顶替）
+  let timedOut = false
+  const timeoutMs = opts.timeout ?? DEFAULT_TIMEOUT
+  let timer: ReturnType<typeof setTimeout> | null = null
+  if (timeoutMs > 0) {
+    timer = setTimeout(() => {
+      timedOut = true
+      controller.abort()
+    }, timeoutMs)
+  }
+
+  try {
+    const res = await fetch(url, { signal: controller.signal })
+    if (!res.ok) {
+      let msg = `${res.status} ${res.statusText}`
+      try {
+        const j = await res.json()
+        if (j && j.detail) msg = String(j.detail)
+      } catch {
+        /* ignore */
+      }
+      throw new ApiError('http', msg, res.status)
+    }
+    return (await res.json()) as T
+  } catch (e) {
+    // 主动取消：区分「超时」与「被新请求顶替」
+    if ((e as DOMException | null)?.name === 'AbortError') {
+      throw new ApiError(
+        timedOut ? 'timeout' : 'aborted',
+        timedOut ? `请求超时(${timeoutMs}ms): ${path}` : `请求已取消: ${path}`,
+      )
+    }
+    // HTTP 错误（已包装）原样抛出
+    if (e instanceof ApiError) throw e
+    // fetch 网络层错误（连接失败 / DNS / CORS 等）
+    if (e instanceof TypeError) throw new ApiError('network', `网络请求失败: ${path}`)
+    throw e
+  } finally {
+    if (timer) clearTimeout(timer)
+    // 仅当该 key 仍指向当前控制器时才清理，避免误删后续新请求的登记
+    if (inflight.get(key) === controller) inflight.delete(key)
+  }
+}
+
+async function get<T>(path: string, params?: Record<string, string | number | undefined | null>): Promise<T> {
+  return request<T>(path, params)
 }
 
 export interface Post {

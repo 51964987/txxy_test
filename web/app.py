@@ -7,6 +7,7 @@ from pathlib import Path
 import sys
 
 from fastapi import FastAPI
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -29,6 +30,8 @@ app = FastAPI(
     docs_url="/api/docs",
     openapi_url="/api/openapi.json",
 )
+# 文本类响应（JSON / CSV 导出等）>1KB 自动 gzip，浏览器自动解压
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 app.include_router(api_router, prefix="/api")
 
 FRONTEND_DIST = Path(__file__).resolve().parent / "frontend" / "dist"

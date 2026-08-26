@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { api, formatDuration, type RunDetail, type RunSummary } from '../api'
+import { api, formatDuration, isAborted, type RunDetail, type RunSummary } from '../api'
 
 const dates = ref<RunSummary[]>([])
 const loading = ref(false)
@@ -32,9 +32,14 @@ function onPageChange(page: number) {
 /** 轮询句柄：页面存活期间始终每 4 秒静默刷新，确保新启动的运行记录（running）能实时出现并更新进度 */
 let pollTimer: ReturnType<typeof setInterval> | null = null
 const POLL_INTERVAL = 4000
+/** 页面可见性：后台隐藏时暂停轮询，恢复可见时立即刷新并重启 */
+let pageVisible = true
+let polling = false
 
-/** 静默刷新：更新列表 + 当前选中明细，不打断用户查看 */
+/** 静默刷新：更新列表 + 当前选中明细，不打断用户查看；防重入（上一轮未完成则跳过本轮） */
 async function refreshQuiet() {
+  if (polling) return
+  polling = true
   try {
     const r = await api.runs()
     dates.value = r.dates
@@ -47,6 +52,29 @@ async function refreshQuiet() {
     }
   } catch {
     /* 单次轮询失败忽略，下轮自动重试 */
+  } finally {
+    polling = false
+  }
+}
+
+/** 启动轮询（页面可见且未启动时） */
+function syncPoll() {
+  if (!pageVisible || pollTimer) return
+  pollTimer = setInterval(refreshQuiet, POLL_INTERVAL)
+}
+
+/** 页面隐藏暂停轮询；恢复可见立即刷新一次并重启轮询 */
+function onVisibilityChange() {
+  if (document.visibilityState === 'hidden') {
+    pageVisible = false
+    if (pollTimer) {
+      clearInterval(pollTimer)
+      pollTimer = null
+    }
+  } else if (!pageVisible) {
+    pageVisible = true
+    refreshQuiet()
+    syncPoll()
   }
 }
 
@@ -62,6 +90,7 @@ async function loadList() {
       await showDetail(r.dates.find((d) => d.dir === activeDir.value) ?? r.dates[0])
     }
   } catch (e) {
+    if (isAborted(e)) return
     ElMessage.error(`加载运行记录失败: ${(e as Error).message}`)
   } finally {
     loading.value = false
@@ -75,6 +104,7 @@ async function showDetail(row: RunSummary) {
     // 数据库记录按运行 ID 查明细（每次运行一条）；日志回退项按日期查
     current.value = row.id ? await api.runDetailById(row.id) : await api.runDetail(row.dir)
   } catch (e) {
+    if (isAborted(e)) return
     ElMessage.error(`加载明细失败: ${(e as Error).message}`)
   } finally {
     detailLoading.value = false
@@ -118,13 +148,15 @@ function sectionText(s: string): string {
 onMounted(() => {
   loadList()
   // 页面存活期间始终轮询，新启动的运行记录（running）能实时出现并更新状态/进度
-  pollTimer = setInterval(refreshQuiet, POLL_INTERVAL)
+  syncPoll()
+  document.addEventListener('visibilitychange', onVisibilityChange)
 })
 onBeforeUnmount(() => {
   if (pollTimer) {
     clearInterval(pollTimer)
     pollTimer = null
   }
+  document.removeEventListener('visibilitychange', onVisibilityChange)
 })
 </script>
 

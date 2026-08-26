@@ -156,16 +156,20 @@ def stats_boards():
 @router.get("/stats/trend")
 def stats_trend(days: int = Query(30, ge=1, le=365)):
     start = (date_cls.today() - timedelta(days=days - 1)).isoformat()
-    rows = db.query(
-        "SELECT date, COUNT(*) AS c FROM posts WHERE date >= ? GROUP BY date ORDER BY date ASC",
-        (start,),
-    )
-    by_date = {r["date"]: r["c"] for r in rows}
-    out = []
-    for i in range(days):
-        d = (date_cls.today() - timedelta(days=days - 1 - i)).isoformat()
-        out.append({"date": d, "count": by_date.get(d, 0)})
-    return out
+
+    def _calc():
+        rows = db.query(
+            "SELECT date, COUNT(*) AS c FROM posts WHERE date >= ? GROUP BY date ORDER BY date ASC",
+            (start,),
+        )
+        by_date = {r["date"]: r["c"] for r in rows}
+        out = []
+        for i in range(days):
+            d = (date_cls.today() - timedelta(days=days - 1 - i)).isoformat()
+            out.append({"date": d, "count": by_date.get(d, 0)})
+        return out
+
+    return db.cached(f"trend_{days}", _calc)
 
 
 @router.get("/stats/trend_by_fid")
@@ -254,12 +258,15 @@ def stats_fid_dist():
 
 @router.get("/stats/recent")
 def stats_recent(limit: int = Query(10, ge=1, le=50)):
-    rows = db.query(
-        "SELECT title, fid, date, url, likes, author, replies, created_at, update_at, update_date FROM posts"
-        " ORDER BY date DESC, created_at DESC LIMIT ?",
-        (limit,),
-    )
-    return [db.row_to_post(r) for r in rows]
+    def _calc():
+        rows = db.query(
+            "SELECT title, fid, date, url, likes, author, replies, created_at, update_at, update_date FROM posts"
+            " ORDER BY date DESC, created_at DESC LIMIT ?",
+            (limit,),
+        )
+        return [db.row_to_post(r) for r in rows]
+
+    return db.cached(f"recent_{limit}", _calc)
 
 
 # ---------------- 帖子 ----------------
@@ -291,13 +298,20 @@ def posts_list(
 ):
     order = _SORTS.get(sort, _SORTS["date_desc"])
     clause, params = _build_filters(fid, date_from, date_to, q)
-    total = db.query(f"SELECT COUNT(*) AS c FROM posts WHERE {clause}", tuple(params))[0]["c"]
     offset = (page - 1) * page_size
-    rows = db.query(
-        f"SELECT title, fid, date, url, likes, author, replies, created_at, update_at, update_date FROM posts WHERE {clause}"
-        f" ORDER BY {order} LIMIT ? OFFSET ?",
-        tuple(params) + (page_size, offset),
-    )
+    # COUNT 与列表在单连接内完成，省一次连接开/关
+    conn = db.open_conn()
+    try:
+        total = conn.execute(
+            f"SELECT COUNT(*) AS c FROM posts WHERE {clause}", tuple(params)
+        ).fetchone()["c"]
+        rows = conn.execute(
+            f"SELECT title, fid, date, url, likes, author, replies, created_at, update_at, update_date FROM posts WHERE {clause}"
+            f" ORDER BY {order} LIMIT ? OFFSET ?",
+            tuple(params) + (page_size, offset),
+        ).fetchall()
+    finally:
+        conn.close()
     return {
         "total": total,
         "page": page,
@@ -361,7 +375,10 @@ def posts_export(
 
 @router.get("/runs")
 def runs_list():
-    return {"dates": runs.list_runs()}
+    def _calc():
+        return {"dates": runs.list_runs()}
+
+    return db.cached("runs", _calc)
 
 
 @router.get("/runs/detail/{run_id}")
@@ -379,7 +396,7 @@ def runs_detail(date_str: str):
         raise HTTPException(400, "日期格式应为 YYYYMMDD")
     if not (config.OUTPUTS_DIR / date_str).is_dir():
         raise HTTPException(404, f"未找到 {date_str} 的运行记录")
-    return runs.get_run_detail(date_str)
+    return db.cached(f"run_detail_{date_str}", lambda: runs.get_run_detail(date_str))
 
 
 @router.get("/resources")

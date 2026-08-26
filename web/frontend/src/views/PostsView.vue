@@ -3,7 +3,7 @@ import { onMounted, reactive, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { CopyDocument, Download, Search, View } from '@element-plus/icons-vue'
-import { api, exportCsvUrl, type FidMeta, type PostsPage } from '../api'
+import { api, exportCsvUrl, isAborted, type FidMeta, type PostsPage } from '../api'
 import { formatRelativeTime } from '../utils/time'
 
 const route = useRoute()
@@ -45,6 +45,7 @@ async function load() {
       sort: sort.value,
     })
   } catch (e) {
+    if (isAborted(e)) return
     ElMessage.error(`查询失败: ${(e as Error).message}`)
   } finally {
     loading.value = false

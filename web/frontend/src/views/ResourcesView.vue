@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { api, formatSize, type Resources } from '../api'
+import { api, formatSize, isAborted, type Resources } from '../api'
 
 const data = ref<Resources | null>(null)
 const loading = ref(false)
@@ -22,6 +22,7 @@ async function load() {
   try {
     data.value = await api.resources()
   } catch (e) {
+    if (isAborted(e)) return
     ElMessage.error(`加载资源失败: ${(e as Error).message}`)
   } finally {
     loading.value = false

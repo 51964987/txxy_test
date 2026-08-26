@@ -1,4 +1,9 @@
-"""资源管理：扫描 downloads/ 目录（只读），按文件夹分组返回文件清单。"""
+"""资源管理：扫描 downloads/ 目录（只读），按文件夹分组返回文件清单。
+
+增量缓存：目录签名（顶层文件夹名 + 各自 mtime）未变化时直接复用上次扫描结果，
+避免高频请求下对大型目录反复 rglob 全量扫描。
+"""
+import time
 from pathlib import Path
 
 import config
@@ -22,10 +27,35 @@ def category_of(name: str) -> str:
     return "other"
 
 
+# ---- 增量缓存：签名 = 顶层文件夹名 + 各自 mtime（新增/删除/覆盖文件都会引起目录 mtime 变化） ----
+_cache_signature = ""
+_cache_payload: dict | None = None
+
+
+def _signature(root: Path) -> str:
+    parts: list[tuple[str, float]] = []
+    try:
+        for p in root.iterdir():
+            if p.is_dir():
+                try:
+                    parts.append((p.name, p.stat().st_mtime))
+                except OSError:
+                    parts.append((p.name, -1.0))
+    except OSError:
+        pass
+    parts.sort(key=lambda t: t[0])
+    return "|".join(f"{n}:{m:.3f}" for n, m in parts)
+
+
 def scan() -> dict:
     root = config.DOWNLOADS_DIR
     if not root.is_dir():
         return {"count": 0, "total_files": 0, "total_size": 0, "items": []}
+
+    global _cache_signature, _cache_payload
+    sig = _signature(root)
+    if _cache_payload is not None and sig == _cache_signature:
+        return _cache_payload
 
     items: list[dict] = []
     total_files = 0
@@ -71,9 +101,12 @@ def scan() -> dict:
             }
         )
 
-    return {
+    payload = {
         "count": len(items),
         "total_files": total_files,
         "total_size": total_size,
         "items": items,
     }
+    _cache_signature = sig
+    _cache_payload = payload
+    return payload

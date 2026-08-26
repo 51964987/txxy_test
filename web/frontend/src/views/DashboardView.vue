@@ -12,7 +12,7 @@ import {
 } from 'echarts/components'
 import type { ECharts } from 'echarts/core'
 import { ElMessage } from 'element-plus'
-import { api, type Boards, type FidDistItem, type Overview, type TrendByFid, type TrendPoint } from '../api'
+import { api, isAborted, type Boards, type FidDistItem, type Overview, type TrendByFid, type TrendPoint } from '../api'
 import { useDashboardStore } from '../stores/dashboard'
 import RollingNumber from '../components/RollingNumber.vue'
 
@@ -95,6 +95,9 @@ function colorForFid(fid: string): string {
 // 仅刷新已加载的区块，未进入视口的懒加载区块保持不动
 const REFRESH_INTERVAL = 5000
 let refreshTimer: ReturnType<typeof setInterval> | null = null
+// 页面可见性：后台隐藏时暂停全部轮询与轮播动画，恢复可见时立即刷新并重启
+let pageVisible = true
+let refreshing = false
 
 const fidDistTotal = computed(() => fidDist.value.reduce((s, f) => s + f.count, 0))
 
@@ -153,6 +156,8 @@ async function loadP0(initial = false) {
     // 首屏：等折线逐点描线动画完成后再启动趋势 tooltip 轮播（非首屏自动刷新不中断当前轮播）
     if (initial) startTrendCarousel(trend.value.length * 24 + 900)
   } catch (e) {
+    if (isAborted(e)) return
+    if (!initial) return // 轮询失败静默，下轮自动重试
     ElMessage.error(`加载总览数据失败: ${(e as Error).message}`)
   } finally {
     loadingP0.value = false
@@ -167,6 +172,8 @@ async function loadBoards() {
     const b = await api.boards()
     boards.value = b
   } catch (e) {
+    if (isAborted(e)) return
+    if (boards.value) return // 轮询刷新（榜单已存在）失败静默，下轮重试
     ElMessage.error(`加载热门榜失败: ${(e as Error).message}`)
   } finally {
     loadingBoards.value = false
@@ -524,10 +531,50 @@ function syncAutoRefresh() {
   }
 }
 
-/** 自动刷新：仅刷新已加载区块；懒加载区块若已在视口内则一并刷新 */
+/** 自动刷新：仅刷新已加载区块；懒加载区块若已在视口内则一并刷新；防重入（上一轮未完成则跳过本轮） */
 function autoRefreshTick() {
-  if (overview.value || loadingP0.value) loadP0(false)
-  if (boards.value) loadBoards()
+  if (refreshing) return
+  refreshing = true
+  const jobs: Promise<unknown>[] = []
+  if (overview.value || loadingP0.value) jobs.push(loadP0(false))
+  if (boards.value) jobs.push(loadBoards())
+  Promise.allSettled(jobs).finally(() => {
+    refreshing = false
+  })
+}
+
+/** 页面隐藏时暂停全部轮询与轮播动画（浏览器后台会节流定时器，主动暂停更省资源） */
+function stopAllTimers() {
+  if (refreshTimer) {
+    clearInterval(refreshTimer)
+    refreshTimer = null
+  }
+  stopBarScroll()
+  stopPieCarousel()
+  stopTrendCarousel()
+  if (fidTrendTipTimer) {
+    clearInterval(fidTrendTipTimer)
+    fidTrendTipTimer = null
+  }
+}
+
+/** 页面恢复可见：立即刷新一次并重启轮询与轮播 */
+function resumeAllTimers() {
+  if (store.autoRefresh) autoRefreshTick()
+  syncAutoRefresh()
+  if (barListRef.value && fidDist.value.length > BAR_VISIBLE_ROWS) startBarScroll()
+  if (pieChart.value && fidDist.value.length > 1) startPieCarousel()
+  if (trendChart.value && trend.value.length) startTrendCarousel(0)
+}
+
+function onVisibilityChange() {
+  if (document.visibilityState === 'hidden') {
+    pageVisible = false
+    stopAllTimers()
+  } else if (!pageVisible) {
+    pageVisible = true
+    resumeAllTimers()
+  }
 }
 
 onMounted(() => {
@@ -574,6 +621,7 @@ onMounted(() => {
   syncAutoRefresh()
   store.registerAutoChange(syncAutoRefresh)
   window.addEventListener('resize', onResize)
+  document.addEventListener('visibilitychange', onVisibilityChange)
 })
 
 onBeforeUnmount(() => {
@@ -602,6 +650,7 @@ onBeforeUnmount(() => {
   stopTrendCarousel()
   store.registerAutoChange(null)
   window.removeEventListener('resize', onResize)
+  document.removeEventListener('visibilitychange', onVisibilityChange)
   trendChart.value?.dispose()
   pieChart.value?.dispose()
 })
@@ -960,6 +1009,7 @@ async function loadTrendOnly(prevLen?: number) {
     renderTrendChart()
     startTrendCarousel(400, prevLen)
   } catch (e) {
+    if (isAborted(e)) return
     ElMessage.error(`加载趋势数据失败: ${(e as Error).message}`)
   } finally {
     trendSwitching.value = false
@@ -1030,6 +1080,7 @@ async function loadFidTrend() {
     await nextTick()
     renderFidTrendChart()
   } catch (e) {
+    if (isAborted(e)) return
     ElMessage.error(`加载各版块趋势失败: ${(e as Error).message}`)
   } finally {
     loadingFidTrend.value = false
