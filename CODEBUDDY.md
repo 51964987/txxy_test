@@ -46,6 +46,7 @@ alwaysApply: true
 10. **SQL 拼接禁止依赖「隐式合并 + .format()」**：Python 中 `"a" "b" "c".format(...)` 是先把相邻字面量合并成整体再 `.format`；一旦改写成显式 `+` 拼接，`.format()` 只作用于最后一段，其余段的 `{}` 占位符会残留进 SQL，触发 `sqlite3.OperationalError: unrecognized token: "{"`（本项目的 `trend_by_fid` 曾因此 500）。动态占位符一律显式构造，如 `+ ",".join("?" * n) +` 或整体用 f-string；改完需确认无 `{}` 残留。
 11. **后端改动必须实测受影响接口**：SQL/查询/拼接改动后，除 `py_compile` 与启动检查外，必须对**所有受影响接口**发起真实请求验证无 500（本次教训：只验证部分接口，漏掉 `trend_by_fid`，500 未被及时发现）。验证示例：`python -c "import json,urllib.request; print(json.load(urllib.request.urlopen('http://127.0.0.1:8088/api/stats/trend_by_fid?days=7&top=8')))"`。
 12. **启动前检查端口占用**：`Get-NetTCPConnection -LocalPort 8088 -State Listen` 有输出则服务已在跑，禁止重复启动；报 `[Errno 10048]`（端口被占）时，先确认是否已有实例在提供服务，而非直接另起进程。
+13. **新建/变更文件必须可运行且无警告/问题**：任何新建或改动的代码文件，交付前必须保证能正常运行且**不残留任何语法错误、类型错误、Lint 警告或明显问题**（如未使用的导入、未定义变量、空异常处理、明显逻辑死分支等）。措施：改动后用项目既有自检手段核验——后端 `python -m py_compile <文件>` + 启动不报错；前端 `npx vue-tsc --noEmit` 与 `read_lints` 均 0 错误；对受影响接口/功能发起真实验证。发现问题必须当场修复，不要以「应该没问题」带病交付。
 
 # 项目上下文（txxy 数据展示项目 · 自动加载）
 ## 技术栈
