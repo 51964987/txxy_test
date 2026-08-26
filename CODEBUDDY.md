@@ -43,6 +43,9 @@ alwaysApply: true
 7. **不考虑 fallback 与旧兼容**：本项目没有老用户，不做向后兼容与兼容层；处理思路是「消除 fallback 触发场景」，而非「加更多兜底分支」。
 8. **不盲目折中**：方案清晰合理即可，不必为了稳妥而给折中方案（折中往往意味着还没想清楚）；不过度优化、不预支复杂度。
 9. **批量编辑防写锁超时**：对同一文件的批量修改分批提交（单批 ≤ 4-5 处），避免并行写锁竞争触发 `Acquire write lock ... timeout`；某处失败后先 `read_file` 重读该文件再重试，不要盲目重发。
+10. **SQL 拼接禁止依赖「隐式合并 + .format()」**：Python 中 `"a" "b" "c".format(...)` 是先把相邻字面量合并成整体再 `.format`；一旦改写成显式 `+` 拼接，`.format()` 只作用于最后一段，其余段的 `{}` 占位符会残留进 SQL，触发 `sqlite3.OperationalError: unrecognized token: "{"`（本项目的 `trend_by_fid` 曾因此 500）。动态占位符一律显式构造，如 `+ ",".join("?" * n) +` 或整体用 f-string；改完需确认无 `{}` 残留。
+11. **后端改动必须实测受影响接口**：SQL/查询/拼接改动后，除 `py_compile` 与启动检查外，必须对**所有受影响接口**发起真实请求验证无 500（本次教训：只验证部分接口，漏掉 `trend_by_fid`，500 未被及时发现）。验证示例：`python -c "import json,urllib.request; print(json.load(urllib.request.urlopen('http://127.0.0.1:8088/api/stats/trend_by_fid?days=7&top=8')))"`。
+12. **启动前检查端口占用**：`Get-NetTCPConnection -LocalPort 8088 -State Listen` 有输出则服务已在跑，禁止重复启动；报 `[Errno 10048]`（端口被占）时，先确认是否已有实例在提供服务，而非直接另起进程。
 
 # 项目上下文（txxy 数据展示项目 · 自动加载）
 ## 技术栈

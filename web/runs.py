@@ -12,6 +12,8 @@
 """
 import re
 from datetime import datetime
+from pathlib import Path
+from typing import Any
 
 import config
 import db
@@ -74,7 +76,7 @@ def _run_progress(run_id: int) -> int | None:
     return round(total / len(rows))
 
 
-def _run_live_agg(run_id: int) -> dict:
+def _run_live_agg(run_id: int) -> dict[str, Any]:
     """running 状态运行：从各版块明细实时聚合 CSV/SQLite 条数与成功/失败/未执行数。
 
     子进程每抓一页都会实时上报进度与条数（run_sections.csv / sqlite），
@@ -98,7 +100,7 @@ def _run_live_agg(run_id: int) -> dict:
     return agg
 
 
-def _db_run_row(r, progress: int | None = None) -> dict:
+def _db_run_row(r: Any, progress: int | None = None) -> dict[str, Any]:
     """把 run_days 一行转成列表/详情通用结构（含 id / 时间 / 进度）"""
     return {
         "id": r["id"],
@@ -117,7 +119,7 @@ def _db_run_row(r, progress: int | None = None) -> dict:
     }
 
 
-def _db_list_runs() -> list[dict]:
+def _db_list_runs() -> list[dict[str, Any]]:
     """从 run_days 读取运行记录列表（每次运行一条，按日期倒序、同日按 id 倒序）。
 
     progress 口径：已结束（非 running）为 100；running 由各版块明细实时聚合。
@@ -125,10 +127,10 @@ def _db_list_runs() -> list[dict]:
     if not _db_ready():
         return []
     rows = db.query(
-        "SELECT id, run_date, source, status, ok, fail, skip, csv, sqlite, duration, created_at FROM run_days"
+        "SELECT id, run_date, source, status, ok, fail, skip, csv, sqlite, duration, created_at FROM run_days" +
         " ORDER BY run_date DESC, id DESC"
     )
-    out: list[dict] = []
+    out: list[dict[str, Any]] = []
     for r in rows:
         if r["status"] == "running":
             row = _db_run_row(r, _run_progress(r["id"]))
@@ -144,12 +146,12 @@ def _db_list_runs() -> list[dict]:
     return out
 
 
-def _db_detail_by_id(run_id: int) -> dict | None:
+def _db_detail_by_id(run_id: int) -> dict[str, Any] | None:
     """按 run_days.id 读取一次运行的详情；无记录返回 None"""
     if not _db_ready():
         return None
     rows = db.query(
-        "SELECT id, run_date, source, status, ok, fail, skip, csv, sqlite, duration, created_at FROM run_days"
+        "SELECT id, run_date, source, status, ok, fail, skip, csv, sqlite, duration, created_at FROM run_days" +
         " WHERE id = ?",
         (run_id,),
     )
@@ -157,11 +159,11 @@ def _db_detail_by_id(run_id: int) -> dict | None:
         return None
     r = rows[0]
     sections = db.query(
-        "SELECT fid, name, status, csv, sqlite, duration, total_pages, current_page, progress FROM run_sections"
+        "SELECT fid, name, status, csv, sqlite, duration, total_pages, current_page, progress FROM run_sections" +
         " WHERE run_id = ? ORDER BY fid",
         (run_id,),
     )
-    detail: dict = _db_run_row(r, _run_progress(run_id) if r["status"] == "running" else 100)
+    detail: dict[str, Any] = _db_run_row(r, _run_progress(run_id) if r["status"] == "running" else 100)
     detail["sections"] = [dict(s) for s in sections]
     if r["status"] == "running":
         # 运行中：CSV/SQLite 汇总与成功/失败/未执行数实时聚合自各版块明细
@@ -176,7 +178,7 @@ def _db_detail_by_id(run_id: int) -> dict | None:
     return detail
 
 
-def _db_detail(date_str: str) -> dict | None:
+def _db_detail(date_str: str) -> dict[str, Any] | None:
     """按日期目录名取该日最新一次运行的详情（兼容日志回退路径）；无记录返回 None"""
     if not _db_ready():
         return None
@@ -202,11 +204,11 @@ def list_date_dirs() -> list[str]:
     return dates
 
 
-def _parse_run_batch_log(path) -> dict:
+def _parse_run_batch_log(path: Path) -> dict[str, Any]:
     status = "ok"
     overall = {"ok": 0, "fail": 0, "skip": 0}
     total = {"csv": 0, "sqlite": 0}
-    sections: list[dict] = []
+    sections: list[dict[str, Any]] = []
     with open(path, encoding="utf-8", errors="replace") as f:
         for raw in f:
             line = raw.rstrip("\n")
@@ -253,7 +255,7 @@ def _parse_run_batch_log(path) -> dict:
     }
 
 
-def _scraper_duration(date_dir, fid: str) -> int | None:
+def _scraper_duration(date_dir: Path, fid: str) -> int | None:
     path = date_dir / f"scraper_{fid}_{date_dir.name}.log"
     if not path.is_file():
         return None
@@ -268,8 +270,8 @@ def _scraper_duration(date_dir, fid: str) -> int | None:
     return _duration(first_ts, last_ts)
 
 
-def _parse_scraper_logs(date_dir) -> dict:
-    sections: list[dict] = []
+def _parse_scraper_logs(date_dir: Path) -> dict[str, Any]:
+    sections: list[dict[str, Any]] = []
     total = {"csv": 0, "sqlite": 0}
     for f in sorted(date_dir.glob("scraper_*.log")):
         m = re.match(r"^scraper_(\d+)_", f.name)
@@ -316,12 +318,12 @@ def _parse_scraper_logs(date_dir) -> dict:
 
 # ==================== 对外接口 ====================
 
-def get_run_detail_by_id(run_id: int) -> dict | None:
+def get_run_detail_by_id(run_id: int) -> dict[str, Any] | None:
     """按数据库 run_days.id 读取一次运行的详情；无记录返回 None"""
     return _db_detail_by_id(run_id)
 
 
-def get_run_detail(date_str: str) -> dict:
+def get_run_detail(date_str: str) -> dict[str, Any]:
     """优先读库（该日最新一次）；数据库无该日期记录时回退解析日志（兼容旧数据）"""
     detail = _db_detail(date_str)
     if detail:
@@ -338,9 +340,9 @@ def get_run_detail(date_str: str) -> dict:
     return {"date": _fmt_date(date_str), "dir": date_str, "source": "scraper", **parsed}
 
 
-def list_runs() -> list[dict]:
+def list_runs() -> list[dict[str, Any]]:
     """运行记录列表：数据库记录（每次运行一条）+ 日志兼容回退（日志目录若已入库则不重复展示）"""
-    out: list[dict] = _db_list_runs()
+    out: list[dict[str, Any]] = _db_list_runs()
     db_dirs = {r["dir"] for r in out}
     for d in list_date_dirs():
         if d in db_dirs:

@@ -4,6 +4,8 @@ import io
 from datetime import date as date_cls
 from datetime import timedelta
 
+from typing import Annotated, Any
+
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -54,7 +56,7 @@ class TrendPointResp(BaseModel):
 
 class TrendByFidResp(BaseModel):
     dates: list[str]
-    series: list[dict]
+    series: list[dict[str, Any]]
 
 
 class FidDistItemResp(BaseModel):
@@ -109,9 +111,14 @@ def _fid_list(fid: str | None) -> list[str]:
     return [f.strip() for f in fid.split(",") if f.strip()]
 
 
-def _build_filters(fid, date_from, date_to, q):
+def _build_filters(
+    fid: str | None,
+    date_from: str | None,
+    date_to: str | None,
+    q: str | None,
+) -> tuple[str, list[str]]:
     where: list[str] = []
-    params: list = []
+    params: list[str] = []
     fids = _fid_list(fid)
     if fids:
         where.append(f"fid IN ({','.join('?' * len(fids))})")
@@ -137,7 +144,7 @@ def _as_int(value: object) -> int:
         return 0
 
 
-def _board_top(field: str) -> list[dict]:
+def _board_top(field: str) -> list[dict[str, Any]]:
     """每个版块该指标（likes/replies）最高的一条记录。
 
     方案 B：改为 per-fid 循环 + ORDER BY ... LIMIT 1，命中
@@ -145,15 +152,15 @@ def _board_top(field: str) -> list[dict]:
     避免窗口函数对全表物化排序；并列时按 date / created_at 倒序取最新一条。
     全部查询复用同一连接，减少冷连接开销。
     """
-    rows: list[dict] = []
+    rows: list[dict[str, Any]] = []
     conn = db.open_conn()
     try:
         for fid in (r["fid"] for r in conn.execute("SELECT DISTINCT fid FROM posts ORDER BY fid")):
             rows.extend(
                 dict(r)
                 for r in conn.execute(
-                    "SELECT fid, title, url, " + field + " AS value FROM posts"
-                    " WHERE fid = ? AND " + field + " IS NOT NULL AND " + field + " <> ''"
+                    "SELECT fid, title, url, " + field + " AS value FROM posts" +
+                    " WHERE fid = ? AND " + field + " IS NOT NULL AND " + field + " <> ''" +
                     " ORDER BY CAST(" + field + " AS INTEGER) DESC, date DESC, created_at DESC LIMIT 1",
                     (fid,),
                 )
@@ -179,9 +186,7 @@ def _board_top(field: str) -> list[dict]:
 @router.get("/config")
 def app_config() -> ConfigResp:
     """前端运行时配置（自动刷新总开关等）。"""
-    return {
-        "enable_auto_refresh": config.ENABLE_AUTO_REFRESH,
-    }
+    return ConfigResp(enable_auto_refresh=config.ENABLE_AUTO_REFRESH)
 
 
 # ---------------- 统计 ----------------
@@ -197,10 +202,10 @@ def stats_overview() -> OverviewResp:
         conn = db.open_conn()
         try:
             agg = conn.execute(
-                "SELECT COUNT(*) AS total,"
-                " COUNT(CASE WHEN date = ? THEN 1 END) AS today_c,"
-                " COUNT(CASE WHEN date = ? THEN 1 END) AS yesterday_c,"
-                " COUNT(CASE WHEN date >= ? THEN 1 END) AS week_c"
+                "SELECT COUNT(*) AS total," +
+                " COUNT(CASE WHEN date = ? THEN 1 END) AS today_c," +
+                " COUNT(CASE WHEN date = ? THEN 1 END) AS yesterday_c," +
+                " COUNT(CASE WHEN date >= ? THEN 1 END) AS week_c" +
                 " FROM posts",
                 (today, yesterday, week_ago),
             ).fetchone()
@@ -244,7 +249,7 @@ def stats_boards() -> BoardsResp:
 
 
 @router.get("/stats/trend")
-def stats_trend(days: int = Query(30, ge=1, le=365)) -> list[TrendPointResp]:
+def stats_trend(days: Annotated[int, Query(ge=1, le=365)] = 30) -> list[TrendPointResp]:
     start = (date_cls.today() - timedelta(days=days - 1)).isoformat()
 
     def _calc():
@@ -253,7 +258,7 @@ def stats_trend(days: int = Query(30, ge=1, le=365)) -> list[TrendPointResp]:
             (start,),
         )
         by_date = {r["date"]: r["c"] for r in rows}
-        out = []
+        out: list[dict[str, Any]] = []
         for i in range(days):
             d = (date_cls.today() - timedelta(days=days - 1 - i)).isoformat()
             out.append({"date": d, "count": by_date.get(d, 0)})
@@ -264,8 +269,8 @@ def stats_trend(days: int = Query(30, ge=1, le=365)) -> list[TrendPointResp]:
 
 @router.get("/stats/trend_by_fid")
 def stats_trend_by_fid(
-    days: int = Query(30, ge=1, le=365),
-    top: int = Query(8, ge=1, le=30),
+    days: Annotated[int, Query(ge=1, le=365)] = 30,
+    top: Annotated[int, Query(ge=1, le=30)] = 8,
 ) -> TrendByFidResp:
     """各版块每日新增趋势（多系列折线图用）。
 
@@ -286,7 +291,7 @@ def stats_trend_by_fid(
             top_fids = [
                 r["fid"]
                 for r in conn.execute(
-                    "SELECT fid, COUNT(*) AS c FROM posts WHERE date >= ? GROUP BY fid"
+                    "SELECT fid, COUNT(*) AS c FROM posts WHERE date >= ? GROUP BY fid" +
                     " ORDER BY c DESC LIMIT ?",
                     (start, top),
                 )
@@ -294,9 +299,9 @@ def stats_trend_by_fid(
             by_fid: dict[str, dict[str, int]] = {}
             if top_fids:
                 rows = conn.execute(
-                    "SELECT fid, date, COUNT(*) AS c FROM posts"
-                    " WHERE date >= ? AND fid IN ({})"
-                    " GROUP BY fid, date".format(",".join("?" * len(top_fids))),
+                    "SELECT fid, date, COUNT(*) AS c FROM posts" +
+                    " WHERE date >= ? AND fid IN (" + ",".join("?" * len(top_fids)) + ")" +
+                    " GROUP BY fid, date",
                     (start, *top_fids),
                 )
                 for r in rows:
@@ -304,7 +309,7 @@ def stats_trend_by_fid(
         finally:
             conn.close()
 
-        series = []
+        series: list[dict[str, Any]] = []
         for fid in top_fids:
             daily = by_fid.get(fid, {})
             series.append(
@@ -325,9 +330,9 @@ def stats_fid_dist() -> list[FidDistItemResp]:
         today = date_cls.today().isoformat()
         yesterday = (date_cls.today() - timedelta(days=1)).isoformat()
         rows = db.query(
-            "SELECT fid, COUNT(*) AS c, MAX(date) AS latest_date,"
-            " SUM(CASE WHEN date = ? THEN 1 ELSE 0 END) AS today_c,"
-            " SUM(CASE WHEN date = ? THEN 1 ELSE 0 END) AS yesterday_c"
+            "SELECT fid, COUNT(*) AS c, MAX(date) AS latest_date," +
+            " SUM(CASE WHEN date = ? THEN 1 ELSE 0 END) AS today_c," +
+            " SUM(CASE WHEN date = ? THEN 1 ELSE 0 END) AS yesterday_c" +
             " FROM posts GROUP BY fid ORDER BY c DESC",
             (today, yesterday),
         )
@@ -347,10 +352,10 @@ def stats_fid_dist() -> list[FidDistItemResp]:
 
 
 @router.get("/stats/recent")
-def stats_recent(limit: int = Query(10, ge=1, le=50)) -> list[PostResp]:
+def stats_recent(limit: Annotated[int, Query(ge=1, le=50)] = 10) -> list[PostResp]:
     def _calc():
         rows = db.query(
-            "SELECT title, fid, date, url, likes, author, replies, created_at, update_at, update_date FROM posts"
+            "SELECT title, fid, date, url, likes, author, replies, created_at, update_at, update_date FROM posts" +
             " ORDER BY date DESC, created_at DESC LIMIT ?",
             (limit,),
         )
@@ -365,7 +370,7 @@ def stats_recent(limit: int = Query(10, ge=1, le=50)) -> list[PostResp]:
 def posts_fid() -> list[FidMetaResp]:
     def _calc():
         rows = db.query(
-            "SELECT fid, COUNT(*) AS c, MAX(date) AS latest FROM posts"
+            "SELECT fid, COUNT(*) AS c, MAX(date) AS latest FROM posts" +
             " GROUP BY fid ORDER BY fid"
         )
         return [
@@ -382,10 +387,10 @@ def posts_list(
     date_from: str | None = None,
     date_to: str | None = None,
     q: str | None = None,
-    page: int = Query(1, ge=1),
-    page_size: int = Query(50, ge=1, le=200),
-    sort: str = Query("date_desc"),
-):
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=200)] = 50,
+    sort: Annotated[str, Query()] = "date_desc",
+) -> dict[str, Any]:
     order = _SORTS.get(sort, _SORTS["date_desc"])
     clause, params = _build_filters(fid, date_from, date_to, q)
     offset = (page - 1) * page_size
@@ -396,7 +401,7 @@ def posts_list(
             f"SELECT COUNT(*) AS c FROM posts WHERE {clause}", tuple(params)
         ).fetchone()["c"]
         rows = conn.execute(
-            f"SELECT title, fid, date, url, likes, author, replies, created_at, update_at, update_date FROM posts WHERE {clause}"
+            f"SELECT title, fid, date, url, likes, author, replies, created_at, update_at, update_date FROM posts WHERE {clause}" +
             f" ORDER BY {order} LIMIT ? OFFSET ?",
             tuple(params) + (page_size, offset),
         ).fetchall()
@@ -416,12 +421,12 @@ def posts_export(
     date_from: str | None = None,
     date_to: str | None = None,
     q: str | None = None,
-    sort: str = Query("date_desc"),
-):
+    sort: Annotated[str, Query()] = "date_desc",
+) -> StreamingResponse:
     order = _SORTS.get(sort, _SORTS["date_desc"])
     clause, params = _build_filters(fid, date_from, date_to, q)
     sql = (
-        f"SELECT title, fid, date, url, likes, author, replies, created_at, update_at, update_date FROM posts WHERE {clause}"
+        f"SELECT title, fid, date, url, likes, author, replies, created_at, update_at, update_date FROM posts WHERE {clause}" +
         f" ORDER BY {order}"
     )
 
@@ -432,8 +437,8 @@ def posts_export(
         w = csv.writer(sio)
         w.writerow(["标题", "版块", "日期", "链接", "点赞数", "作者", "回复数", "入库时间", "更新时间", "更新日期"])
         yield sio.getvalue().encode("utf-8")
-        sio.seek(0)
-        sio.truncate(0)
+        _ = sio.seek(0)
+        _ = sio.truncate(0)
         for row in db.iter_query(sql, tuple(params)):
             w.writerow(
                 [
@@ -450,8 +455,8 @@ def posts_export(
                 ]
             )
             yield sio.getvalue().encode("utf-8")
-            sio.seek(0)
-            sio.truncate(0)
+            _ = sio.seek(0)
+            _ = sio.truncate(0)
 
     fname = f"posts_export_{date_cls.today().strftime('%Y%m%d')}.csv"
     return StreamingResponse(
@@ -464,7 +469,7 @@ def posts_export(
 # ---------------- 运行记录 / 资源 ----------------
 
 @router.get("/runs")
-def runs_list():
+def runs_list() -> dict[str, Any]:
     def _calc():
         return {"dates": runs.list_runs()}
 
@@ -472,7 +477,7 @@ def runs_list():
 
 
 @router.get("/runs/detail/{run_id}")
-def runs_detail_by_id(run_id: int):
+def runs_detail_by_id(run_id: int) -> dict[str, Any]:
     """按数据库运行记录 ID 读取一次运行的明细（每次运行一条）"""
     detail = runs.get_run_detail_by_id(run_id)
     if detail is None:
@@ -481,7 +486,7 @@ def runs_detail_by_id(run_id: int):
 
 
 @router.get("/runs/{date_str}")
-def runs_detail(date_str: str):
+def runs_detail(date_str: str) -> dict[str, Any]:
     if not (len(date_str) == 8 and date_str.isdigit()):
         raise HTTPException(400, "日期格式应为 YYYYMMDD")
     if not (config.OUTPUTS_DIR / date_str).is_dir():
@@ -490,5 +495,5 @@ def runs_detail(date_str: str):
 
 
 @router.get("/resources")
-def resources_list():
+def resources_list() -> dict[str, Any]:
     return resources.scan()

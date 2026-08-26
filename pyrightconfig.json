@@ -1,0 +1,8 @@
+{
+  "extraPaths": ["web"],
+  "pythonVersion": "3.11",
+  "pythonPlatform": "Windows",
+  "reportMissingTypeStubs": false,
+  "reportAny": "none",
+  "reportExplicitAny": "none"
+}

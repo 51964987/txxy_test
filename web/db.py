@@ -8,7 +8,7 @@
 """
 import sqlite3
 import time
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 
 import config
 
@@ -25,7 +25,7 @@ def open_conn() -> sqlite3.Connection:
     return conn
 
 
-def query(sql: str, params: tuple = ()) -> list[dict[str, Any]]:
+def query(sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
     conn = open_conn()
     try:
         return [dict(r) for r in conn.execute(sql, params).fetchall()]
@@ -33,7 +33,7 @@ def query(sql: str, params: tuple = ()) -> list[dict[str, Any]]:
         conn.close()
 
 
-def iter_query(sql: str, params: tuple = ()) -> Iterator[sqlite3.Row]:
+def iter_query(sql: str, params: tuple[Any, ...] = ()) -> Iterator[sqlite3.Row]:
     """流式查询：调用方必须在迭代结束后释放（连接随生成器关闭）。"""
     conn = open_conn()
     try:
@@ -71,7 +71,7 @@ _cache: dict[str, tuple[float, Any]] = {}
 _TTL = 5
 
 
-def cached(key: str, fn):
+def cached(key: str, fn: Callable[[], Any]) -> Any:
     now = time.time()
     hit = _cache.get(key)
     if hit and now - hit[0] < _TTL:

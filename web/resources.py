@@ -5,6 +5,7 @@
 """
 import time
 from pathlib import Path
+from typing import Any
 
 import config
 
@@ -29,7 +30,7 @@ def category_of(name: str) -> str:
 
 # ---- 增量缓存：签名 = 顶层文件夹名 + 各自 mtime（新增/删除/覆盖文件都会引起目录 mtime 变化） ----
 _cache_signature = ""
-_cache_payload: dict | None = None
+_cache_payload: dict[str, Any] | None = None
 
 
 def _signature(root: Path) -> str:
@@ -47,7 +48,7 @@ def _signature(root: Path) -> str:
     return "|".join(f"{n}:{m:.3f}" for n, m in parts)
 
 
-def scan() -> dict:
+def scan() -> dict[str, Any]:
     root = config.DOWNLOADS_DIR
     if not root.is_dir():
         return {"count": 0, "total_files": 0, "total_size": 0, "items": []}
@@ -57,13 +58,13 @@ def scan() -> dict:
     if _cache_payload is not None and sig == _cache_signature:
         return _cache_payload
 
-    items: list[dict] = []
+    items: list[dict[str, Any]] = []
     total_files = 0
     total_size = 0
     for folder in sorted(root.iterdir(), key=lambda p: p.name, reverse=True):
         if not folder.is_dir():
             continue
-        files: list[dict] = []
+        files: list[dict[str, Any]] = []
         folder_size = 0
         try:
             for f in sorted(folder.rglob("*"), key=lambda p: str(p).lower()):
