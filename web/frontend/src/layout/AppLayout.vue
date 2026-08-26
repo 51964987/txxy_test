@@ -51,6 +51,10 @@ onMounted(async () => {
           <el-icon><FolderOpened /></el-icon>
           <span>资源管理</span>
         </el-menu-item>
+        <el-menu-item index="/downloads">
+          <el-icon><Download /></el-icon>
+          <span>下载中心</span>
+        </el-menu-item>
       </el-menu>
     </el-aside>
 

@@ -27,6 +27,12 @@ const router = createRouter({
       component: () => import('../views/ResourcesView.vue'),
       meta: { title: '资源管理' },
     },
+    {
+      path: '/downloads',
+      name: 'downloads',
+      component: () => import('../views/DownloadsView.vue'),
+      meta: { title: '下载中心' },
+    },
   ],
 })
 

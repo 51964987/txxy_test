@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 import config
 import db
+import download_tasks
 import ratelimit
 import resources
 import runs
@@ -736,3 +737,62 @@ def runs_detail(date_str: str) -> dict[str, Any]:
 @router.get("/resources")
 def resources_list(_: ResourcesRateLimit) -> dict[str, Any]:
     return resources.scan()
+
+
+# ---------------- 下载中心 ----------------
+
+class DownloadSubmitReq(BaseModel):
+    """下载任务提交体：http/https 链接列表。"""
+
+    urls: list[str]
+
+
+@router.post("/downloads")
+def downloads_submit(req: DownloadSubmitReq) -> dict[str, Any]:
+    """创建下载任务：校验 URL 后入队，立即返回任务 ID（后台异步执行）。"""
+    urls = [u.strip() for u in req.urls if u and u.strip()]
+    if not urls:
+        raise HTTPException(400, "未提供任何下载链接")
+    if len(urls) > config.DOWNLOAD_MAX_BATCH:
+        raise HTTPException(400, f"单次最多提交 {config.DOWNLOAD_MAX_BATCH} 个链接，当前 {len(urls)} 个")
+    for u in urls:
+        if not u.lower().startswith(("http://", "https://")):
+            raise HTTPException(400, f"仅支持 http/https 链接: {u}")
+    # 任务内去重（保持首次出现顺序）
+    seen: set[str] = set()
+    uniq = [u for u in urls if not (u in seen or seen.add(u))]
+    tid = download_tasks.manager.submit(uniq)
+    return {"id": tid, "count": len(uniq)}
+
+
+@router.get("/downloads")
+def downloads_list() -> dict[str, Any]:
+    """全部下载任务（含状态、进度、逐 URL 明细），按创建时间倒序。"""
+    tasks = download_tasks.manager.list()
+    tasks.sort(key=lambda t: t["created_at"], reverse=True)
+    return {"tasks": tasks}
+
+
+@router.get("/downloads/{tid}")
+def downloads_detail(tid: str) -> dict[str, Any]:
+    """单个下载任务详情。"""
+    task = download_tasks.manager.get(tid)
+    if task is None:
+        raise HTTPException(404, f"未找到下载任务 {tid}")
+    return task
+
+
+@router.post("/downloads/{tid}/cancel")
+def downloads_cancel(tid: str) -> dict[str, Any]:
+    """取消下载任务（pending/running → cancelled，记录保留）。"""
+    if not download_tasks.manager.cancel(tid):
+        raise HTTPException(404, f"未找到或已结束的下载任务 {tid}")
+    return {"id": tid}
+
+
+@router.delete("/downloads/{tid}")
+def downloads_delete(tid: str) -> dict[str, Any]:
+    """删除下载任务记录：运行中的先请求取消，已结束的直接移除。"""
+    if not download_tasks.manager.delete(tid):
+        raise HTTPException(404, f"未找到下载任务 {tid}")
+    return {"id": tid}

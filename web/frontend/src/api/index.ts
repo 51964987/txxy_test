@@ -34,6 +34,10 @@ interface RequestOptions {
   key?: string
   /** 同 key 新请求是否取消旧请求，默认 true */
   dedupe?: boolean
+  /** HTTP 方法，默认 GET */
+  method?: string
+  /** 请求体（JSON 序列化），仅 POST/DELETE 等需要请求体的方法使用 */
+  body?: unknown
 }
 
 async function request<T>(
@@ -70,7 +74,12 @@ async function request<T>(
   }
 
   try {
-    const res = await fetch(url, { signal: controller.signal })
+    const init: RequestInit = { signal: controller.signal, method: opts.method ?? 'GET' }
+    if (opts.body !== undefined) {
+      init.headers = { 'Content-Type': 'application/json' }
+      init.body = JSON.stringify(opts.body)
+    }
+    const res = await fetch(url, init)
     if (!res.ok) {
       let msg = `${res.status} ${res.statusText}`
       try {
@@ -104,6 +113,16 @@ async function request<T>(
 
 async function get<T>(path: string, params?: Record<string, string | number | undefined | null>): Promise<T> {
   return request<T>(path, params)
+}
+
+/** POST 请求（不参与轮询去重：仅用户主动点击触发，避免同 key 顶掉已提交的请求） */
+async function post<T>(path: string, body?: unknown): Promise<T> {
+  return request<T>(path, undefined, { method: 'POST', body, dedupe: false })
+}
+
+/** DELETE 请求（不参与轮询去重，同 POST） */
+async function del<T>(path: string): Promise<T> {
+  return request<T>(path, undefined, { method: 'DELETE', dedupe: false })
 }
 
 export interface Post {
@@ -275,6 +294,31 @@ export interface Resources {
   items: ResourceItem[]
 }
 
+export type DownloadItemStatus = 'pending' | 'ok' | 'skip' | 'fail' | 'cancelled'
+export type DownloadTaskStatus = 'pending' | 'running' | 'done' | 'failed' | 'cancelled'
+
+export interface DownloadItem {
+  url: string
+  status: DownloadItemStatus
+  stats: Record<string, number>
+  error: string | null
+  saved_dir: string | null
+}
+
+export interface DownloadTask {
+  id: string
+  status: DownloadTaskStatus
+  urls: string[]
+  total: number
+  done: number
+  items: DownloadItem[]
+  logs: string[]
+  created_at: string
+  started_at: string | null
+  finished_at: string | null
+  cancel_requested: boolean
+}
+
 export const api = {
   config: () => get<AppConfig>('/config'),
   overview: () => get<Overview>('/stats/overview'),
@@ -303,6 +347,11 @@ export const api = {
   runDetail: (dir: string) => get<RunDetail>(`/runs/${dir}`),
   runDetailById: (id: number) => get<RunDetail>(`/runs/detail/${id}`),
   resources: () => get<Resources>('/resources'),
+  submitDownload: (urls: string[]) => post<{ id: string; count: number }>('/downloads', { urls }),
+  downloadTasks: () => get<{ tasks: DownloadTask[] }>('/downloads'),
+  downloadTask: (id: string) => get<DownloadTask>(`/downloads/${id}`),
+  cancelDownload: (id: string) => post<{ id: string }>(`/downloads/${id}/cancel`),
+  deleteDownload: (id: string) => del<{ id: string }>(`/downloads/${id}`),
 }
 
 /** 生成导出 CSV 的下载地址（当前筛选条件下） */

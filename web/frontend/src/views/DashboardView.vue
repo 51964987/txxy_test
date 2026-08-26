@@ -12,6 +12,7 @@ import {
 } from 'echarts/components'
 import type { ECharts } from 'echarts/core'
 import { ElMessage } from 'element-plus'
+import { Download } from '@element-plus/icons-vue'
 import { api, isAborted, type Boards, type FidDistItem, type Overview, type TodayTop, type TopAuthor, type TopFid, type TrendByFid, type TrendPoint } from '../api'
 import { useDashboardStore } from '../stores/dashboard'
 import RollingNumber from '../components/RollingNumber.vue'
@@ -740,6 +741,16 @@ function openUrl(url: string) {
   window.open(url, '_blank', 'noopener')
 }
 
+/** 创建下载任务（热门榜每行「下载」按钮），进度在下载中心查看 */
+async function downloadUrl(url: string) {
+  try {
+    const r = await api.submitDownload([url])
+    ElMessage.success(`已创建下载任务（${r.count} 个链接），可在下载中心查看进度`)
+  } catch (e) {
+    ElMessage.error(`创建下载任务失败: ${(e as Error).message}`)
+  }
+}
+
 function rankClass(i: number): string {
   if (i === 0) return 'rank-badge rank-gold'
   if (i === 1) return 'rank-badge rank-silver'
@@ -1412,6 +1423,9 @@ function renderFidTrendChart() {
               <a class="title-link board-title" :title="item.title" @click.stop.prevent="openUrl(item.url)">
                 {{ item.title }}
               </a>
+              <el-tooltip content="下载" placement="top">
+                <el-button link size="small" type="success" :icon="Download" class="board-download" @click.stop.prevent="downloadUrl(item.url)" />
+              </el-tooltip>
               <span class="board-metric">
                 <el-icon><Star /></el-icon>{{ metricText(item.value) }}
               </span>
@@ -1436,6 +1450,9 @@ function renderFidTrendChart() {
               <a class="title-link board-title" :title="item.title" @click.stop.prevent="openUrl(item.url)">
                 {{ item.title }}
               </a>
+              <el-tooltip content="下载" placement="top">
+                <el-button link size="small" type="success" :icon="Download" class="board-download" @click.stop.prevent="downloadUrl(item.url)" />
+              </el-tooltip>
               <span class="board-metric">
                 <el-icon><ChatDotRound /></el-icon>{{ metricText(item.value) }}
               </span>
@@ -1460,6 +1477,9 @@ function renderFidTrendChart() {
               <a class="title-link board-title" :title="item.title" @click.prevent="openUrl(item.url)">
                 {{ item.title }}
               </a>
+              <el-tooltip content="下载" placement="top">
+                <el-button link size="small" type="success" :icon="Download" class="board-download" @click.stop.prevent="downloadUrl(item.url)" />
+              </el-tooltip>
               <span class="board-metric">
                 <el-icon><Star /></el-icon>{{ metricText(item.likes) }}
               </span>
@@ -1487,6 +1507,9 @@ function renderFidTrendChart() {
               <a class="title-link board-title" :title="item.title" @click.prevent="openUrl(item.url)">
                 {{ item.title }}
               </a>
+              <el-tooltip content="下载" placement="top">
+                <el-button link size="small" type="success" :icon="Download" class="board-download" @click.stop.prevent="downloadUrl(item.url)" />
+              </el-tooltip>
               <span class="board-metric">
                 <el-icon><Star /></el-icon>{{ metricText(item.likes) }}
               </span>

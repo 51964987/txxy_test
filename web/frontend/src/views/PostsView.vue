@@ -3,7 +3,7 @@ import { onMounted, reactive, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { CopyDocument, Download, Search, View } from '@element-plus/icons-vue'
-import { api, exportCsvUrl, isAborted, type FidMeta, type PostsPage } from '../api'
+import { api, exportCsvUrl, isAborted, type FidMeta, type Post, type PostsPage } from '../api'
 import { formatRelativeTime } from '../utils/time'
 
 const route = useRoute()
@@ -12,6 +12,11 @@ const fidMeta = ref<FidMeta[]>([])
 const pageData = ref<PostsPage | null>(null)
 const loading = ref(false)
 const exporting = ref(false)
+
+/** 表格多选的行（批量下载用） */
+const selectedRows = ref<Post[]>([])
+/** 提交下载任务中：防连点重复创建任务 */
+const submitting = ref(false)
 
 const filters = reactive({
   fid: [] as string[],
@@ -115,6 +120,33 @@ function copyUrl(url: string) {
     .catch(() => ElMessage.error('复制失败'))
 }
 
+/** 表格多选变化回调（模板中不直接赋值 ref，避免 ts-plugin 类型收窄误报） */
+function onSelectionChange(rows: Post[]) {
+  selectedRows.value = rows
+}
+
+/** 提交下载任务（单选/批量共用）：创建成功仅提示，进度在下载中心查看 */
+async function submitDownload(urls: string[]) {
+  if (!urls.length) {
+    ElMessage.warning('请先选择要下载的链接')
+    return
+  }
+  submitting.value = true
+  try {
+    const r = await api.submitDownload(urls)
+    ElMessage.success(`已创建下载任务（${r.count} 个链接），可在下载中心查看进度`)
+  } catch (e) {
+    ElMessage.error(`创建下载任务失败: ${(e as Error).message}`)
+  } finally {
+    submitting.value = false
+  }
+}
+
+/** 批量下载：提交当前勾选行的 URL */
+function downloadSelected() {
+  submitDownload(selectedRows.value.map((row) => row.url))
+}
+
 onMounted(() => {
   const qfid = route.query.fid
   if (typeof qfid === 'string' && qfid) {
@@ -210,6 +242,15 @@ onMounted(() => {
             <el-option label="点赞数倒序" value="likes_desc" />
             <el-option label="回复数倒序" value="replies_desc" />
           </el-select>
+          <el-button
+            type="success"
+            :icon="Download"
+            :disabled="!selectedRows.length"
+            :loading="submitting"
+            @click="downloadSelected"
+          >
+            批量下载{{ selectedRows.length ? `（${selectedRows.length}）` : '' }}
+          </el-button>
           <el-button type="primary" :loading="exporting" @click="doExport">
             <el-icon style="margin-right: 4px"><Download /></el-icon>
             导出 CSV
@@ -223,41 +264,48 @@ onMounted(() => {
         size="default"
         empty-text="暂无数据"
         style="margin-top: 12px; width: 100%"
+        @selection-change="onSelectionChange"
       >
-        <el-table-column prop="title" label="标题" min-width="420" show-overflow-tooltip>
+        <el-table-column type="selection" width="45" />
+        <el-table-column prop="title" label="标题" min-width="280" show-overflow-tooltip>
           <template #default="{ row }">
             <a class="title-link" @click.prevent="openPost(row.url)">{{ row.title }}</a>
           </template>
         </el-table-column>
-        <el-table-column prop="fid" label="版块" min-width="80">
+        <el-table-column prop="fid" label="版块" min-width="70">
           <template #default="{ row }">
             <el-tag size="small" type="info">{{ row.fid }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="likes" label="点赞" min-width="70" align="center">
+        <el-table-column prop="likes" label="点赞" min-width="64" align="center">
           <template #default="{ row }">{{ row.likes || '-' }}</template>
         </el-table-column>
-        <el-table-column prop="author" label="作者" min-width="120" show-overflow-tooltip>
+        <el-table-column prop="author" label="作者" min-width="90" show-overflow-tooltip>
           <template #default="{ row }">{{ row.author || '-' }}</template>
         </el-table-column>
-        <el-table-column prop="replies" label="回复" min-width="70" align="center">
+        <el-table-column prop="replies" label="回复" min-width="64" align="center">
           <template #default="{ row }">{{ row.replies || '-' }}</template>
         </el-table-column>
-        <el-table-column label="抓取时间" width="130">
+        <el-table-column label="抓取时间" width="110">
           <template #default="{ row }">
             <el-tooltip :content="row.created_at || '-'" placement="top">
               <span class="text-muted">{{ formatRelativeTime(row.created_at) }}</span>
             </el-tooltip>
           </template>
         </el-table-column>
-        <el-table-column label="操作" min-width="90" align="center">
+        <el-table-column label="操作" width="132" align="center" class-name="op-col">
           <template #default="{ row }">
-            <el-tooltip content="打开" placement="top">
-              <el-button link type="primary" :icon="View" @click="openPost(row.url)" />
-            </el-tooltip>
-            <el-tooltip content="复制链接" placement="top">
-              <el-button link :icon="CopyDocument" @click="copyUrl(row.url)" />
-            </el-tooltip>
+            <div class="op-btns">
+              <el-tooltip content="打开" placement="top">
+                <el-button link type="primary" :icon="View" @click="openPost(row.url)" />
+              </el-tooltip>
+              <el-tooltip content="复制链接" placement="top">
+                <el-button link :icon="CopyDocument" @click="copyUrl(row.url)" />
+              </el-tooltip>
+              <el-tooltip content="下载" placement="top">
+                <el-button link type="success" :icon="Download" @click="submitDownload([row.url])" />
+              </el-tooltip>
+            </div>
           </template>
         </el-table-column>
       </el-table>
@@ -324,5 +372,16 @@ onMounted(() => {
   margin-top: 14px;
   display: flex;
   justify-content: flex-end;
+}
+
+/* 操作列：三个图标按钮单行不换行，消除相邻按钮默认 12px 间距 */
+.op-btns {
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
+}
+
+.op-btns :deep(.el-button + .el-button) {
+  margin-left: 0;
 }
 </style>

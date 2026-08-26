@@ -8,6 +8,10 @@
   TXXY_WEB_HOST   监听地址（默认 127.0.0.1，局域网访问设 0.0.0.0）
   TXXY_WEB_PORT   监听端口（默认 8080）
   TXXY_ENABLE_AUTO_REFRESH  是否启用数据总览自动刷新（默认 0/关闭，设为 1 开启）
+  以下为下载中心（URL 批量下载）配置，均可通过环境变量覆盖：
+  TXXY_DOWNLOAD_CONCURRENCY  单任务内并行下载的 URL 数（默认 2）
+  TXXY_DOWNLOAD_MAX_BATCH    单次批量提交的 URL 数量上限（默认 50）
+  TXXY_DOWNLOAD_TASKS_FILE   下载任务历史持久化文件（默认 outputs/download_tasks.json）
 """
 import os
 from pathlib import Path
@@ -25,6 +29,16 @@ LOCAL_PROXY_PREFIX = "http://127.0.0.1:1024"
 
 HOST = os.environ.get("TXXY_WEB_HOST", "127.0.0.1")
 PORT = int(os.environ.get("TXXY_WEB_PORT", "8088"))
+
+# ---------------- 下载中心（URL 批量下载） ----------------
+# 单任务内并行下载的 URL 数：并发过高易触发源站限流/封禁，默认 2 保守取值。
+DOWNLOAD_CONCURRENCY = int(os.environ.get("TXXY_DOWNLOAD_CONCURRENCY", "2"))
+# 单次批量提交的 URL 数量上限：防止误操作一次性提交过量下载请求。
+DOWNLOAD_MAX_BATCH = int(os.environ.get("TXXY_DOWNLOAD_MAX_BATCH", "50"))
+# 下载任务历史持久化文件：服务重启后任务列表/状态不丢失。
+DOWNLOAD_TASKS_FILE = Path(
+    os.environ.get("TXXY_DOWNLOAD_TASKS_FILE", str(BASE_DIR / "outputs" / "download_tasks.json"))
+)
 
 # 数据总览【自动刷新】总开关：默认开启（Header 显示自动刷新开关并启动轮询，
 # 抓取过程中 KPI 准实时更新）。如需关闭可设环境变量 TXXY_ENABLE_AUTO_REFRESH=0。

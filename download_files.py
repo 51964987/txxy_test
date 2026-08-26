@@ -26,6 +26,7 @@ import os
 import sys
 import time
 import traceback
+from pathlib import Path
 from urllib.parse import urlparse
 
 import file_logger
@@ -58,8 +59,11 @@ from extract_magnets import extract_magnet_links, save_magnets_txt
 from extract_clouds import extract_cloud_links, save_clouds_txt
 
 # ============ 配置区域 ============
-# 图片保存根目录（页面标题作为其下子目录名）
-DOWNLOAD_ROOT = "downloads"
+# 图片保存根目录（页面标题作为其下子目录名）。
+# 固定为脚本所在目录（项目根）下的 downloads/，并可用环境变量 DOWNLOADS_DIR 覆盖
+# （与 web/config.py 的 DOWNLOADS_DIR 同源）：保证 CLI 与 Web 页面下载两个入口输出目录
+# 恒为 项目根/downloads，与进程 cwd（启动目录）无关，避免从 web/ 目录启动时误写到 web/downloads。
+DOWNLOAD_ROOT = os.environ.get("DOWNLOADS_DIR", str(Path(__file__).resolve().parent / "downloads"))
 
 # 请求头，模拟浏览器（用于抓取 HTML 页面）
 HEADERS = {
@@ -427,6 +431,31 @@ def _first_media_dir(first: str) -> tuple[str | None, bool]:
     if not is_media_direct_url(first):
         return None, False
     return os.path.join(DOWNLOAD_ROOT, os.path.splitext(_media_filename(first))[0]), _is_url(first)
+
+
+def process_one(url: str) -> dict[str, int]:
+    """处理单个输入 URL，返回下载统计（供 CLI 汇总与 Web 下载任务共用）。
+
+    分发逻辑与 main() 循环内单个 URL 完全一致：
+    - rmdown 中转 / .torrent 直链 → download_torrent（目录用种子自身标题）；
+    - 图片/视频直链 → 独立目录 downloads/<文件名不含扩展名>/（Web 场景每个 URL 独立，
+      不套用 CLI 多媒体直链共享目录的语义）；
+    - 其余按 HTML 页面解析（process_page）。
+    返回的 stats 键中"跳过"与"失败"为附加明细，不计入成功项（与 main() 汇总口径一致）。
+    """
+    url = url.strip().rstrip(".,;:!?)]}。，；：！？、")
+    if RMDOWN_LINK_RE.search(url) or TORRENT_LINK_RE.fullmatch(url):
+        ok = bool(download_torrent(url, DOWNLOAD_ROOT))
+        return {"种子": 1} if ok else {}
+    if is_media_direct_url(url):
+        media_dir = os.path.join(DOWNLOAD_ROOT, os.path.splitext(_media_filename(url))[0])
+        status = download_media_direct(url, media_dir)
+        if status == "ok":
+            return {"媒体": 1}
+        if status == "skip":
+            return {"媒体": 1, "跳过": 1}
+        return {}
+    return process_page(url)
 
 
 def main() -> None:
