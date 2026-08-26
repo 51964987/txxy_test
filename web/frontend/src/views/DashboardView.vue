@@ -900,7 +900,7 @@ function stopPieCarousel() {
   pieChart.value?.dispatchAction({ type: 'downplay', seriesIndex: 0 })
 }
 
-// ---- 每日新增趋势：tooltip 自动轮播（7 → 30 → 60 → 90 天循环）----
+// ---- 每日新增趋势：tooltip 自动轮播（7 → 14 → 21 → 28 天循环）----
 // 模拟鼠标悬停效果，沿时间轴从右往左（最新日期 → 最早日期）依次展示每个数据点的 tooltip；
 // 当前维度展示完成后自动切换下一维度，循环播放；悬停暂停、移出恢复；
 // 维度切换采用「保留旧图表 → 加载新数据 → ECharts 平滑过渡动画」的无缝衔接，无闪烁无跳变。
@@ -994,8 +994,8 @@ function beginTrendTipLoop(prevLen?: number) {
   }, TREND_TIP_INTERVAL)
 }
 
-/** 当前维度展示完成：间隔后切换到下一数据范围（7 → 30 → 60 → 90 → 7）；
- *  切换到 30/60/90 天时轮播起点与上一阶段终点衔接（时间轴连续向左推进），
+/** 当前维度展示完成：间隔后切换到下一数据范围（7 → 14 → 21 → 28 → 7）；
+ *  切换到 14/21/28 天时轮播起点与上一阶段终点衔接（时间轴连续向左推进），
  *  循环回 7 天时重新从最新日期（最右侧）开始 */
 function advanceTrendStage() {
   if (trendTipTimer) {
