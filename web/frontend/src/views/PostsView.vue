@@ -17,12 +17,18 @@ const filters = reactive({
   fid: [] as string[],
   dateRange: null as [string, string] | null,
   q: '',
+  author: '',
 })
 const page = ref(1)
 const pageSize = ref(50)
 const sort = ref('date_desc')
 
 const queryText = ref('')
+
+// 下钻支持的合法 sort 选项（与模板 el-select 的 value 严格一致）
+const SORT_OPTIONS = new Set([
+  'date_desc', 'date_asc', 'created_at_desc', 'created_at_asc', 'likes_desc', 'replies_desc',
+])
 
 async function loadFidMeta() {
   try {
@@ -40,6 +46,7 @@ async function load() {
       date_from: filters.dateRange?.[0],
       date_to: filters.dateRange?.[1],
       q: queryText.value || undefined,
+      author: filters.author || undefined,
       page: page.value,
       page_size: pageSize.value,
       sort: sort.value,
@@ -62,6 +69,7 @@ function doReset() {
   filters.fid = []
   filters.dateRange = null
   filters.q = ''
+  filters.author = ''
   queryText.value = ''
   page.value = 1
   sort.value = 'date_desc'
@@ -91,6 +99,7 @@ function doExport() {
       date_from: filters.dateRange?.[0],
       date_to: filters.dateRange?.[1],
       q: queryText.value || undefined,
+      author: filters.author || undefined,
       sort: sort.value,
     })
     window.open(url, '_blank', 'noopener')
@@ -115,6 +124,17 @@ onMounted(() => {
   const qDateTo = route.query.date_to
   if (typeof qDateFrom === 'string' && typeof qDateTo === 'string' && qDateFrom && qDateTo) {
     filters.dateRange = [qDateFrom, qDateTo]
+  }
+  const qsort = route.query.sort
+  if (typeof qsort === 'string' && SORT_OPTIONS.has(qsort)) {
+    sort.value = qsort
+  }
+  const qauthor = route.query.author
+  if (typeof qauthor === 'string' && qauthor) {
+    filters.author = qauthor
+    // 作者数据适配到关键词输入框：回填作者名，使关键词（标题/作者）搜索立即生效
+    filters.q = qauthor
+    queryText.value = qauthor
   }
   loadFidMeta()
   load()
@@ -161,7 +181,7 @@ onMounted(() => {
           <span class="filter-label">关键词</span>
           <el-input
             v-model="filters.q"
-            placeholder="搜索标题（模糊匹配）"
+            placeholder="搜索标题/作者（模糊匹配）"
             clearable
             @keyup.enter="doSearch"
             @clear="doSearch"

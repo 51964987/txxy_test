@@ -55,6 +55,52 @@ class BoardsResp(BaseModel):
     top_replies: list[BoardTopResp]
 
 
+class TodayTopItemResp(BaseModel):
+    """最新数据日期内的最热帖（点赞 + 回复综合）。"""
+    fid: str | None = None
+    name: str
+    title: str
+    url: str
+    likes: int
+    replies: int
+    date: str
+
+
+class TodayTopResp(BaseModel):
+    date: str
+    items: list[TodayTopItemResp]
+
+
+class TodayFidsItemResp(BaseModel):
+    """最新数据日期内各版块新增帖数（含前一数据日做环比）。"""
+    fid: str | None = None
+    name: str
+    count: int
+    yesterday_count: int
+
+
+class TodayFidsResp(BaseModel):
+    date: str
+    items: list[TodayFidsItemResp]
+
+
+class TopAuthorResp(BaseModel):
+    """活跃作者（按累计发帖量排序）。"""
+    author: str
+    total: int
+    today: int
+    week: int
+
+
+class TopFidResp(BaseModel):
+    """活跃版块（按累计发帖量排序，与活跃作者榜同构）。"""
+    fid: str | None = None
+    name: str
+    total: int
+    today: int
+    week: int
+
+
 class TrendPointResp(BaseModel):
     date: str
     count: int
@@ -122,6 +168,7 @@ def _build_filters(
     date_from: str | None,
     date_to: str | None,
     q: str | None,
+    author: str | None = None,
 ) -> tuple[str, list[str]]:
     where: list[str] = []
     params: list[str] = []
@@ -129,6 +176,9 @@ def _build_filters(
     if fids:
         where.append(f"fid IN ({','.join('?' * len(fids))})")
         params.extend(fids)
+    if author:
+        where.append("author = ?")
+        params.append(author)
     if date_from:
         where.append("date >= ?")
         params.append(date_from)
@@ -136,9 +186,11 @@ def _build_filters(
         where.append("date <= ?")
         params.append(date_to)
     if q:
+        # 关键词同时适配「标题」与「作者」两个维度（模糊匹配）
         esc = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-        where.append("title LIKE ? ESCAPE '\\'")
-        params.append(f"%{esc}%")
+        where.append("(title LIKE ? ESCAPE '\\' OR author LIKE ? ESCAPE '\\')")
+        like = f"%{esc}%"
+        params.extend([like, like])
     return (" AND ".join(where) if where else "1=1"), params
 
 
@@ -252,6 +304,185 @@ def stats_boards() -> BoardsResp:
         return {"top_likes": _board_top("likes"), "top_replies": _board_top("replies")}
 
     return db.cached("boards", _calc)
+
+
+@router.get("/stats/today_top")
+def stats_today_top(limit: Annotated[int, Query(ge=1, le=50)] = 10) -> TodayTopResp:
+    """最新数据日期内的最热帖（按 点赞+回复 综合降序），热门榜「今日最热」栏用。"""
+
+    def _calc():
+        conn = db.open_conn()
+        try:
+            latest = conn.execute("SELECT MAX(date) AS d FROM posts").fetchone()["d"]
+            if not latest:
+                return {"date": "", "items": []}
+            # 关闭连接前先转 dict，避免 sqlite3.Row 在连接关闭后不可访问
+            rows = [
+                dict(r)
+                for r in conn.execute(
+                    "SELECT fid, title, url, likes, replies, date FROM posts" +
+                    " WHERE date = ? ORDER BY" +
+                    " (CAST(likes AS INTEGER) + CAST(replies AS INTEGER)) DESC, created_at DESC LIMIT ?",
+                    (latest, limit),
+                )
+            ]
+        finally:
+            conn.close()
+        return {
+            "date": latest,
+            "items": [
+                {
+                    "fid": r["fid"],
+                    "name": config.fid_name(r["fid"]),
+                    "title": r["title"],
+                    "url": db.normalize_url(r["url"]),
+                    "likes": _as_int(r["likes"]),
+                    "replies": _as_int(r["replies"]),
+                    "date": r["date"],
+                }
+                for r in rows
+            ],
+        }
+
+    return db.cached("today_top_v1", _calc)
+
+
+@router.get("/stats/today_fids")
+def stats_today_fids(limit: Annotated[int, Query(ge=1, le=30)] = 8) -> TodayFidsResp:
+    """最新数据日期内各版块新增帖数 Top（热门榜「今日新增版块」栏用）。"""
+
+    def _calc():
+        conn = db.open_conn()
+        try:
+            latest = conn.execute("SELECT MAX(date) AS d FROM posts").fetchone()["d"]
+            if not latest:
+                return {"date": "", "items": []}
+            prev = (date_cls.fromisoformat(latest) - timedelta(days=1)).isoformat()
+            # 关闭连接前先转 dict，避免 sqlite3.Row 在连接关闭后不可访问
+            rows = [
+                dict(r)
+                for r in conn.execute(
+                    "SELECT p.fid, COUNT(*) AS c, COALESCE(y.c, 0) AS yc FROM posts p" +
+                    " LEFT JOIN (SELECT fid, COUNT(*) AS c FROM posts WHERE date = ? GROUP BY fid) y" +
+                    " ON y.fid = p.fid WHERE p.date = ? GROUP BY p.fid ORDER BY c DESC, p.fid LIMIT ?",
+                    (prev, latest, limit),
+                )
+            ]
+        finally:
+            conn.close()
+        return {
+            "date": latest,
+            "items": [
+                {
+                    "fid": r["fid"],
+                    "name": config.fid_name(r["fid"]),
+                    "count": r["c"],
+                    "yesterday_count": r["yc"],
+                }
+                for r in rows
+            ],
+        }
+
+    return db.cached("today_fids_v1", _calc)
+
+
+@router.get("/stats/top_authors")
+def stats_top_authors(limit: Annotated[int, Query(ge=1, le=30)] = 10) -> list[TopAuthorResp]:
+    """活跃作者榜：按累计发帖量降序，附今日 / 近 7 日发帖数。"""
+    today = date_cls.today().isoformat()
+    week_ago = (date_cls.today() - timedelta(days=6)).isoformat()
+
+    def _calc():
+        rows = db.query(
+            "SELECT author, COUNT(*) AS total," +
+            " SUM(CASE WHEN date = ? THEN 1 ELSE 0 END) AS today_c," +
+            " SUM(CASE WHEN date >= ? THEN 1 ELSE 0 END) AS week_c" +
+            " FROM posts WHERE author IS NOT NULL AND author <> ''" +
+            " GROUP BY author ORDER BY total DESC, author LIMIT ?",
+            (today, week_ago, limit),
+        )
+        return [
+            {
+                "author": r["author"],
+                "total": r["total"],
+                "today": r["today_c"],
+                "week": r["week_c"],
+            }
+            for r in rows
+        ]
+
+    return db.cached("top_authors_v1", _calc)
+
+
+@router.get("/stats/top_fids")
+def stats_top_fids(limit: Annotated[int, Query(ge=1, le=30)] = 10) -> list[TopFidResp]:
+    """活跃版块榜：按累计发帖量降序，附今日 / 近 7 日发帖数（与活跃作者榜同构）。"""
+    today = date_cls.today().isoformat()
+    week_ago = (date_cls.today() - timedelta(days=6)).isoformat()
+
+    def _calc():
+        rows = db.query(
+            "SELECT fid, COUNT(*) AS total," +
+            " SUM(CASE WHEN date = ? THEN 1 ELSE 0 END) AS today_c," +
+            " SUM(CASE WHEN date >= ? THEN 1 ELSE 0 END) AS week_c" +
+            " FROM posts WHERE fid IS NOT NULL" +
+            " GROUP BY fid ORDER BY total DESC, fid LIMIT ?",
+            (today, week_ago, limit),
+        )
+        return [
+            {
+                "fid": r["fid"],
+                "name": config.fid_name(r["fid"]),
+                "total": r["total"],
+                "today": r["today_c"],
+                "week": r["week_c"],
+            }
+            for r in rows
+        ]
+
+    return db.cached("top_fids_v1", _calc)
+
+
+@router.get("/stats/month_top")
+def stats_month_top(limit: Annotated[int, Query(ge=1, le=50)] = 10) -> TodayTopResp:
+    """本月最热帖（最新数据月份内按 点赞+回复 综合降序），热门榜「本月最热」栏用。"""
+
+    def _calc():
+        conn = db.open_conn()
+        try:
+            latest = conn.execute("SELECT MAX(date) AS d FROM posts").fetchone()["d"]
+            if not latest:
+                return {"date": "", "items": []}
+            month = latest[:7]  # 'YYYY-MM'
+            # 关闭连接前先转 dict，避免 sqlite3.Row 在连接关闭后不可访问
+            rows = [
+                dict(r)
+                for r in conn.execute(
+                    "SELECT fid, title, url, likes, replies, date FROM posts" +
+                    " WHERE substr(date, 1, 7) = ? ORDER BY" +
+                    " (CAST(likes AS INTEGER) + CAST(replies AS INTEGER)) DESC, created_at DESC LIMIT ?",
+                    (month, limit),
+                )
+            ]
+        finally:
+            conn.close()
+        return {
+            "date": month,
+            "items": [
+                {
+                    "fid": r["fid"],
+                    "name": config.fid_name(r["fid"]),
+                    "title": r["title"],
+                    "url": db.normalize_url(r["url"]),
+                    "likes": _as_int(r["likes"]),
+                    "replies": _as_int(r["replies"]),
+                    "date": r["date"],
+                }
+                for r in rows
+            ],
+        }
+
+    return db.cached("month_top_v1", _calc)
 
 
 @router.get("/stats/trend")
@@ -393,12 +624,13 @@ def posts_list(
     date_from: str | None = None,
     date_to: str | None = None,
     q: str | None = None,
+    author: str | None = None,
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=200)] = 50,
     sort: Annotated[str, Query()] = "date_desc",
 ) -> dict[str, Any]:
     order = _SORTS.get(sort, _SORTS["date_desc"])
-    clause, params = _build_filters(fid, date_from, date_to, q)
+    clause, params = _build_filters(fid, date_from, date_to, q, author)
     offset = (page - 1) * page_size
     # COUNT 与列表在单连接内完成，省一次连接开/关
     conn = db.open_conn()

@@ -151,6 +151,36 @@ export interface Boards {
   top_replies: BoardTop[]
 }
 
+export interface TodayTopItem {
+  fid: string | null
+  name: string
+  title: string
+  url: string
+  likes: number
+  replies: number
+  date: string
+}
+
+export interface TodayTop {
+  date: string
+  items: TodayTopItem[]
+}
+
+export interface TopAuthor {
+  author: string
+  total: number
+  today: number
+  week: number
+}
+
+export interface TopFid {
+  fid: string | null
+  name: string
+  total: number
+  today: number
+  week: number
+}
+
 export interface TrendPoint {
   date: string
   count: number
@@ -249,6 +279,10 @@ export const api = {
   config: () => get<AppConfig>('/config'),
   overview: () => get<Overview>('/stats/overview'),
   boards: () => get<Boards>('/stats/boards'),
+  todayTop: (limit = 10) => get<TodayTop>('/stats/today_top', { limit }),
+  topAuthors: (limit = 10) => get<TopAuthor[]>('/stats/top_authors', { limit }),
+  topFids: (limit = 10) => get<TopFid[]>('/stats/top_fids', { limit }),
+  monthTop: (limit = 10) => get<TodayTop>('/stats/month_top', { limit }),
   trend: (days: number) => get<TrendPoint[]>('/stats/trend', { days }),
   trendByFid: (days: number, top = 8) =>
     get<TrendByFid>('/stats/trend_by_fid', { days, top }),
@@ -260,6 +294,7 @@ export const api = {
     date_from?: string
     date_to?: string
     q?: string
+    author?: string
     page?: number
     page_size?: number
     sort?: string
