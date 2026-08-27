@@ -13,7 +13,7 @@ import {
 import type { ECharts } from 'echarts/core'
 import { ElMessage } from 'element-plus'
 import { Download } from '@element-plus/icons-vue'
-import { api, isAborted, type Boards, type FidDistItem, type Overview, type TodayTop, type TopAuthor, type TopFid, type TrendByFid, type TrendPoint } from '../api'
+import { api, isAborted, type Boards, type FidDistItem, type Overview, type RunSummary, type TodayTop, type TopAuthor, type TopFid, type TrendByFid, type TrendPoint } from '../api'
 import { useDashboardStore } from '../stores/dashboard'
 import { formatShortTime } from '../utils/time'
 import RollingNumber from '../components/RollingNumber.vue'
@@ -55,6 +55,8 @@ const trendChart = shallowRef<ECharts | null>(null)
 // ===== 活跃作者 / 活跃版块 榜（随首屏加载，横向条形图）=====
 const topAuthors = ref<TopAuthor[]>([])
 const topFids = ref<TopFid[]>([])
+// B1 抓取中徽标：最新一条 running 运行记录（null 表示当前无批次在跑）
+const runningBatch = ref<RunSummary | null>(null)
 const authorChartRef = shallowRef<HTMLDivElement | null>(null)
 const fidChartRef = shallowRef<HTMLDivElement | null>(null)
 const authorChart = shallowRef<ECharts | null>(null)
@@ -181,6 +183,13 @@ async function loadP0(initial = false) {
     topAuthors.value = authors
     topFids.value = fids
     trendCache.set(trendDays.value, t)
+    // B1 抓取中徽标（B1）：失败不影响总览主流程，静默置空
+    try {
+      const runs = await api.runs()
+      runningBatch.value = runs.dates.find((r) => r.status === 'running') ?? null
+    } catch {
+      runningBatch.value = null
+    }
     store.setUpdatedAt(o.latest_run_at ?? null)
     await nextTick()
     renderTrendChart()
@@ -197,7 +206,7 @@ async function loadP0(initial = false) {
   }
 }
 
-// ===== P1：懒加载热门榜（点赞/回复/今日最热/本月最热）=====
+// ===== P1：懒加载热门榜（点赞/回复/最新最热/本月最热）=====
 async function loadBoards() {
   if (boards.value || loadingBoards.value) return
   loadingBoards.value = true
@@ -292,7 +301,7 @@ function renderTrendChart() {
           const trendIcon = trendUp ? '▲' : '▼'
           let html = `<div style="font-weight:600;font-size:13px;color:#a8c5ff;margin-bottom:6px">${p.axisValue}</div>`
           html += `<div style="display:flex;align-items:baseline;gap:6px;margin-bottom:4px">`
-          html += `<span style="color:#8b95a7;font-size:12px">新增</span>`
+          html += `<span style="color:#8b95a7;font-size:12px">发布</span>`
           html += `<span style="font-size:20px;font-weight:700;color:#fff;font-variant-numeric:tabular-nums">${cur.toLocaleString()}</span>`
           html += `<span style="color:#8b95a7;font-size:12px">条</span>`
           html += `</div>`
@@ -345,7 +354,7 @@ function renderTrendChart() {
         : [],
       series: [
         {
-          name: '新增帖子',
+          name: '发布帖子',
           type: 'line',
           smooth: true,
           showSymbol: false,
@@ -773,7 +782,7 @@ function metricText(v: unknown): string {
 // 动态效果模块（数据大屏风格，纯前端动画，不触发数据刷新）
 // ============================================================
 
-// ---- 每日新增趋势：tooltip 自动轮播（7 → 14 → 21 → 28 天循环）----
+// ---- 每日发布趋势：tooltip 自动轮播（7 → 14 → 21 → 28 天循环）----
 // 模拟鼠标悬停效果，沿时间轴从右往左（最新日期 → 最早日期）依次展示每个数据点的 tooltip；
 // 当前维度展示完成后自动切换下一维度，循环播放；悬停暂停、移出恢复；
 // 维度切换采用「保留旧图表 → 加载新数据 → ECharts 平滑过渡动画」的无缝衔接，无闪烁无跳变。
@@ -1214,10 +1223,10 @@ function renderFidTrendChart() {
             <el-icon><Collection /></el-icon>
           </div>
           <div class="stat-body">
-            <div class="stat-label">累计帖子</div>
+            <div class="stat-label">累计收录</div>
             <div class="stat-value"><RollingNumber :value="overview.total" /></div>
             <div class="stat-sub">
-              <span class="sub-up">近7日 +{{ overview.week_new.toLocaleString() }}</span>
+              <span class="sub-up">近7日发布 +{{ overview.week_new.toLocaleString() }}</span>
               <span class="sub-neutral">覆盖 {{ fidDist.length }} 个版块</span>
             </div>
           </div>
@@ -1227,7 +1236,7 @@ function renderFidTrendChart() {
             <el-icon><TrendCharts /></el-icon>
           </div>
           <div class="stat-body">
-            <div class="stat-label">今日新增</div>
+            <div class="stat-label">今日发布</div>
             <div class="stat-value"><RollingNumber :value="overview.today" /></div>
             <div v-if="kpiSub" class="stat-sub">
               <span :class="kpiSub.todayDiff.cls">{{ kpiSub.todayDiff.text }}</span>
@@ -1240,10 +1249,10 @@ function renderFidTrendChart() {
             <el-icon><User /></el-icon>
           </div>
           <div class="stat-body">
-            <div class="stat-label">累计作者</div>
+            <div class="stat-label">发帖作者</div>
             <div class="stat-value"><RollingNumber :value="overview.total_users" /></div>
             <div v-if="kpiSub" class="stat-sub">
-              <span class="sub-up">今日发帖 {{ overview.active_users.toLocaleString() }}</span>
+              <span class="sub-up">今日更新 {{ overview.active_users.toLocaleString() }} 人</span>
               <span class="sub-neutral">活跃率 {{ kpiSub.activeShare ?? 0 }}%</span>
             </div>
           </div>
@@ -1253,10 +1262,13 @@ function renderFidTrendChart() {
             <el-icon><Clock /></el-icon>
           </div>
           <div class="stat-body">
-            <div class="stat-label">数据新鲜度</div>
+            <div class="stat-label">最近入库</div>
             <div class="stat-value">{{ kpiSub?.latestDate ? kpiSub.latestDate.slice(5) : '—' }}</div>
             <div v-if="kpiSub" class="stat-sub">
-              <span :class="kpiSub.gap.cls">{{ kpiSub.gap.text }}</span>
+              <span v-if="runningBatch" class="running-badge">
+                <span class="running-dot"></span>抓取中 {{ runningBatch.progress ?? 0 }}%
+              </span>
+              <span v-else :class="kpiSub.gap.cls">{{ kpiSub.gap.text }}</span>
               <span class="sub-neutral">更新于 {{ kpiSub.updatedAt ?? '--:--' }}</span>
             </div>
           </div>
@@ -1269,7 +1281,7 @@ function renderFidTrendChart() {
       </template>
     </div>
 
-    <!-- 每日新增趋势：总版块 + 各版块 同行各占 1/2 -->
+    <!-- 每日发布趋势：总版块 + 各版块 同行各占 1/2 -->
     <div class="trend-row">
     <div class="page-card chart-card trend-half">
       <div class="chart-head">
@@ -1331,7 +1343,7 @@ function renderFidTrendChart() {
       </div>
     </div>
 
-    <!-- 每日新增趋势（各版块）：同行右侧 1/2 宽，懒加载 -->
+    <!-- 每日发布趋势（各版块）：同行右侧 1/2 宽，懒加载 -->
     <div ref="fidTrendBlockRef" class="page-card chart-card trend-half">
       <div class="chart-head">
         <div class="chart-head-left">
@@ -1466,7 +1478,7 @@ function renderFidTrendChart() {
         </div>
         <div class="page-card chart-card">
           <div class="chart-head" style="margin-bottom: 8px">
-            <span class="chart-title">今日最热</span>
+            <span class="chart-title">最新最热</span>
             <span v-if="todayTop?.date" class="board-date">{{ todayTop.date.slice(5) }}</span>
           </div>
           <div v-if="loadingBoards" class="board-list">
@@ -1531,7 +1543,7 @@ function renderFidTrendChart() {
 </template>
 
 <style scoped>
-/* 每日新增趋势 + 版块分布：左右 1:1 等宽，与热门榜保持一致间距 */
+/* 每日发布趋势 + 版块分布：左右 1:1 等宽，与热门榜保持一致间距 */
 .chart-row {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -1545,7 +1557,7 @@ function renderFidTrendChart() {
   }
 }
 
-/* 每日新增趋势：总版块 + 各版块 同行各占 1/2 */
+/* 每日发布趋势：总版块 + 各版块 同行各占 1/2 */
 .trend-row {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -1779,11 +1791,46 @@ function renderFidTrendChart() {
   min-width: 0;
 }
 
-/* 卡片头部右侧日期角标（今日最热 / 本月最热） */
+/* 卡片头部右侧日期角标（最新最热 / 本月最热） */
 .board-date {
   flex-shrink: 0;
   font-size: 12px;
   color: #909399;
+}
+
+/* B1 抓取中徽标：绿色脉冲点 + 实时进度 */
+.running-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: #10b981;
+  font-weight: 600;
+}
+
+.running-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #10b981;
+  animation: running-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes running-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.4;
+    transform: scale(1.6);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .running-dot {
+    animation: none;
+  }
 }
 
 /* 卡片头部说明文字（活跃作者榜） */

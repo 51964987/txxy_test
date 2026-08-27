@@ -119,20 +119,49 @@ def _db_run_row(r: Any, progress: int | None = None) -> dict[str, Any]:
     }
 
 
+# 运行中判活阈值（秒）：超过该时长无进度心跳（run_days.updated_at 不再刷新）的
+# running 记录判定为进程消亡残留。写侧 update_section 每次上报进度都会同步刷新
+# updated_at（心跳），故阈值基于最后心跳；scraper 单页最长间隔约 10s + 重试退避，
+# 正常批次实测 27-28 分钟内持续有心跳，30 分钟余量充足。
+RUNNING_STALE_SECONDS = 1800
+
+
+def _running_stale(r: dict[str, Any]) -> bool:
+    """running 记录是否已僵死：updated_at（缺省回退 created_at）距今超过阈值。"""
+    stamp = str(r.get("updated_at") or r.get("created_at") or "")
+    try:
+        delta = (datetime.now() - datetime.fromisoformat(stamp)).total_seconds()
+    except ValueError:
+        return True
+    return delta > RUNNING_STALE_SECONDS
+
+
 def _db_list_runs() -> list[dict[str, Any]]:
     """从 run_days 读取运行记录列表（每次运行一条，按日期倒序、同日按 id 倒序）。
 
     progress 口径：已结束（非 running）为 100；running 由各版块明细实时聚合。
+    孤儿降级：running 且超过 RUNNING_STALE_SECONDS 无心跳的记录判定为进程消亡
+    残留（强杀/崩溃导致 finish_run 未及执行），仅展示口径降级为 error，
+    不写库（Web 只读进程零写入）。
     """
     if not _db_ready():
         return []
     rows = db.query(
-        "SELECT id, run_date, source, status, ok, fail, skip, csv, sqlite, duration, created_at FROM run_days" +
+        "SELECT id, run_date, source, status, ok, fail, skip, csv, sqlite, duration, created_at, updated_at FROM run_days" +
         " ORDER BY run_date DESC, id DESC"
     )
     out: list[dict[str, Any]] = []
     for r in rows:
-        if r["status"] == "running":
+        if r["status"] == "running" and _running_stale(r):
+            # 孤儿降级（仅展示口径）：按 error 终态展示，条数保留实时聚合值
+            r["status"] = "error"
+            row = _db_run_row(r, 100)
+            agg = _run_live_agg(r["id"])
+            row.update(
+                ok=agg["ok"], fail=agg["fail"], skip=agg["skip"],
+                csv=agg["csv"], sqlite=agg["sqlite"],
+            )
+        elif r["status"] == "running":
             row = _db_run_row(r, _run_progress(r["id"]))
             # 运行中：条数与成功/失败/未执行数实时聚合自各版块明细
             agg = _run_live_agg(r["id"])

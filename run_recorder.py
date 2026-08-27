@@ -209,6 +209,13 @@ def start_run(
     conn = _connect()
     run_id = 0
     try:
+        # 启动收编：单机抓取语义下，新批次启动即宣告所有历史 running 记录已死
+        # （进程被外部强杀/崩溃时 finish_run 无法执行，会残留 running 孤儿行）
+        orphans = conn.execute(
+            "UPDATE run_days SET status = 'error' WHERE status = 'running'"
+        ).rowcount
+        if orphans:
+            print(f"[收编] 已将 {orphans} 条残留 running 记录收编为 error", file=sys.stderr)
         cur = conn.execute(
             "INSERT INTO run_days(run_date, source, status, ok, fail, skip, csv, sqlite, duration, created_at, updated_at)"
             + " VALUES (?, ?, 'running', 0, 0, 0, 0, 0, NULL, ?, ?)",
@@ -287,6 +294,12 @@ def update_section(
         _ = conn.execute(
             "UPDATE run_sections SET " + ", ".join(sets) + " WHERE run_id = ? AND fid = ?",
             args,
+        )
+        # 心跳：同步刷新所属运行的 updated_at，供读侧判活
+        # （区分正常长批次与强杀/崩溃残留的 running 孤儿，阈值判据基于最后心跳）
+        _ = conn.execute(
+            "UPDATE run_days SET updated_at = ? WHERE id = ?",
+            (datetime.now().isoformat(timespec="seconds"), run_id),
         )
         conn.commit()
     except Exception as e:  # 进度更新失败不阻塞抓取主流程
