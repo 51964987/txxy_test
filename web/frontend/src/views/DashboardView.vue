@@ -69,8 +69,8 @@ const trendDays = ref(7)
 // 天数切换选项（下拉框，支持预设 + 自定义输入）
 const trendDayOptions = ref([7, 14, 21, 28])
 
-// ===== 各版块每日趋势（多系列折线，懒加载）=====
-// 各版块天数由总版块联动下钻控制，不再单独切换
+// ===== 分版块每日趋势（多系列折线，懒加载）=====
+// 分版块天数由全站趋势联动下钻控制，不再单独切换
 const fidTrend = ref<TrendByFid>({ dates: [], series: [] })
 const fidTrendCache = new Map<number, TrendByFid>()
 const loadingFidTrend = ref(false)
@@ -82,11 +82,11 @@ const fidTrendChart = shallowRef<ECharts | null>(null)
 let fidTrendTipPaused: boolean = false
 let fidTrendObserver: IntersectionObserver | null = null
 let fidTrendTipTimer: number | null = null
-// 联动：各版块图例点击高亮的版块（同步到总趋势卡片配色）
+// 联动：分版块图例点击高亮的版块（同步到总趋势卡片配色）
 const linkedFid = ref<{ name: string; color: string } | null>(null)
-// 各版块名称 -> 颜色 映射（渲染时填充）
+// 分版块名称 -> 颜色 映射（渲染时填充）
 const fidColorByName = ref<Record<string, string>>({})
-// 反向联动：点总趋势某天 -> 各版块同天高亮（垂直标线）
+// 反向联动：点总趋势某天 -> 分版块同天高亮（垂直标线）
 const linkedDay = ref<string | null>(null)
 
 
@@ -242,7 +242,7 @@ function renderTrendChart() {
     lastTrendKey = trendKey
 
     trendChart.value ??= initChart(trendRef.value)
-    // 双向 Tooltip 联动：总版块 ⟷ 各版块（仅注册一次）
+    // 双向 Tooltip 联动：全站趋势 ⟷ 分版块（仅注册一次）
     if (!trendTipSynced) {
       trendTipSynced = true
       trendChart.value.on('showTip', (params: any) => syncTipTo(fidTrendChart.value, params))
@@ -258,13 +258,13 @@ function renderTrendChart() {
         const idx = params.dataIndex
         const point = trend.value[idx]
         if (point) {
-          // 反向联动：点总趋势某天 -> 各版块同天高亮（取消下钻，仅保留联动）
+          // 反向联动：点总趋势某天 -> 分版块同天高亮（取消下钻，仅保留联动）
           linkedDay.value = point.date
           renderFidTrendChart()
         }
       })
     }
-    // 联动配色：当各版块图例聚焦某版块时，总趋势同步换为该版块色
+    // 联动配色：当分版块图例聚焦某版块时，总趋势同步换为该版块色
     const base = linkedFid.value?.color ?? '#2f6fed'
     const data = trend.value.map((t) => t.count)
     const needZoom = trend.value.length > 31
@@ -688,7 +688,7 @@ onMounted(() => {
     loadBoards()
   }
 
-  // 各版块趋势：懒加载（进入视口后再加载，避免首屏一次性拉取过多）
+  // 分版块趋势：懒加载（进入视口后再加载，避免首屏一次性拉取过多）
   if (hasObserver && fidTrendBlockRef.value) {
     fidTrendObserver = new IntersectionObserver(
       (entries) => {
@@ -796,15 +796,15 @@ let trendStartTimer: ReturnType<typeof setTimeout> | null = null
 let trendTipIndex = 0
 let trendTipPaused: boolean = false
 let trendLoading = false
-/** 总版块趋势图 Tooltip 轮播：悬停暂停 / 移出恢复（方法包装，规避 ts-plugin 对 let 变量模板内联赋值的类型收窄误报） */
+/** 全站趋势趋势图 Tooltip 轮播：悬停暂停 / 移出恢复（方法包装，规避 ts-plugin 对 let 变量模板内联赋值的类型收窄误报） */
 function setTrendTipPaused(paused: boolean) {
   trendTipPaused = paused
 }
-/** 各版块趋势图 Tooltip 轮播：悬停暂停 / 移出恢复（同上） */
+/** 分版块趋势图 Tooltip 轮播：悬停暂停 / 移出恢复（同上） */
 function setFidTrendTipPaused(paused: boolean) {
   fidTrendTipPaused = paused
 }
-// 总版块与各版块 Tooltip 联动：仅注册一次
+// 全站趋势与分版块 Tooltip 联动：仅注册一次
 let trendTipSynced = false
 let fidTipSynced = false
 // 防止双向联动时 showTip 事件递归派发
@@ -861,7 +861,7 @@ function beginTrendTipLoop(prevLen?: number) {
     ? Math.max(0, trend.value.length - 1 - prevLen)
     : trend.value.length - 1
   trendTipTimer = setInterval(() => {
-    // 悬停总版块或各版块任一张卡片时，暂停自动轮播；离开后恢复
+    // 悬停全站趋势或分版块任一张卡片时，暂停自动轮播；离开后恢复
     if (trendTipPaused || fidTrendTipPaused) return
     const c = trendChart.value
     if (!c || !trend.value.length) return
@@ -889,7 +889,7 @@ function advanceTrendStage() {
     trendStageTimer = null
     const i = TREND_DAYS_SEQ.indexOf(trendDays.value)
     const nextIdx = (i + 1) % TREND_DAYS_SEQ.length
-    // 自动切换天数：同步联动各版块（复用 onTrendDaysChange 的下钻逻辑）
+    // 自动切换天数：同步联动分版块（复用 onTrendDaysChange 的下钻逻辑）
     trendDays.value = TREND_DAYS_SEQ[nextIdx]
     onTrendDaysChange()
   }, TREND_STAGE_GAP)
@@ -941,13 +941,13 @@ function onTrendDaysChange() {
   }
   trendDays.value = n
   loadTrendOnly()
-  // 各版块由总版块联动下钻：已加载或可见时同步刷新
+  // 分版块由全站趋势联动下钻：已加载或可见时同步刷新
   if (fidTrendVisible.value || fidTrend.value.dates.length) {
     loadFidTrend()
   }
 }
 
-// ===== 各版块每日趋势（多系列折线）=====
+// ===== 分版块每日趋势（多系列折线）=====
 const fidTrendStats = computed(() => {
   const series = fidTrend.value.series
   if (!series.length) return null
@@ -971,7 +971,7 @@ const fidTrendStats = computed(() => {
   }
 })
 
-/** 懒加载：进入视口后首次拉取，之后由总版块联动下钻切换天数走缓存 */
+/** 懒加载：进入视口后首次拉取，之后由全站趋势联动下钻切换天数走缓存 */
 async function loadFidTrend() {
   if (loadingFidTrend.value) return
   const cached = fidTrendCache.get(trendDays.value)
@@ -991,14 +991,14 @@ async function loadFidTrend() {
     renderFidTrendChart()
   } catch (e) {
     if (isAborted(e)) return
-    ElMessage.error(`加载各版块趋势失败: ${(e as Error).message}`)
+    ElMessage.error(`加载分版块趋势失败: ${(e as Error).message}`)
   } finally {
     loadingFidTrend.value = false
     fidTrendSwitching.value = false
   }
 }
 
-/** 清除各版块联动聚焦 */
+/** 清除分版块联动聚焦 */
 function clearFidLink() {
   linkedFid.value = null
   if (fidTrendChart.value) {
@@ -1042,7 +1042,7 @@ function renderFidTrendChart() {
     fidTrendChart.value = echartsInit(el)
     fidTrendChart.value.on('mouseover', () => (fidTrendTipPaused = true))
     fidTrendChart.value.on('mouseout', () => (fidTrendTipPaused = false))
-    // 反联动：各版块 Tooltip 出现时，同步显示总版块对应天数的 Tooltip（双向）
+    // 反联动：分版块 Tooltip 出现时，同步显示全站趋势对应天数的 Tooltip（双向）
     if (!fidTipSynced) {
       fidTipSynced = true
       fidTrendChart.value.on('showTip', (params: any) => syncTipTo(trendChart.value, params))
@@ -1132,7 +1132,7 @@ function renderFidTrendChart() {
   const needZoom = dates.length > 31
   const option = {
     backgroundColor: 'transparent',
-    // 与总版块趋势图保持完全一致的绘图区，使 Y 轴高度对齐
+    // 与全站趋势趋势图保持完全一致的绘图区，使 Y 轴高度对齐
     grid: { top: 30, right: 20, bottom: needZoom ? 46 : 28, left: 44 },
     tooltip: {
       trigger: 'axis',
@@ -1143,7 +1143,7 @@ function renderFidTrendChart() {
       borderWidth: 1,
       textStyle: { color: '#e6ebf5', fontSize: 12 },
       axisPointer: { type: 'line', lineStyle: { color: 'rgba(0,0,0,0.35)' } },
-      // 各版块按当日新增从大到小排序展示
+      // 分版块按当日新增从大到小排序展示
       formatter: (params: any) => {
         if (!Array.isArray(params) || !params.length) return ''
         const rows = [...params]
@@ -1281,12 +1281,12 @@ function renderFidTrendChart() {
       </template>
     </div>
 
-    <!-- 每日发布趋势：总版块 + 各版块 同行各占 1/2 -->
+    <!-- 每日发布趋势：全站趋势 + 分版块 同行各占 1/2 -->
     <div class="trend-row">
     <div class="page-card chart-card trend-half">
       <div class="chart-head">
         <div class="chart-head-left">
-          <span class="chart-title">总版块</span>
+          <span class="chart-title">全站发布趋势</span>
           <span v-if="linkedFid" class="link-badge" :style="{ '--link-color': linkedFid.color }">
             <span class="link-dot"></span>
             联动聚焦：{{ linkedFid.name }}
@@ -1343,11 +1343,11 @@ function renderFidTrendChart() {
       </div>
     </div>
 
-    <!-- 每日发布趋势（各版块）：同行右侧 1/2 宽，懒加载 -->
+    <!-- 每日发布趋势（分版块）：同行右侧 1/2 宽，懒加载 -->
     <div ref="fidTrendBlockRef" class="page-card chart-card trend-half">
       <div class="chart-head">
         <div class="chart-head-left">
-          <span class="chart-title">各版块</span>
+          <span class="chart-title">分版块发布对比</span>
           <span v-if="linkedDay" class="link-badge" style="--link-color: #e6ebf5">
             <span class="link-dot"></span>
             联动聚焦日：{{ linkedDay.slice(5) }}
@@ -1557,7 +1557,7 @@ function renderFidTrendChart() {
   }
 }
 
-/* 每日发布趋势：总版块 + 各版块 同行各占 1/2 */
+/* 每日发布趋势：全站趋势 + 分版块 同行各占 1/2 */
 .trend-row {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -1669,6 +1669,8 @@ function renderFidTrendChart() {
   background: #f7f8fa;
   border-left: 3px solid #2f6fed;
   min-width: 52px;
+  /* 数字/版块名不折行：挤压时由 chart-head-right 的 wrap 整条换行兜底 */
+  white-space: nowrap;
   transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
 .ts-card:hover {
