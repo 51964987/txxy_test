@@ -23,6 +23,7 @@
 | 抓取 | `run_batch.py`（并发调度，13 个版块，MAX_WORKERS=3）→ 每个版块起子进程 `scraper.py` |
 | 数据 | SQLite `db/posts.db`（帖子库 + 运行记录 run_days/run_sections）；CSV/进度/日志 `outputs/<日期>/`（日志保留 3 天自动清理）；下载资源 `downloads/` |
 | 定时 | Windows 计划任务调 `run_daily.bat` → `python run_batch.py` |
+| 下载中心 | `web/download_tasks.py` 任务队列 + `/api/downloads` 接口 + 前端 `/downloads` 页（Web 进程内异步下载，仅写文件系统与 `outputs/download_tasks.json`，不触碰 `posts.db`） |
 | Python 依赖 | `requirements.txt`：requests、beautifulsoup4、fastapi、uvicorn（轻量，无编译依赖） |
 | 前端依赖 | Vue3 / Element Plus / echarts / pinia / vue-router（node 构建） |
 
@@ -361,7 +362,7 @@ curl http://127.0.0.1:8088/api/health
 #    期望: ok=true, db_exists=true, frontend_built=true, public_root=https://txxy.com
 
 # 2) 前端页面
-#    浏览器打开 http://127.0.0.1:8088 , 数据总览/版块/帖子/运行记录 均正常
+#    浏览器打开 http://127.0.0.1:8088 , 数据总览/帖子浏览/运行记录/资源管理/下载中心 均正常
 
 # 3) 手动触发一次抓取（确认直连模式可用）
 docker compose exec cron python -u run_batch.py false
@@ -395,7 +396,7 @@ docker compose exec web ls db/ outputs/ downloads/
 4. **时区**：镜像已设 `TZ=Asia/Shanghai`；若目标主机在其它时区，改 `.env` 的 `TZ` 即可（注意 `outputs/日期目录` 与运行记录日期会随之变化）。
 5. **端口冲突**：宿主 8088 被占用时改 `.env` / compose 映射（如 `18088:8088`）。
 6. **资源限制**（可选）：抓取是 CPU/网络密集 + 多进程，可在 compose 里给 cron 服务加 `deploy.resources.limits`（如 memory 1g）。
-7. **下载功能**（`download_files.py` / `media_download.py`）：纯 Python 可在容器内执行（`docker compose exec cron python download_files.py`），若依赖 yt-dlp/ffmpeg 等外部程序需另行扩展镜像，**本方案初期不内置**；`downloads/` 卷已预留。
+7. **下载功能**（`download_files.py` / `media_download.py`）：纯 Python 可在容器内执行；Web 容器已内置「下载中心」（`/downloads` 页 + `web/download_tasks.py` 队列，仅写文件系统与 `outputs/download_tasks.json`，不触碰 `posts.db`）；cron 容器也可手动执行（`docker compose exec cron python download_files.py "<URL>"`）。若未来依赖 yt-dlp/ffmpeg 等外部程序需另行扩展镜像；`downloads/` 卷已预留。
 8. **README.md 残留冲突标记**：已清理（保留 HEAD 侧内容），当前无 `<<<<<<<` / `=======` / `>>>>>>>` 残留。
 9. **Windows 编码差异**：代码已统一 UTF-8（`-X utf8`、`reconfigure`），Linux 默认 UTF-8 无此问题。
 10. **bind mount 共用数据库（环境 A）**：容器与宿主机 Python 进程并发访问同一 SQLite 文件安全（WAL + `busy_timeout=15`），但**同一时刻只应有一方跑抓取**——部署后务必停掉宿主机计划任务 `txxy_daily_batch`（或错开时间），否则两个批处理同时写库会互相等锁、拖慢甚至偶发超时；本地 8088 服务与容器端口二选一（停本地服务或 Docker 改映射 `18088:8088`）。

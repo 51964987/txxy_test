@@ -26,20 +26,27 @@ txxy_test/
 ├── extract_magnets.py  # 磁力链接专属模块（magnet 地址提取 / TXT 清单导出）
 ├── extract_clouds.py   # 云盘链接专属模块（redircdn 中转还原 / TXT 清单导出）
 ├── media_download.py   # 通用下载核心（Referer 降级重试 / 内容校验 / 断点续传）
-├── init_db.py          # SQLite 数据库一次性初始化
+├── init_db.py          # SQLite 数据库一次性初始化（幂等：建表 + 中文注释表 + 全量查询索引）
 ├── run_daily.bat       # Windows 计划任务批处理入口（固定工作目录）
+├── start_web.bat       # 一键启动前端展示服务（调用 start_web.py）
+├── start_web.py        # Web 启动器（默认用现有 dist 快速启动；传 true/--rebuild 重新编译前端；解释器缺依赖时自动切换）
+├── kill_port.bat       # 按端口结束占用进程（如释放 8088 端口）
 ├── requirements.txt
+├── Dockerfile / docker-compose.yml / docker-compose.named-volumes.yml  # Docker 化部署交付物（默认 bind mount / 备用命名卷）
+├── deploy_windows.ps1 / deploy_wsl.sh / deploy_linux.sh                # Win11 / WSL / Linux 三环境一键部署脚本
+├── docker/             # 容器入口脚本（entrypoint.sh / entrypoint_cron.sh / txxy_cron 定时抓取）
+├── docs/               # 设计与优化方案文档（主题索引见文末「设计文档索引」）
 ├── web/                # 前端数据展示服务（FastAPI + Vue3 SPA，只读访问 db/posts.db）
-│   ├── app.py          # 服务入口（托管 /api 接口 + 前端静态资源）
-│   ├── api.py          # REST 接口（/api/config、stats、posts、runs、resources，统计接口 5s 缓存）
-│   ├── config.py       # 服务配置（端口/公开域名/路径/自动刷新开关，可用环境变量覆盖）
-│   ├── db.py           # 只读 SQLite 访问层（PRAGMA query_only + 缓存 + URL 归一化）
-│   ├── runs.py         # 运行记录读取（SQLite run_days/run_sections 优先，日志兼容回退）
+│   ├── app.py          # 服务入口（托管 /api 接口 + 前端静态资源；GZip 压缩、/api 请求耗时监控日志）
+│   ├── api.py          # REST 接口（/api/config、stats、posts、runs、resources、downloads，统计接口 5s 缓存）
+│   ├── config.py       # 服务配置（端口/公开域名/路径/自动刷新开关/下载中心参数，可用环境变量覆盖）
+│   ├── db.py           # 只读 SQLite 访问层（PRAGMA query_only + 5s TTL 缓存 + URL 归一化）
+│   ├── ratelimit.py    # 接口限流（纯标准库固定窗口计数；/posts/export 5 次/分、/resources 60 次/分，超限 429）
+│   ├── runs.py         # 运行记录读取（SQLite run_days/run_sections 优先，日志兼容回退；孤儿 running 展示降级）
 │   ├── resources.py    # 资源管理：扫描 downloads/ 目录（只读），按文件夹分组返回文件清单
 │   ├── download_tasks.py  # 下载中心后端核心（任务队列，异步下载 + 状态持久化）
 │   └── frontend/       # Vue3 + Vite + TypeScript + Element Plus + Pinia + ECharts SPA
-│       └── src/stores/dashboard.ts  # Pinia 全局状态（自动刷新/更新时间，Header 与页面解耦）
-├── start_web.bat       # 一键启动前端展示服务
+│       └── src/stores/  # Pinia 状态：app.ts（全局刷新版本号）+ dashboard.ts（总览/自动刷新状态）
 ├── db/posts.db         # SQLite 数据库（posts 表 title 主键去重 + run_days/run_sections 运行记录表）
 ├── outputs/日期/        # 抓取结果 CSV、进度文件与日志（文件名带批次时间 <程序名>_<日期>_<批次时间>）
 └── downloads/标题/      # 帖子页下载的图片 / 视频 / 种子及磁力·云盘清单
@@ -72,7 +79,7 @@ download_files.py ──► 调用各 extract 模块（页面访问 + 下载编�
 python init_db.py
 ```
 
-在 `db/` 下创建共享数据库 `posts.db`，包含帖子表 `posts` 与运行记录表 `run_days`/`run_sections`。`posts` 表 `title` 为主键，重复标题时覆盖更新（`INSERT ... ON CONFLICT(title) DO UPDATE`，upsert）：首次插入时 `update_at`/`update_date` 为空，重复写入时除 `title`/`date`/`created_at` 外其余字段覆盖为本次新值。所有日期批次的抓取共用此库。**中文注释**：建表 DDL 每列带 `/* */` 中文注释（新表随 `sqlite_master` 持久化）；另建 `schema_comments` 表幂等保存表级+列级中文注释，旧库重跑本脚本即补齐（`SELECT * FROM schema_comments` 可查）。
+在 `db/` 下创建共享数据库 `posts.db`，包含帖子表 `posts` 与运行记录表 `run_days`/`run_sections`。`posts` 表 `title` 为主键，重复标题时覆盖更新（`INSERT ... ON CONFLICT(title) DO UPDATE`，upsert）：首次插入时 `update_at`/`update_date` 为空，重复写入时除 `title` 外其余字段覆盖为本次新值（`date`/`created_at` 为帖子真实发布时间，随重抓自愈修正）；并幂等创建全量查询索引（`date`/`fid`/`fid+date`、`likes`/`replies` 表达式索引、`author`/`created_at`、`date+created_at`/`fid+date+created_at` 复合索引等）。所有日期批次的抓取共用此库。**中文注释**：建表 DDL 每列带 `/* */` 中文注释（新表随 `sqlite_master` 持久化）；另建 `schema_comments` 表幂等保存表级+列级中文注释，旧库重跑本脚本即补齐（`SELECT * FROM schema_comments` 可查）。
 
 ### 2. 批量抓取版块列表（推荐）
 
@@ -187,7 +194,7 @@ downloads/帖子标题/
 以网页形式浏览抓取数据（**只读**，不影响抓取/下载任务）：
 
 ```bash
-start_web.bat                      # 一键启动（未构建时自动 npm install + npm run build；当前解释器缺 fastapi 时自动切换可用 Python）
+start_web.bat                      # 一键启动（默认用现有 dist 快速启动；python start_web.py true 强制重新编译；未构建时自动 npm install + npm run build；解释器缺 fastapi 时自动切换可用 Python）
 # 或手动：
 pip install fastapi uvicorn        # 首次（已写入 requirements.txt）
 python -X utf8 web/app.py          # 启动后访问 http://127.0.0.1:8088（需使用装有依赖的解释器）
@@ -196,16 +203,16 @@ python -X utf8 web/app.py          # 启动后访问 http://127.0.0.1:8088（需
 - **技术栈**：FastAPI 后端 + Vue3 / Vite / TypeScript / Element Plus / Pinia / ECharts 前端（SPA）；
 - **页面**：
   - 数据总览（分区加载：P0 首屏、P1 视口懒加载 `IntersectionObserver`）：
-    - **顶部 Header（全局布局）**：Logo + 导航 + 更新时间 +「自动刷新」开关（后端 `TXXY_ENABLE_AUTO_REFRESH` 控制，默认开启，5s 静默轮询）+ 全屏沉浸；
-    - **KPI 统计卡片（4 张，合并）**：累计帖子（副指标：今日 + 覆盖版块数）、今日新增（副指标：较昨日环比 + 昨日）、近 7 日新增（副指标：日均 + 昨日占比）、累计用户（副指标：活跃用户 + 活跃率）；均由 `/api/stats/overview` 驱动，原 7 指标信息无损合并；
-    - **每日新增趋势（双图并排）**：「总版块」7/14/21/28 天切换（自动轮播 + 双向 Tooltip 联动）+「各版块」Top8 折线（天数由总版块联动）；含 σ 区间带、日均虚线、峰谷脉冲、折线流光、数字滚动；>31 点启用 DataZoom；
-    - **版块分布（左右 1:1 双视图）**：左「排行榜」每 2s 平滑上滚轮播（前 3 名徽章高亮，点击行下钻该版块）；右「环形图」内外半径 42%~68%，确定性 13 色板，每 2.2s 高亮轮播（双击中心暂停），点击扇区/图例下钻该版块；两图均与 `goPostsWith({fid})` 联动；
-    - **热门榜（P1 懒加载，4 栏）**：点赞最高帖 / 回复最高帖 / 今日新增版块 / 今日热议帖；点赞·回复最高帖**标题点击 `window.open` 原帖 URL**，**卡片空白区点击**下钻该版块（`/posts?fid=&sort=likes_desc|replies_desc`），**「查看更多」**带排序下钻帖子浏览（`/posts?sort=likes_desc` / `/posts?sort=replies_desc`）；今日新增版块·今日热议帖点击下钻帖子浏览（带 fid / 关键词）；
-    - 布局：趋势双图 `1fr 1fr`、版块分布双视图 `1fr 1fr`、热门榜 4 栏等宽，间距统一 16px；窄屏自动降级为单列；
-  - 帖子浏览（`/posts`）：版块多选 / 日期区间 / 标题或作者关键词筛选，分页排序（日期/入库/点赞/回复），支持从数据总览下钻（带 `fid` / `author` / `sort` 预筛选，下钻作者回填关键词框）；操作栏图标按钮（悬浮「打开/复制链接」），一键导出 CSV（10 列带 BOM，Excel 可直接打开）；
+    - **顶部 Header（全局布局）**：Logo + 导航 + 实时时钟（每秒刷新）+ 更新时间 +「自动刷新」开关（后端 `TXXY_ENABLE_AUTO_REFRESH` 控制，默认开启，5s 静默轮询）+ 全屏沉浸；
+    - **KPI 统计卡片（4 张）**：累计收录（副指标：近 7 日发布 + 覆盖版块数）、今日发布（副指标：较昨日环比 + 昨日）、发帖作者（副指标：今日更新人数 + 活跃率）、最近入库（最近批次日期 + 批次时间 HH:MM + 批次运行时绿色脉冲「抓取中 N%」实时徽标）；由 `/api/stats/overview` + `/api/runs` 驱动，数据新鲜度以入库活动时间（`latest_run_at`，run_days 最近批次开始/结束时刻较大者）为准；
+    - **每日发布趋势（双图并排）**：左「全站发布趋势」+ 右「分版块发布对比」，天数 7/14/21/28 自动轮播（下拉可切换/自定义输入），两图双向 Tooltip 联动聚焦；卡头统计卡（峰值/谷值/日均、对比版块数/最活版块/峰值日增）+ 折线 CSS 流光 + 数字滚动；>31 点启用 DataZoom；
+    - **活跃作者 Top10 / 活跃版块 Top10（左右 1:1 横向条形图）**：按累计发帖量排序（`/api/stats/top_authors` / `/api/stats/top_fids`）；作者条点击下钻帖子浏览（按作者精确过滤），版块条点击跳该版块列表；
+    - **热门榜（P1 懒加载，4 栏）**：点赞最高帖 / 回复最高帖（`/api/stats/boards`）、最新最热（`/api/stats/today_top`，最新数据日期内点赞+回复综合）、本月最热（`/api/stats/month_top`）；点赞·回复最高帖**标题点击 `window.open` 原帖 URL**，**卡片空白区点击**下钻该版块（`/posts?fid=&sort=likes_desc|replies_desc`），**「查看更多」**带排序下钻帖子浏览（`/posts?sort=likes_desc` / `/posts?sort=replies_desc`）；每行悬浮「下载」按钮直接创建下载任务（进度在下载中心查看）；
+    - 布局：趋势双图 `1fr 1fr`、活跃榜双视图 `1fr 1fr`、热门榜 4 栏等宽，间距统一 16px；窄屏自动降级为单列；
+  - 帖子浏览（`/posts`）：版块多选 / 日期区间 / 标题或作者关键词筛选，分页排序（发布日期/发布时间/点赞/回复），支持从数据总览下钻（带 `fid` / `author` / `sort` 预筛选，下钻作者回填关键词框）；操作栏图标按钮（悬浮「打开/复制链接/下载」），表格多选 + 一键「批量下载」到下载中心，一键导出 CSV（10 列带 BOM，Excel 可直接打开，限 5 次/分）；
   - 运行记录：读取 `db/posts.db` 的 `run_days`/`run_sections`（每次运行一条、历史保留，含运行时间），**每页 5 条分页**，页面内 4s 轮询实时刷新（running 状态实时进度），点击查看各版块成功/失败/CSV 与 SQLite 条数/耗时；
-  - 资源管理：扫描 `downloads/` 目录，按文件夹分组展示文件清单与大小，复制路径；
-  - 下载中心（`/downloads`）：提交离线下载任务（URL 列表），异步执行并实时展示任务进度、逐 URL 明细，支持取消与删除；后端由 `download_tasks.py` 维护任务队列，状态持久化到 `outputs/download_tasks.json`（由 `TXXY_DOWNLOAD_TASKS_FILE` 配置，Web 进程不触碰 `posts.db`）；
+  - 资源管理：扫描 `downloads/` 目录，按文件夹分组展示文件清单与大小；类型筛选 / 关键词搜索（命中片段高亮）/ 名称·大小·类型排序（前端即时过滤，`el-table-v2` 虚拟滚动）；复制目录名/路径；加载失败重试与手动刷新（接口限 60 次/分）；
+  - 下载中心（`/downloads`）：提交离线下载任务（URL 列表），异步执行并实时展示任务进度、逐 URL 明细与任务日志，支持取消与删除；三个入口——下载中心直接提交、帖子浏览多选批量/单行下载、数据总览热门榜单行下载；后端由 `download_tasks.py` 维护任务队列，状态持久化到 `outputs/download_tasks.json`（由 `TXXY_DOWNLOAD_TASKS_FILE` 配置，Web 进程不触碰 `posts.db`）；
 - **下载中心接口**（`/api/downloads`）：
   - `GET /api/downloads`：任务列表（含状态、进度、逐 URL 明细）；
   - `POST /api/downloads`：提交下载任务（`{ "urls": [...] }`，立即返回任务 ID，异步执行）；
@@ -214,8 +221,8 @@ python -X utf8 web/app.py          # 启动后访问 http://127.0.0.1:8088（需
   - `DELETE /api/downloads/{tid}`：删除任务（终态或已取消可删）；
   - 任务状态持久化于 `outputs/download_tasks.json`（由 `TXXY_DOWNLOAD_TASKS_FILE` 配置），Web 进程仅做文件系统下载（复用 `download_files.process_one`），不写 `posts.db`；
 - **只读安全**：后端以 `PRAGMA query_only=ON` 只读访问 `db/posts.db`，绝不写库，与抓取写进程（WAL 模式）安全并发；
-- **URL 归一化**：旧数据中 `http://127.0.0.1:1024` 前缀在展示层统一替换为 `PUBLIC_ROOT`（`web/config.py`，默认 `https://txxy.com`，与 `run_batch.REMOTE_ROOT_URL` 一致），**不改数据库**；
-- **配置**：`web/config.py` 顶部可用环境变量覆盖（`TXXY_WEB_HOST` 地址 / `TXXY_WEB_PORT` 端口 / `PUBLIC_ROOT` 域名 / `POSTS_DB` 数据库路径等），默认监听 `127.0.0.1:8088`（8080 常被本机其他程序占用）；
+- **URL 归一化**：旧数据中 `http://127.0.0.1:1024` 前缀在展示层统一替换为 `PUBLIC_ROOT`（`web/config.py`，默认与 `run_batch.REMOTE_ROOT_URL` 一致，支持 `PUBLIC_ROOT` 环境变量覆盖），**不改数据库**；
+- **配置**：`web/config.py` 顶部可用环境变量覆盖（`TXXY_WEB_HOST` 地址 / `TXXY_WEB_PORT` 端口 / `PUBLIC_ROOT` 域名 / `POSTS_DB` 数据库路径 / `TXXY_DOWNLOAD_*` 下载中心参数等），默认监听 `127.0.0.1:8088`（8080 常被本机其他程序占用）；
 - **自动刷新开关**：`TXXY_ENABLE_AUTO_REFRESH`（默认 `1` 开启）控制数据总览的自动刷新功能——开启时 Header 显示"自动刷新"开关、前端启动 5s 轮询（`REFRESH_INTERVAL=5000`），抓取过程中 KPI 卡与折线图准实时更新；后端统计接口配套 5s TTL 缓存（`web/db.py` 的 `_TTL=5`），避免轮询空转打库；如需关闭，启动前设置 `TXXY_ENABLE_AUTO_REFRESH=0`（或直接改 `web/config.py` 为 `False`）。
 - **开发模式**：`cd web/frontend && npm run dev` 启动 Vite（端口 5173，`/api` 自动代理到 8088）热更新；改完执行 `npm run build` 重新构建，再启动 `python -X utf8 web/app.py` 生效。
 
@@ -259,13 +266,13 @@ schtasks /Delete /TN "txxy_daily_batch" /F
 
 ## 数据说明
 
-- `db/posts.db` 表结构：`posts(title PRIMARY KEY, fid, date, url, likes, author, replies, created_at, update_at, update_date)`，附带 `fid`、`date`、`fid+date` 索引；`likes`（点赞数）、`author`（作者）、`replies`（回复数）由 `scraper.py` 列表页按行提取；`created_at` 为首次插入时间戳（标题重复时**保持不变**），`date` 为帖子发布日（重复时**保持不变**），`update_at`/`update_date` 为最近一次覆盖写入的时间戳/日期（**首次插入时为空字符串**，标题重复时自动更新），重复写入时除 `title`/`date`/`created_at` 外 `fid`/`url`/`likes`/`author`/`replies`/`update_at`/`update_date` 全部覆盖；旧库已由 `init_db.py` 自动 `ALTER TABLE` 补列（缺失时为空字符串）；
+- `db/posts.db` 表结构：`posts(title PRIMARY KEY, fid, date, url, likes, author, replies, created_at, update_at, update_date)`，索引由 `init_db.py` 幂等创建（`date`/`fid`/`fid+date`、`likes`/`replies` 表达式索引、`author`/`created_at`、`date+created_at`/`fid+date+created_at` 复合索引等）；`likes`（点赞数）、`author`（作者）、`replies`（回复数）由 `scraper.py` 列表页按行提取；`created_at` 为帖子真实发布时间戳（Unix 秒，来自列表页 HTML `data-timestamp`，2026-08-27 起入库，存量数据随重抓自愈），`date` 为由该时间戳派生的真实发布日；`update_at`/`update_date` 为最近一次覆盖写入的时间戳/日期（**首次插入时为空字符串**，标题重复时自动更新），重复写入时除 `title` 外其余字段全部覆盖；旧库已由 `init_db.py` 自动 `ALTER TABLE` 补列（缺失时为空字符串）；
 - **入库链接使用公开域名**：`url` 列拼接 `--public` 指定的公开域名（`run_batch.py` 自动传 `REMOTE_ROOT_URL`），不包含本机才能访问的 `127.0.0.1:1024` 本地代理地址；
 - 多进程并发写库：`scraper.py` 以 `sqlite3.connect(DB_FILE, timeout=15)` 连接，busy_timeout 最多等锁 15 秒，替代原先手动 sleep 退避，避免并发写冲突丢数据；
 - CSV 与数据库同步写入：每 `BATCH_SIZE` 页刷新一次 CSV，每 `SQLITE_BATCH_ROWS` 行批量提交一次；
 - 运行结束时输出 `版块 SQLite 实际入库 N 条（标题重复已覆盖更新）` 与机器汇总行 `__SUMMARY__ fid=.. rows=.. db_rows=.. pages=..`，供调度器解析展示；
 - **入库量口径**：`db_rows` 统计的是本次运行实际写入条数（`INSERT ... ON CONFLICT(title) DO UPDATE`，标题重复时整行覆盖更新，新增与覆盖均计 1 条），而非数据库累计总量；如需查询累计总量可执行 `SELECT COUNT(*) FROM posts`；
-- `run_days`（运行记录，自增 `id` 主键，**每次运行一条**，同一天多次运行各自成条）与 `run_sections`（明细，`run_id` 关联 `run_days.id`）记录每次抓取：`run_date` 为 `YYYYMMDD` 日期目录名，`source` 区分 `run_batch`（批量）/ `scraper`（单跑），`status` 为 `ok` / `cancelled` / `error`；由 `run_recorder.py` 写入，`web/runs.py` 只读展示（Web 端按 `run_id` 查明细，列表含运行时间列）；
+- `run_days`（运行记录，自增 `id` 主键，**每次运行一条**，同一天多次运行各自成条）与 `run_sections`（明细，`run_id` 关联 `run_days.id`）记录每次抓取：`run_date` 为 `YYYYMMDD` 日期目录名，`source` 区分 `run_batch`（批量）/ `scraper`（单跑），`status` 为 `running`（进行中）/ `ok` / `cancelled` / `error`；由 `run_recorder.py` 写入（批次运行期间心跳刷新 `run_days.updated_at`，启动新批次前将历史残留 running 收编为 error），`web/runs.py` 只读展示（Web 端按 `run_id` 查明细，列表含运行时间列；对超过 30 分钟无心跳的孤儿 running 仅展示口径降级为 error，不写库）；
 - **中文注释**：`posts`/`run_days`/`run_sections` 建表 DDL 每列带 `/* */` 中文注释（新表随 `sqlite_master` 持久化）；`schema_comments` 表（`object_type` + `table_name` + `column_name` 主键）幂等保存全部表/列中文注释，已有旧库重跑 `python init_db.py` 即补齐，查询 `SELECT object_type, table_name, column_name, comment FROM schema_comments` 可查看完整字段含义。
 
 ## 设计文档索引

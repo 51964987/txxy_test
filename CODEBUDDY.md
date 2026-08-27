@@ -50,23 +50,27 @@ alwaysApply: true
 
 # 项目上下文（txxy 数据展示项目 · 自动加载）
 ## 技术栈
-- 后端：Python3 + **FastAPI**；SQLite 只读（`web/db/posts.db`，WAL，`PRAGMA query_only=ON`）；统计接口经 `db.cached(key, ttl)` 做 **5s TTL** 内存缓存。
-- 数据写入由独立 `scraper.py` 负责，**Web 进程严禁写库**。
+- 后端：Python3 + **FastAPI**；SQLite 只读（`db/posts.db`，WAL，`PRAGMA query_only=ON`）；统计接口经 `db.cached(key)` 做 **5s TTL** 内存缓存。
+- 数据写入由项目根目录独立 `scraper.py` 负责，**Web 进程严禁写库**（下载中心 `download_tasks.py` 仅做文件系统下载）。
 - 前端：Vue3（`<script setup lang="ts">`）+ Vite5 + **Pinia** + **Element Plus**（中文 locale）+ **ECharts5** + vue-router4（`createWebHistory`）。
-- HTTP 统一走 `src/api/index.ts` 封装的 axios 实例。
+- HTTP 统一走 `src/api/index.ts` 封装的**原生 fetch**（10s 超时 + 同 key 请求去重取消 + 统一 `ApiError` 错误类型；POST/DELETE 不参与去重）。
 
 ## 目录结构（勿随意新增顶层目录）
 ```
-txxy_test/web/
-├── app.py        # FastAPI 入口
-├── api.py        # 路由：/api/config、/api/stats/*、/api/posts、/api/runs、/api/resources
-├── config.py     # 配置（DB_FILE、ENABLE_AUTO_REFRESH 默认开启）
-├── db.py         # 只读连接 + 5s TTL 缓存 + URL 归一化
-├── scraper.py    # 独立抓取进程，写 posts.db
-└── frontend/src/
-    ├── api/ stores/ router/ layout/ components/ views/ utils/
+txxy_test/                  # 抓取脚本在项目根：scraper.py / run_batch.py / run_recorder.py / init_db.py 等
+├── download_files.py 等    # 下载模块（download_tasks.py 复用其 process_one）
+└── web/
+    ├── app.py        # FastAPI 入口（GZip + /api 耗时监控 + SPA 静态托管）
+    ├── api.py        # 路由：/api/config、/api/stats/*、/api/posts、/api/runs、/api/resources、/api/downloads
+    ├── config.py     # 配置（DB_FILE、ENABLE_AUTO_REFRESH 默认开启、下载中心参数）
+    ├── db.py         # 只读连接 + 5s TTL 缓存 + URL 归一化
+    ├── ratelimit.py  # 接口限流（固定窗口，/posts/export、/resources 挂载，超限 429）
+    ├── runs.py / resources.py / download_tasks.py  # 运行记录 / 资源扫描 / 下载中心队列
+    └── frontend/src/
+        ├── api/ stores/ router/ layout/ components/ views/ utils/
+        └── views/    # Dashboard / Posts / Runs / Resources / Downloads 五个页面
 ```
-路由固定为 `/`、`/posts`、`/runs`、`/resources` 四条。
+路由固定为 `/`、`/posts`、`/runs`、`/resources`、`/downloads` 五条。
 
 ## 项目专属约束（必须遵守）
 1. **自动刷新默认开启**：`config.ENABLE_AUTO_REFRESH` 默认 `1`；前端 `REFRESH_INTERVAL = 5000` 轮询；`db._TTL = 5`。禁止回退为关闭 / 30s 轮询 / 60s 缓存，除非用户明确要求。
@@ -75,7 +79,7 @@ txxy_test/web/
 4. **Tooltip 顶层**：所有 ECharts `tooltip` 必须 `appendToBody: true`，防遮挡。
 5. **接口一致性**：后端新接口加在 `api.py` 并用 `db.cached` 包裹统计查询；前端在 `src/api/index.ts` 加同名方法。
 6. **错误处理**：后端已统一 `HTTPException(detail)`（无 `{ok:false,msg}` 形态），前端 `src/api/index.ts` 的 `get()` 已统一解析 `detail`；前端 `try/catch` 后 `ElMessage.error`，禁止裸抛或静默吞错。
-7. **状态管理**：跨页状态归并 `useAppStore`（全局刷新版本号/最后更新）+ `useDashboardStore`（总览/自动刷新/选中版块），禁新建分散 store。
+7. **状态管理**：跨页状态归并 `useAppStore`（全局刷新版本号/最后更新）+ `useDashboardStore`（自动刷新开关/最后更新时间/Header 每秒实时时钟），禁新建分散 store。
 8. **禁止**：引入项目未用新依赖（React/Tailwind/Redux 等）、Web 写库、改动既有路由路径与 history 模式、`<script setup>` 外使用 Options API。
 9. **交付自检**：前端改动后 `cd web/frontend && npx vue-tsc --noEmit` 必须 0 错误，且 `read_lints`（ts-plugin IDE 诊断）也必须 0 错误——两者对模板的类型检查严格度不同，需双通道都通过；后端 `python web/app.py` 可启动且既有接口行为不变。
 10. **模板禁止对 setup 变量内联赋值**：`<script setup>` 顶层 `let` 变量（带字面量初始值，如 `let x: boolean = false`）在模板中直接写 `@mouseenter="x = true"`，会被 ts-plugin 按初始值收窄为字面量类型 `false` 而误报「不能将类型 true 分配给类型 false」（vue-tsc 不报此错）；一律用方法包装，如 `@mouseenter="setPaused(true)"`。
