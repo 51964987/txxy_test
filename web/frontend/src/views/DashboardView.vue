@@ -15,6 +15,7 @@ import { ElMessage } from 'element-plus'
 import { Download } from '@element-plus/icons-vue'
 import { api, isAborted, type Boards, type FidDistItem, type Overview, type TodayTop, type TopAuthor, type TopFid, type TrendByFid, type TrendPoint } from '../api'
 import { useDashboardStore } from '../stores/dashboard'
+import { formatShortTime } from '../utils/time'
 import RollingNumber from '../components/RollingNumber.vue'
 
 use([
@@ -132,11 +133,12 @@ const kpiSub = computed(() => {
         ? { cls: 'sub-up', text: `较昨日 ↑ ${pct}%` }
         : { cls: 'sub-down', text: `较昨日 ↓ ${pct}%` }
   const activeShare = o.total_users > 0 ? ((o.active_users / o.total_users) * 100).toFixed(1) : null
-  // 数据新鲜度：最新数据日期距今天数
+  // 数据新鲜度：最近入库活动时间（run_days 最新批次）距今天数；
+  // 2026-08-27 起 posts.date 为帖子真实发布日、不随跑批推进，新鲜度改用入库活动时间
   let gapText = '暂无数据'
   let gapCls = 'sub-neutral'
-  if (o.latest_date) {
-    const gap = daysBetween(o.latest_date)
+  if (o.latest_run_at) {
+    const gap = daysBetween(o.latest_run_at.slice(0, 10))
     if (gap <= 0) gapText = '今天'
     else if (gap === 1) gapText = '昨天'
     else gapText = `${gap} 天前`
@@ -146,8 +148,10 @@ const kpiSub = computed(() => {
     todayDiff,
     activeShare,
     gap: { cls: gapCls, text: gapText },
-    latestDate: o.latest_date ?? '',
-    updatedAt: o.latest_created_at ? String(o.latest_created_at).replace('T', ' ').slice(11, 16) : null,
+    // 主值显示最近入库日期（随批次推进）；发布日口径由趋势图承载
+    latestDate: o.latest_run_at ? o.latest_run_at.slice(0, 10) : '',
+    // 兼容旧 ISO 字符串与新 Unix 秒时间戳两种形态，统一换算为 HH:MM
+    updatedAt: formatShortTime(o.latest_run_at),
   }
 })
 
@@ -177,7 +181,7 @@ async function loadP0(initial = false) {
     topAuthors.value = authors
     topFids.value = fids
     trendCache.set(trendDays.value, t)
-    store.setUpdatedAt(o.latest_created_at ?? null)
+    store.setUpdatedAt(o.latest_run_at ?? null)
     await nextTick()
     renderTrendChart()
     renderAuthorChart()

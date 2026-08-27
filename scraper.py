@@ -126,23 +126,30 @@ def fetch_page(page_num: int) -> str | None:
     return None
 
 
-def parse_links(html: str) -> list[tuple[str, str, str, str, str]]:
-    """从HTML中提取帖子标题、链接、点赞数、作者、回复数。
+def parse_links(html: str) -> list[tuple[str, str, str, str, str, str]]:
+    """从HTML中提取帖子标题、链接、点赞数、作者、回复数、发布时间戳。
 
     以列表行的标题链接 <a href="/htm_data/..." target="_blank" id="t..."> 为准，
     再定位其所在 <tr> 行，按列提取：
     - 点赞数：第 1 个 td 内 <span class="s3"> 的文本（无则取该 td 纯文本）
     - 作者：行内 <a class="bl"> 的文本
     - 回复数：第 4 个 td（索引 3）的纯文本
+    - 发布时间戳：作者单元格 <div class="f12"> 下带 data-timestamp 属性的 <span>
+      （如 "1787806292s"，去掉尾部 s 取 Unix 秒；span 可能带或不带 class="s3"，
+      当日新帖才有高亮 class，故不限定 class）；同行末楼 <a class="f10"> 也带
+      data-timestamp（是最后回复时间），必须限定从 div.f12 内取，避免误取回复时间；
+      属性缺失或非法时回退当前时刻，保证 date/created_at 始终非空可排序
     目标行结构参考：
-      <td><span class="s3">39</span></td>                    点赞
-      <td class="tal"><h3><a ...>标题</a></h3></td>           标题
-      <td><a class="bl">作者</a><div class="f12">...</div></td> 作者
-      <td>17</td>                                             回复数
-    结构不同或字段缺失时相应返回空字符串，不影响主数据。
+      <td><span class="s3">38</span></td>                     点赞
+      <td class="tal"><h3><a ...>标题</a></h3></td>            标题
+      <td><a class="bl">作者</a><div class="f12">
+          <span class="s3" data-timestamp="1787806292s">7 小時</span></div></td>
+                                                              作者 + 发布时间
+      <td>24</td>                                              回复数
+    结构不同或字段缺失时相应返回空字符串/回退值，不影响主数据。
     """
     soup = BeautifulSoup(html, "html.parser")
-    results: list[tuple[str, str, str, str, str]] = []
+    results: list[tuple[str, str, str, str, str, str]] = []
 
     # 匹配 <a href="/htm_data/..." target="_blank" id="t...">文字</a>
     for a_tag in soup.find_all("a", href=re.compile(r"^/htm_data/\d+/\d+/\d+\.html$"), target="_blank"):
@@ -153,6 +160,7 @@ def parse_links(html: str) -> list[tuple[str, str, str, str, str]]:
             continue
 
         likes = author = replies = ""
+        pub_ts = ""
         tr = a_tag.find_parent("tr")
         if tr is not None:
             tds = tr.find_all("td")
@@ -160,6 +168,18 @@ def parse_links(html: str) -> list[tuple[str, str, str, str, str]]:
                 # 点赞数：第 1 个 td 中的 <span class="s3">（如 <span class="s3">39</span>）
                 like_span = tds[0].find("span", class_="s3")
                 likes = like_span.get_text(strip=True) if like_span else tds[0].get_text(strip=True)
+            # 发布时间戳：作者单元格 <div class="f12"> 下带 data-timestamp 属性的
+            # <span>（如 "1787806292s"，去尾 s 得 Unix 秒）。注意该 span 可能带也可能
+            # 不带 class="s3"（当日新帖才有高亮 class），故仅限定属性不限定 class；
+            # 同行末楼 <a class="f10"> 的 data-timestamp 为最后回复时间，不可误取
+            f12_div = tr.find("div", class_="f12")
+            if f12_div is not None:
+                ts_span = f12_div.find(attrs={"data-timestamp": True})
+                if ts_span is not None:
+                    raw_ts = str(ts_span.get("data-timestamp", ""))
+                    candidate = raw_ts.rstrip("sS").strip()
+                    if candidate.isdigit():
+                        pub_ts = candidate
             # 作者：<a href="/thread0806.php?fid=..." class="bl">阿东虫</a>
             author_tag = tr.find("a", class_="bl")
             if author_tag:
@@ -168,7 +188,10 @@ def parse_links(html: str) -> list[tuple[str, str, str, str, str]]:
             if len(tds) >= 4:
                 replies = tds[3].get_text(strip=True)
 
-        results.append((str(title), str(href), str(likes), str(author), str(replies)))
+        # 页面缺属性 / 结构异常时回退当前时刻，保证发布时间字段始终有效
+        if not pub_ts:
+            pub_ts = str(int(time.time()))
+        results.append((str(title), str(href), str(likes), str(author), str(replies), pub_ts))
 
     return results
 
@@ -208,8 +231,7 @@ def save_progress(page: int) -> None:
 def save_to_sqlite(
     conn: sqlite3.Connection,
     fid: str,
-    date: str,
-    rows: list[tuple[str, str, str, str, str]],
+    rows: list[tuple[str, str, str, str, str, str]],
     max_retries: int = 3,
 ) -> int:
     """带重试的批量写入 SQLite（处理多进程并发写入冲突）。
@@ -219,16 +241,29 @@ def save_to_sqlite(
     避免单次写入失败直接丢数据。返回本次实际写入条数：title 已存在时覆盖更新
     （upsert），新增与覆盖均计 1 条。
 
-    覆盖语义：首次插入时 update_at/update_date 为空，其余字段按提取数据写入；
-    重复标题写入时，除 title（主键）、date、created_at（首次插入时间）外，
-    fid/url/likes/author/replies/update_at/update_date 覆盖为本次新值
-    （update_at 为当前时间戳、update_date 为当前日期）。"""
+    写入语义：
+    - date / created_at 由提取的帖子真实发布时间戳（pub_ts，Unix 秒）同源派生；
+    - upsert 冲突时将 date/created_at 一并覆盖为本次提取的真值（恒定事实，幂等），
+      存量旧数据（ISO 入库串 / 抓取日）在被重抓到时自动修正为真实发布时间；
+    - update_at/update_date 记录最近覆盖写入时刻，首次插入为空字符串。"""
     now = datetime.now()
-    update_ts = now.isoformat()                      # 当前时间戳（如 2026-08-22T13:06:03.123456）
-    update_date = now.strftime("%Y-%m-%d")           # 当前日期（如 2026-08-22）
+    update_ts = now.isoformat()                      # 最近写入时刻（如 2026-08-27T13:06:03.123456）
+    update_date = now.strftime("%Y-%m-%d")           # 最近写入日期（如 2026-08-27）
     data = [
-        (fid, date, title, url, likes, author, replies, update_ts, update_ts, update_date)
-        for title, url, likes, author, replies in rows
+        (
+            fid,
+            # 发布日期：由帖子真实发布时间戳派生（本机时区北京时间，与站点一致）
+            datetime.fromtimestamp(int(pub_ts)).strftime("%Y-%m-%d"),
+            title,
+            url,
+            likes,
+            author,
+            replies,
+            pub_ts,                                  # created_at：帖子发布时间戳（Unix 秒字符串）
+            update_ts,
+            update_date,
+        )
+        for title, url, likes, author, replies, pub_ts in rows
     ]
     for attempt in range(1, max_retries + 1):
         try:
@@ -240,7 +275,10 @@ def save_to_sqlite(
                 + "ON CONFLICT(title) DO UPDATE SET "
                 + "fid=excluded.fid, url=excluded.url, "
                 + "likes=excluded.likes, author=excluded.author, "
-                + "replies=excluded.replies, update_at=?, update_date=?",
+                + "replies=excluded.replies, "
+                # 发布信息为恒定真值：冲突时一并覆盖，存量旧数据重抓自动修正（幂等无害）
+                + "date=excluded.date, created_at=excluded.created_at, "
+                + "update_at=?, update_date=?",
                 data,
             )
             conn.commit()
@@ -256,9 +294,8 @@ def save_to_sqlite(
 def _flush_and_close(
     db_conn: sqlite3.Connection,
     csv_file: TextIO,
-    sqlite_buffer: list[tuple[str, str, str, str, str]],
+    sqlite_buffer: list[tuple[str, str, str, str, str, str]],
     fid: str,
-    date: str,
 ) -> int:
     """
     强制刷新 CSV 和 SQLite 缓冲区并关闭连接。
@@ -269,7 +306,7 @@ def _flush_and_close(
     # 1. 刷新 SQLite 缓冲区（优先，失败不阻断后续）
     if sqlite_buffer:
         try:
-            inserted = save_to_sqlite(db_conn, fid, date, sqlite_buffer)
+            inserted = save_to_sqlite(db_conn, fid, sqlite_buffer)
             sqlite_buffer.clear()
         except Exception as e:
             print(f"[FID={FID}] [警告] SQLite 剩余数据写入失败（{len(sqlite_buffer)} 条）: {e}", file=sys.stderr)
@@ -418,7 +455,6 @@ def main() -> None:
     # 连续等待远优于原先手动 sleep 退避的断续轮询
     os.makedirs(os.path.dirname(DB_FILE), exist_ok=True)
     db_conn = sqlite3.connect(DB_FILE, timeout=15)
-    today_str = datetime.now().strftime("%Y-%m-%d")
 
     # 判断是否需要写入 CSV 表头
     write_header = not os.path.exists(OUTPUT_FILE)
@@ -448,7 +484,7 @@ def main() -> None:
         total_rows = 0
         db_rows = 0  # SQLite 实际写入条数（新增或覆盖）
         last_saved_page = start_page - 1  # 上一次已成功写入的页码
-        sqlite_buffer: list[tuple[str, str, str, str, str]] = []  # SQLite 批量写入缓冲区
+        sqlite_buffer: list[tuple[str, str, str, str, str, str]] = []  # SQLite 批量写入缓冲区（末位为发布时间戳）
         run_status = "ok"  # ok / cancelled / error，用于运行记录落库
 
         try:
@@ -466,16 +502,17 @@ def main() -> None:
                     print(f"[FID={FID}] 版块 第 {page} 页提取到 {len(links)} 条数据")
 
                     # 补全 URL 并写入 CSV：链接拼接使用公开域名（PUBLIC_URL），
-                    # 保证入库链接离开本机仍可访问；本地代理 127.0.0.1:1024 仅用于抓取
-                    for title, href, likes, author, replies in links:
+                    # 保证入库链接离开本机仍可访问；本地代理 127.0.0.1:1024 仅用于抓取。
+                    # pub_ts（发布时间戳）不写 CSV，仅随缓冲区入 SQLite
+                    for title, href, likes, author, replies, pub_ts in links:
                         full_url = href if href.startswith("http") else f"{PUBLIC_URL}{href}"
                         writer.writerow([title, full_url, likes, author, replies])
-                        sqlite_buffer.append((title, full_url, likes, author, replies))
+                        sqlite_buffer.append((title, full_url, likes, author, replies, pub_ts))
                         total_rows += 1
 
                     # SQLite 批量写入：积累到阈值时一次性提交
                     if len(sqlite_buffer) >= SQLITE_BATCH_ROWS:
-                        db_rows += save_to_sqlite(db_conn, FID, today_str, sqlite_buffer)
+                        db_rows += save_to_sqlite(db_conn, FID, sqlite_buffer)
                         print(f"[FID={FID}] 版块[已保存] 前 {page} 页数据SQLite 实际入库 {db_rows} 条（标题重复已覆盖更新）\n")
                         sqlite_buffer.clear()
 
@@ -529,7 +566,7 @@ def main() -> None:
             traceback.print_exc()
         finally:
             # 无论何种退出方式，都强制刷新数据到磁盘
-            db_rows += _flush_and_close(db_conn, f, sqlite_buffer, FID, today_str)
+            db_rows += _flush_and_close(db_conn, f, sqlite_buffer, FID)
             # 使用 last_saved_page（实际写入成功的页码），而非发生异常时的 current_page
             save_progress(last_saved_page)
             print(f"\n[FID={FID}] 版块[已保存] 共写入 {total_rows} 条数据到 {OUTPUT_FILE}（进度至第 {last_saved_page} 页）")

@@ -21,8 +21,10 @@ DB_FILE = os.path.join(DB_DIR, "posts.db")
 
 # 建表 SQL（title 为主键，无自增 id）
 # title 作为 PRIMARY KEY 自带唯一索引，写入时用 INSERT ... ON CONFLICT(title) DO UPDATE
-# 实现重复标题覆盖更新（upsert）：update_at/update_date 每次更新为当前时间，
-# created_at 保留首次插入时间不变。通过 B-tree 定位冲突行，无全表扫描
+# 实现重复标题覆盖更新（upsert）：update_at/update_date 记录最近写入时刻，
+# date/created_at 为帖子真实发布信息（由 HTML data-timestamp 发布时间戳同源派生），
+# 冲突时同样覆盖为本次提取的真值（幂等），存量旧数据重抓自动修正。
+# 通过 B-tree 定位冲突行，无全表扫描
 #
 # 中文注释说明：
 # - SQLite 不支持 MySQL 式 COMMENT 列注释语法，故在每列定义后以 /* */ 块注释标注中文含义；
@@ -33,12 +35,12 @@ _DDL_POSTS = """\
 CREATE TABLE IF NOT EXISTS posts (
     title       TEXT PRIMARY KEY NOT NULL, /* 帖子标题（主键，重复标题则覆盖更新） */
     fid         TEXT    NOT NULL,          /* 版块 ID */
-    date        TEXT    NOT NULL,          /* 帖子发布日期 YYYY-MM-DD */
+    date        TEXT    NOT NULL,          /* 帖子发布日期 YYYY-MM-DD（由 data-timestamp 发布时间戳派生） */
     url         TEXT    NOT NULL,          /* 帖子链接（入库为公开域名） */
     likes       TEXT    DEFAULT '',        /* 点赞数（TEXT 文本数字，可能为空） */
     author      TEXT    DEFAULT '',        /* 作者昵称（累计用户/活跃用户统计依据） */
     replies     TEXT    DEFAULT '',        /* 回复数（TEXT 文本数字，可能为空） */
-    created_at  TEXT    NOT NULL,          /* 首次入库时间戳（重复时保持不变） */
+    created_at  TEXT    NOT NULL,          /* 帖子发布时间戳 Unix 秒（来自 data-timestamp，重抓随真值修正） */
     update_at   TEXT    DEFAULT '',        /* 最近覆盖写入时间戳（首次插入为空） */
     update_date TEXT    DEFAULT ''         /* 最近覆盖写入日期（首次插入为空） */
 );
@@ -74,12 +76,12 @@ _SCHEMA_COMMENTS: list[tuple[str, str, str, str]] = [
     # ---- posts 列 ----
     ("column", "posts", "title", "帖子标题（主键，重复则覆盖更新）"),
     ("column", "posts", "fid", "版块 ID"),
-    ("column", "posts", "date", "帖子发布日期 YYYY-MM-DD"),
+    ("column", "posts", "date", "帖子发布日期 YYYY-MM-DD（由 data-timestamp 发布时间戳派生）"),
     ("column", "posts", "url", "帖子链接（入库为公开域名）"),
     ("column", "posts", "likes", "点赞数（TEXT 文本数字，可能为空）"),
     ("column", "posts", "author", "作者昵称（累计用户/活跃用户统计依据）"),
     ("column", "posts", "replies", "回复数（TEXT 文本数字，可能为空）"),
-    ("column", "posts", "created_at", "首次入库时间戳（标题重复时保持不变）"),
+    ("column", "posts", "created_at", "帖子发布时间戳 Unix 秒（来自 HTML data-timestamp；标题重复时覆盖为本次提取真值）"),
     ("column", "posts", "update_at", "最近覆盖写入时间戳（首次插入为空）"),
     ("column", "posts", "update_date", "最近覆盖写入日期（首次插入为空）"),
     # ---- run_days 列 ----

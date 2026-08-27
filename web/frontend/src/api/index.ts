@@ -160,6 +160,7 @@ export interface Overview {
   week_new: number
   latest_created_at: string | null
   latest_date: string | null
+  latest_run_at: string | null
   today_str: string
   total_users: number
   active_users: number

@@ -4,7 +4,7 @@ import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { CopyDocument, Download, Search, View } from '@element-plus/icons-vue'
 import { api, exportCsvUrl, isAborted, type FidMeta, type Post, type PostsPage } from '../api'
-import { formatRelativeTime } from '../utils/time'
+import { formatRelativeTime, formatFullTime } from '../utils/time'
 
 const route = useRoute()
 
@@ -237,8 +237,8 @@ onMounted(() => {
           <el-select v-model="sort" style="width: 150px" @change="load">
             <el-option label="日期倒序" value="date_desc" />
             <el-option label="日期正序" value="date_asc" />
-            <el-option label="入库时间倒序" value="created_at_desc" />
-            <el-option label="入库时间正序" value="created_at_asc" />
+            <el-option label="发布时间倒序" value="created_at_desc" />
+            <el-option label="发布时间正序" value="created_at_asc" />
             <el-option label="点赞数倒序" value="likes_desc" />
             <el-option label="回复数倒序" value="replies_desc" />
           </el-select>
@@ -286,9 +286,9 @@ onMounted(() => {
         <el-table-column prop="replies" label="回复" min-width="64" align="center">
           <template #default="{ row }">{{ row.replies || '-' }}</template>
         </el-table-column>
-        <el-table-column label="抓取时间" width="110">
+        <el-table-column label="发布时间" width="110">
           <template #default="{ row }">
-            <el-tooltip :content="row.created_at || '-'" placement="top">
+            <el-tooltip :content="formatFullTime(row.created_at)" placement="top">
               <span class="text-muted">{{ formatRelativeTime(row.created_at) }}</span>
             </el-tooltip>
           </template>

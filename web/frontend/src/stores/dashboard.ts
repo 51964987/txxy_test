@@ -1,5 +1,6 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
+import { formatFullTime } from '../utils/time'
 
 /**
  * Dashboard 全局共享状态：
@@ -18,8 +19,8 @@ export const useDashboardStore = defineStore('dashboard', () => {
 
   const updatedAtText = computed(() => {
     if (!updatedAtRaw.value) return '更新于 --'
-    const s = String(updatedAtRaw.value).replace('T', ' ')
-    return `更新于 ${s.slice(0, 19)}`
+    // 兼容旧 ISO 字符串与新 Unix 秒时间戳两种形态
+    return `更新于 ${formatFullTime(updatedAtRaw.value)}`
   })
 
   function setUpdatedAt(raw: string | null) {

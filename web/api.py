@@ -38,6 +38,8 @@ class OverviewResp(BaseModel):
     week_new: int
     latest_created_at: str | None = None
     latest_date: str | None = None
+    # 最近入库活动时间（run_days 最新批次的开始/结束时刻较大者），数据新鲜度依据
+    latest_run_at: str | None = None
     today_str: str
     total_users: int
     active_users: int
@@ -271,6 +273,13 @@ def stats_overview() -> OverviewResp:
             latest = conn.execute(
                 "SELECT MAX(created_at) AS created_at, MAX(date) AS date FROM posts"
             ).fetchone()
+            # 最近入库活动时间：run_days 每批运行开始即写 running 记录（created_at）、
+            # 结束时刷新 updated_at，取二者较大者。2026-08-27 起 posts.date 为帖子
+            # 真实发布日（不随跑批推进），"数据新鲜度"改以入库活动时间为准
+            run_ts = conn.execute(
+                "SELECT MAX(created_at) AS c, MAX(updated_at) AS u FROM run_days"
+            ).fetchone()
+            latest_run_at = max(str(run_ts["c"] or ""), str(run_ts["u"] or "")) or None
             # 用户指标：author 非空去重（累计用户 = 全部帖子的去重作者，活跃用户 = 当日帖子的去重作者）
             user_where = "author IS NOT NULL AND author <> ''"
             total_users = conn.execute(
@@ -289,12 +298,13 @@ def stats_overview() -> OverviewResp:
             "week_new": agg["week_c"],
             "latest_created_at": latest["created_at"],
             "latest_date": latest["date"],
+            "latest_run_at": latest_run_at,
             "today_str": today,
             "total_users": total_users,
             "active_users": active_users,
         }
 
-    return db.cached("overview_v2", _calc)
+    return db.cached("overview_v3", _calc)
 
 
 @router.get("/stats/boards")
