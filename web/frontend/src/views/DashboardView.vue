@@ -1213,7 +1213,7 @@ function renderFidTrendChart() {
             <div class="stat-label">累计帖子</div>
             <div class="stat-value"><RollingNumber :value="overview.total" /></div>
             <div class="stat-sub">
-              <span class="sub-up">今日 +{{ overview.today.toLocaleString() }}</span>
+              <span class="sub-up">近7日 +{{ overview.week_new.toLocaleString() }}</span>
               <span class="sub-neutral">覆盖 {{ fidDist.length }} 个版块</span>
             </div>
           </div>
