@@ -264,33 +264,21 @@ function renderTrendChart() {
         }
       })
     }
-    // 联动配色：当分版块图例聚焦某版块时，总趋势同步换为该版块色
+    // 联动配色：当分版块图例聚焦某版块时，全站趋势同步换为该版块色
     const base = linkedFid.value?.color ?? '#2f6fed'
     const data = trend.value.map((t) => t.count)
     const needZoom = trend.value.length > 31
-    const avg = data.length ? Math.round(data.reduce((s, v) => s + v, 0) / data.length) : 0
-    const lastIdx = data.length - 1
-    const mean = avg
-    const variance = data.length ? data.reduce((s, v) => s + (v - mean) ** 2, 0) / data.length : 0
-    const std = Math.sqrt(variance)
-    const stdUpper = mean + std
-    const stdLower = Math.max(0, mean - std)
-    const maxVal = data.length ? Math.max(...data) : 0
-    const minVal = data.length ? Math.min(...data) : 0
-    const maxIdx = data.indexOf(maxVal)
-    const minIdx = data.indexOf(minVal)
     trendChart.value.setOption({
       tooltip: {
         trigger: 'axis',
         appendToBody: true,
         z: 99999,
-        backgroundColor: 'rgba(31, 45, 61, 0.92)',
-        borderColor: 'rgba(47, 111, 237, 0.3)',
+        // tooltip 皮肤与「分版块发布对比」保持一致（富格式内容保留）
+        backgroundColor: 'rgba(20,28,48,0.92)',
+        borderColor: 'rgba(255,255,255,0.12)',
         borderWidth: 1,
-        padding: [12, 16],
-        textStyle: { color: '#e5e9f0', fontSize: 13 },
+        textStyle: { color: '#e6ebf5', fontSize: 12 },
         axisPointer: { type: 'line', lineStyle: { color: 'rgba(0,0,0,0.35)' } },
-        extraCssText: 'border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.25); backdrop-filter: blur(4px);',
         formatter: (params: any[]) => {
           const p = params[0]
           if (!p) return ''
@@ -332,7 +320,7 @@ function renderTrendChart() {
         data: trend.value.map((t) => t.date.slice(5)),
         axisLine: { lineStyle: { color: 'rgba(0,0,0,0.25)' } },
         axisTick: { show: false },
-        axisLabel: { color: '#6b7280', fontSize: 11 },
+        axisLabel: { color: '#6b7280', fontSize: 11, hideOverlap: true },
         // 不显示 X 轴（竖向）网格线
         splitLine: { show: false },
       },
@@ -357,121 +345,21 @@ function renderTrendChart() {
           name: '发布帖子',
           type: 'line',
           smooth: true,
+          symbol: 'circle',
+          symbolSize: 4,
           showSymbol: false,
-          animation: true,
-          animationDuration: 900,
-          animationDurationUpdate: 600,
-          animationEasing: 'cubicOut',
-          animationDelay: (idx: number) => idx * 24,
+          emphasis: { focus: 'series' },
           data,
-          lineStyle: {
-            width: 3,
-            color: new graphic.LinearGradient(0, 0, 1, 0, [
-              { offset: 0, color: base },
-              { offset: 1, color: '#6366f1' },
-            ]),
-            shadowColor: `${base}59`,
-            shadowBlur: 6,
-            shadowOffsetY: 2,
-          },
+          lineStyle: { width: 2, color: base, shadowColor: base, shadowBlur: 6 },
           itemStyle: { color: base },
           areaStyle: {
+            opacity: 0.06,
             color: new graphic.LinearGradient(0, 0, 0, 1, [
-              { offset: 0, color: `${base}59` },
-              { offset: 0.3, color: `${base}2e` },
-              { offset: 0.65, color: `${base}1a` },
-              { offset: 1, color: `${base}03` },
+              { offset: 0, color: base },
+              { offset: 1, color: 'rgba(255,255,255,0)' },
             ]),
           },
-          markArea: {
-            silent: true,
-            itemStyle: { color: `${base}0f` },
-            data: data.length > 1
-              ? [[
-                  { xAxis: 0, yAxis: stdLower },
-                  { xAxis: data.length - 1, yAxis: stdUpper },
-                ]]
-              : [],
-            label: { show: false },
-          },
-          markLine: {
-            silent: true,
-            symbol: 'none',
-            lineStyle: { color: 'rgba(239, 68, 68, 0.5)', type: 'dashed', width: 1 },
-            label: {
-              formatter: `日均 ${avg}`,
-              position: 'end',
-              fontSize: 10,
-              color: '#ef4444',
-            },
-            data: [{ yAxis: avg }],
-          },
         },
-        ...(data.length > 1
-          ? [
-              {
-                name: '峰值',
-                type: 'effectScatter',
-                coordinateSystem: 'cartesian2d',
-                zlevel: 3,
-                rippleEffect: { period: 3, scale: 5, brushType: 'stroke' },
-                symbolSize: 14,
-                itemStyle: { color: '#f59e0b' },
-                label: {
-                  show: true,
-                  position: 'top',
-                  formatter: '峰值',
-                  fontSize: 10,
-                  color: '#f59e0b',
-                  fontWeight: 600,
-                },
-                data: [{ value: [maxIdx, maxVal] }],
-                tooltip: { show: false },
-              },
-              {
-                name: '谷值',
-                type: 'effectScatter',
-                coordinateSystem: 'cartesian2d',
-                zlevel: 3,
-                rippleEffect: { period: 4, scale: 3, brushType: 'stroke' },
-                symbolSize: 10,
-                itemStyle: { color: '#ef4444' },
-                label: {
-                  show: true,
-                  position: 'bottom',
-                  formatter: '谷值',
-                  fontSize: 10,
-                  color: '#ef4444',
-                  fontWeight: 600,
-                },
-                data: [{ value: [minIdx, minVal] }],
-                tooltip: { show: false },
-              },
-            ]
-          : []),
-        ...(lastIdx >= 0
-          ? [
-              {
-                name: '最新',
-                type: 'effectScatter',
-                coordinateSystem: 'cartesian2d',
-                zlevel: 3,
-                rippleEffect: { period: 2.5, scale: 4, brushType: 'stroke' },
-                symbolSize: 12,
-                itemStyle: { color: '#2f6fed' },
-                label: {
-                  show: true,
-                  position: 'top',
-                  formatter: '最新',
-                  fontSize: 10,
-                  color: '#2f6fed',
-                  fontWeight: 600,
-                },
-                data: [{ value: [lastIdx, data[lastIdx]] }],
-                tooltip: { show: false },
-              },
-            ]
-          : []),
       ],
     })
   }
