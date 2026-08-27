@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { api } from '../api'
 import { useDashboardStore } from '../stores/dashboard'
@@ -21,6 +21,13 @@ onMounted(async () => {
   } catch {
     store.setEnableAutoRefresh(false)
   }
+  // 启动 Header 右侧实时时钟
+  store.startClock()
+})
+
+// 组件卸载时停止时钟，避免定时器泄漏
+onUnmounted(() => {
+  store.stopClock()
 })
 </script>
 
@@ -64,7 +71,7 @@ onMounted(async () => {
         <div class="header-right">
           <span class="updated-info">
             <el-icon class="text-muted"><Timer /></el-icon>
-            <span class="text-muted">{{ store.updatedAtText }}</span>
+            <span class="text-muted">{{ store.nowText }}</span>
           </span>
           <div v-if="store.enableAutoRefresh" class="auto-refresh-card">
             <span class="text-muted">自动刷新</span>

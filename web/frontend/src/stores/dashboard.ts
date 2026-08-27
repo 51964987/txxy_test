@@ -26,6 +26,33 @@ export const useDashboardStore = defineStore('dashboard', () => {
     updatedAtRaw.value = raw
   }
 
+  // Header 右侧实时时钟：每秒刷新，展示当前时间
+  const nowText = ref<string>(formatNow())
+  let nowTimer: ReturnType<typeof setInterval> | null = null
+
+  function formatNow(): string {
+    const d = new Date()
+    const pad = (n: number) => String(n).padStart(2, '0')
+    const date = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+    const time = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+    return `${date} ${time}`
+  }
+
+  function startClock() {
+    if (nowTimer !== null) return
+    nowText.value = formatNow()
+    nowTimer = setInterval(() => {
+      nowText.value = formatNow()
+    }, 1000)
+  }
+
+  function stopClock() {
+    if (nowTimer !== null) {
+      clearInterval(nowTimer)
+      nowTimer = null
+    }
+  }
+
   // Dashboard 页面注册的处理器（挂载时注册、卸载时注销）
   let autoChangeHandler: (() => void) | null = null
 
@@ -55,6 +82,9 @@ export const useDashboardStore = defineStore('dashboard', () => {
     autoRefresh,
     updatedAtText,
     setUpdatedAt,
+    nowText,
+    startClock,
+    stopClock,
     registerAutoChange,
     setAutoRefresh,
     setEnableAutoRefresh,
