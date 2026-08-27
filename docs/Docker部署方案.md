@@ -30,7 +30,7 @@
 
 `run_batch.py` 默认 `USE_LOCAL_PROXY=True`：抓取依赖**本机 Windows 程序 `web.exe`**（监听 `127.0.0.1:1024`），运行前自动启动、结束后关闭。**该程序是 Windows 可执行文件，Docker/Linux 容器内不存在**。
 
-好在代码已内置直连模式：`USE_LOCAL_PROXY=False` 时**完全不碰 web.exe**（`run_batch.py` 第 366-381 行），改为直接访问 `REMOTE_ROOT_URL` 实际域名抓取，且入库链接始终使用 `REMOTE_ROOT_URL`（`--public` 参数）。
+好在代码已内置直连模式：`USE_LOCAL_PROXY=False` 时**完全不碰 web.exe**（`run_batch.py` 约第 386-401 行直连分支），改为直接访问 `REMOTE_ROOT_URL` 实际域名抓取，且入库链接始终使用 `REMOTE_ROOT_URL`（`--public` 参数）。
 
 > **结论：Docker 部署必须且只需运行 `python run_batch.py false`（关闭本地代理 + 直连域名）。**
 

@@ -35,7 +35,8 @@ txxy_test/
 │   ├── config.py       # 服务配置（端口/公开域名/路径/自动刷新开关，可用环境变量覆盖）
 │   ├── db.py           # 只读 SQLite 访问层（PRAGMA query_only + 缓存 + URL 归一化）
 │   ├── runs.py         # 运行记录读取（SQLite run_days/run_sections 优先，日志兼容回退）
-│   ├── resources.py    # 下载资源扫描（downloads）
+│   ├── resources.py    # 资源管理：扫描 downloads/ 目录（只读），按文件夹分组返回文件清单
+│   ├── download_tasks.py  # 下载中心后端核心（任务队列，异步下载 + 状态持久化）
 │   └── frontend/       # Vue3 + Vite + TypeScript + Element Plus + Pinia + ECharts SPA
 │       └── src/stores/dashboard.ts  # Pinia 全局状态（自动刷新/更新时间，Header 与页面解耦）
 ├── start_web.bat       # 一键启动前端展示服务
@@ -204,6 +205,14 @@ python -X utf8 web/app.py          # 启动后访问 http://127.0.0.1:8088（需
   - 帖子浏览（`/posts`）：版块多选 / 日期区间 / 标题或作者关键词筛选，分页排序（日期/入库/点赞/回复），支持从数据总览下钻（带 `fid` / `author` / `sort` 预筛选，下钻作者回填关键词框）；操作栏图标按钮（悬浮「打开/复制链接」），一键导出 CSV（10 列带 BOM，Excel 可直接打开）；
   - 运行记录：读取 `db/posts.db` 的 `run_days`/`run_sections`（每次运行一条、历史保留，含运行时间），**每页 5 条分页**，页面内 4s 轮询实时刷新（running 状态实时进度），点击查看各版块成功/失败/CSV 与 SQLite 条数/耗时；
   - 资源管理：扫描 `downloads/` 目录，按文件夹分组展示文件清单与大小，复制路径；
+  - 下载中心（`/downloads`）：提交离线下载任务（URL 列表），异步执行并实时展示任务进度、逐 URL 明细，支持取消与删除；后端由 `download_tasks.py` 维护任务队列，状态持久化到 `outputs/download_tasks.json`（由 `TXXY_DOWNLOAD_TASKS_FILE` 配置，Web 进程不触碰 `posts.db`）；
+- **下载中心接口**（`/api/downloads`）：
+  - `GET /api/downloads`：任务列表（含状态、进度、逐 URL 明细）；
+  - `POST /api/downloads`：提交下载任务（`{ "urls": [...] }`，立即返回任务 ID，异步执行）；
+  - `GET /api/downloads/{tid}`：任务详情；
+  - `POST /api/downloads/{tid}/cancel`：取消运行中任务；
+  - `DELETE /api/downloads/{tid}`：删除任务（终态或已取消可删）；
+  - 任务状态持久化于 `outputs/download_tasks.json`（由 `TXXY_DOWNLOAD_TASKS_FILE` 配置），Web 进程仅做文件系统下载（复用 `download_files.process_one`），不写 `posts.db`；
 - **只读安全**：后端以 `PRAGMA query_only=ON` 只读访问 `db/posts.db`，绝不写库，与抓取写进程（WAL 模式）安全并发；
 - **URL 归一化**：旧数据中 `http://127.0.0.1:1024` 前缀在展示层统一替换为 `PUBLIC_ROOT`（`web/config.py`，默认 `https://txxy.com`，与 `run_batch.REMOTE_ROOT_URL` 一致），**不改数据库**；
 - **配置**：`web/config.py` 顶部可用环境变量覆盖（`TXXY_WEB_HOST` 地址 / `TXXY_WEB_PORT` 端口 / `PUBLIC_ROOT` 域名 / `POSTS_DB` 数据库路径等），默认监听 `127.0.0.1:8088`（8080 常被本机其他程序占用）；
@@ -270,3 +279,4 @@ schtasks /Delete /TN "txxy_daily_batch" /F
 | `docs/Docker部署方案.md` | 容器化与三环境一键部署 |
 | `docs/性能优化方案-数据总览卡顿.md` | 数据总览页 SQL/前端懒加载性能排查与优化 |
 | `docs/性能优化方案-帖子浏览页卡顿.md` | 帖子浏览页 `/api/posts` 分页与索引性能排查与优化 |
+| `docs/download_tasks.md` | 下载中心（download_tasks）设计与实现：任务队列、异步下载、状态持久化、前端轮询 |
