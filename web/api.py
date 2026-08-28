@@ -842,6 +842,32 @@ def downloads_cancel(tid: str) -> dict[str, Any]:
     return {"id": tid}
 
 
+@router.post("/downloads/{tid}/retry")
+def downloads_retry(tid: str) -> dict[str, Any]:
+    """重跑失败任务（D1）：收集原任务未成功项生成新任务，返回重跑链接数。"""
+    count = download_tasks.manager.retry(tid)
+    if count is None:
+        raise HTTPException(404, f"未找到下载任务 {tid}")
+    if count == 0:
+        raise HTTPException(400, "该任务没有可重试的失败链接")
+    return {"id": tid, "retried": count}
+
+
+@router.post("/downloads/{tid}/prioritize")
+def downloads_prioritize(tid: str) -> dict[str, Any]:
+    """排队任务插队（D5）：仅 pending 且仍在队列中的任务有效。"""
+    if not download_tasks.manager.prioritize(tid):
+        raise HTTPException(400, f"任务 {tid} 不在排队中，无法置顶")
+    return {"id": tid}
+
+
+@router.post("/downloads/clear")
+def downloads_clear() -> dict[str, Any]:
+    """清空全部终态任务记录（D9）：done / failed / cancelled 一并删除。"""
+    cleared = download_tasks.manager.clear_finished()
+    return {"cleared": cleared}
+
+
 @router.delete("/downloads/{tid}")
 def downloads_delete(tid: str) -> dict[str, Any]:
     """删除下载任务记录：运行中的先请求取消，已结束的直接移除。"""

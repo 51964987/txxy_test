@@ -2,10 +2,14 @@
 
 职责：
 - 接收前端提交的 URL 列表，创建任务并入队，立即返回任务 ID（异步执行）；
-- 单 worker 线程串行消费任务，任务内用线程池按 config.DOWNLOAD_CONCURRENCY 并行下载 URL；
-- 每个 URL 复用根目录 download_files.process_one 完成下载（不重复造轮子）；
+- 按 config.DOWNLOAD_TASK_CONCURRENCY 启动 worker 线程消费任务（默认 1 = 任务串行），
+  任务内用线程池按 config.DOWNLOAD_CONCURRENCY 并行下载 URL；
+- 每个 URL 复用根目录 download_files.process_one_detail 完成下载（不重复造轮子），
+  回传保存目录（saved_dir，供资源管理页关联任务）与单链接耗时（elapsed）；
 - 任务状态与逐 URL 明细实时持久化到 config.DOWNLOAD_TASKS_FILE，服务重启不丢失；
-- 支持运行中任务取消（处理下一个 URL 前检查取消标志，已提交的并发项自然收尾）。
+  持久化时按 DOWNLOAD_TASK_MAX_KEEP 裁剪历史（仅删终态，防 JSON 无限膨胀）；
+- 支持运行中任务取消（处理下一个 URL 前检查取消标志，已提交的并发项自然收尾）；
+- 支持排队任务插队（优先级队列 + 队列令牌校验，见 prioritize）与失败项重试（retry）。
 
 约定：
 - 本模块运行在 Web 进程内，仅做文件系统下载，不触碰 posts.db（Web 进程严禁写库）；
@@ -16,6 +20,7 @@ import json
 import queue
 import sys
 import threading
+import time
 import uuid
 from datetime import datetime
 from typing import Any
@@ -32,17 +37,18 @@ import download_files  # noqa: E402
 _TERMINAL = {"done", "failed", "cancelled"}
 
 
-def _run_one(url: str) -> tuple[dict[str, int], str | None, str | None]:
-    """执行单个 URL 下载，返回 (stats, saved_dir, error)。
+def _run_one(url: str) -> tuple[dict[str, int], str | None, str | None, float]:
+    """执行单个 URL 下载，返回 (stats, saved_dir, error, elapsed)。
 
     saved_dir 为下载保存目录（相对 downloads/ 的路径，无法确定时为 None），
-    供资源管理页按目录关联下载任务；单 URL 的异常兜底为失败记录，不中断整个任务。
+    elapsed 为单链接耗时秒数；单 URL 的异常兜底为失败记录，不中断整个任务。
     """
+    start = time.monotonic()
     try:
         stats, saved_dir = download_files.process_one_detail(url)
-        return stats, saved_dir, None
+        return stats, saved_dir, None, time.monotonic() - start
     except Exception as exc:  # 任务级兜底：单个 URL 失败不影响其余 URL
-        return {}, None, str(exc)
+        return {}, None, str(exc), time.monotonic() - start
 
 
 class DownloadTaskManager:
@@ -51,33 +57,49 @@ class DownloadTaskManager:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._tasks: dict[str, dict[str, Any]] = {}
-        self._queue: "queue.Queue[dict[str, Any] | None]" = queue.Queue()
-        self._worker: threading.Thread | None = None
+        # 优先级队列：元素 (priority, seq, task_id)；priority 0 = 插队 / 1 = 普通，
+        # seq 单调递增保证同优先级 FIFO，并作为任务出队令牌（见 prioritize）
+        self._queue: "queue.Queue[tuple[int, int, str | None]]" = queue.PriorityQueue()
+        self._seq = 0
+        self._workers: list[threading.Thread] = []
         self._load()
 
     # ---------------- 生命周期 ----------------
 
     def start(self) -> None:
-        """启动消费线程（幂等，重复调用不产生多个 worker）。"""
+        """按 DOWNLOAD_TASK_CONCURRENCY 启动消费线程（幂等，存活数不足时补足）。"""
         with self._lock:
-            if self._worker is not None and self._worker.is_alive():
-                return
-            self._worker = threading.Thread(
-                target=self._run_loop, name="download-tasks", daemon=True
-            )
-            self._worker.start()
+            self._workers = [w for w in self._workers if w.is_alive()]
+            want = max(1, config.DOWNLOAD_TASK_CONCURRENCY)
+            while len(self._workers) < want:
+                w = threading.Thread(target=self._run_loop, name="download-tasks", daemon=True)
+                w.start()
+                self._workers.append(w)
 
     def _run_loop(self) -> None:
-        """worker 主循环：串行取出任务并执行（任务之间不并发，避免网络请求拥塞）。"""
+        """worker 主循环：按优先级取出任务并执行（多 worker 时任务间受并发数约束）。"""
         while True:
-            task = self._queue.get()
-            if task is None:
+            _, seq, tid = self._queue.get()
+            if tid is None:
                 break
+            with self._lock:
+                task = self._tasks.get(tid)
+                # 队列令牌校验：元素 seq 与任务当前 _ticket 不一致说明已被更高优先级
+                # 元素顶替（插队后旧元素失效），直接跳过，避免重复执行
+                valid = (
+                    task is not None
+                    and task.get("_queued")
+                    and task.get("_ticket") == seq
+                )
+                if valid:
+                    task["_queued"] = False
+            if not valid or task is None:
+                continue
             self._execute(task)
 
     # ---------------- 外部接口 ----------------
 
-    def submit(self, urls: list[str]) -> str:
+    def submit(self, urls: list[str], priority: bool = False) -> str:
         """提交下载任务，返回任务 ID（立即返回，后台排队执行）。"""
         self.start()
         now = self._now()
@@ -88,7 +110,7 @@ class DownloadTaskManager:
             "total": len(urls),
             "done": 0,
             "items": [
-                {"url": u, "status": "pending", "stats": {}, "error": None, "saved_dir": None}
+                {"url": u, "status": "pending", "stats": {}, "error": None, "saved_dir": None, "elapsed": None}
                 for u in urls
             ],
             "logs": [f"任务已创建（共 {len(urls)} 个链接）"],
@@ -96,23 +118,28 @@ class DownloadTaskManager:
             "started_at": None,
             "finished_at": None,
             "cancel_requested": False,
+            "priority": bool(priority),
+            "_queued": True,
+            "_ticket": 0,
         }
         with self._lock:
+            self._seq += 1
+            task["_ticket"] = self._seq
             self._tasks[task["id"]] = task
+            self._queue.put((0 if priority else 1, self._seq, task["id"]))
             self._persist_locked()
-        self._queue.put(task)
         return task["id"]
 
     def list(self) -> list[dict[str, Any]]:
-        """全部任务（概要，含 items/logs 供前端直接渲染）。"""
+        """全部任务（概要，含 items/logs 供前端直接渲染；剔除下划线内部字段）。"""
         with self._lock:
-            return [dict(t) for t in self._tasks.values()]
+            return [self._public(t) for t in self._tasks.values()]
 
     def get(self, tid: str) -> dict[str, Any] | None:
         """单个任务详情，不存在返回 None。"""
         with self._lock:
             t = self._tasks.get(tid)
-            return dict(t) if t else None
+            return self._public(t) if t else None
 
     def cancel(self, tid: str) -> bool:
         """取消未完成任务（pending/running）：标记取消标志，worker 会在下一个 URL 前收手。"""
@@ -138,7 +165,66 @@ class DownloadTaskManager:
             self._persist_locked()
             return True
 
+    def retry(self, tid: str) -> int | None:
+        """重跑失败任务（D1）：收集原任务中未成功项生成新任务，原任务记录保留。
+
+        重跑范围：status 为 fail / cancelled（含服务重启由 pending 转来）与遗留 running 的项；
+        已成功（ok）与已存在跳过（skip）的项不重复下载。
+        返回重跑链接数；任务不存在返回 None，无可重试项返回 0。
+        """
+        with self._lock:
+            t = self._tasks.get(tid)
+            if not t:
+                return None
+            urls = [
+                it["url"]
+                for it in t["items"]
+                if it.get("status") in ("fail", "cancelled", "running")
+            ]
+        if not urls:
+            return 0
+        new_id = self.submit(urls)
+        with self._lock:
+            t = self._tasks.get(tid)
+            if t:
+                t["logs"].append(f"已重试 {len(urls)} 个未成功链接（新任务 {new_id}）")
+                self._persist_locked()
+        return len(urls)
+
+    def prioritize(self, tid: str) -> bool:
+        """排队任务插队（D5）：仅 pending 且仍在队列中的任务有效。
+
+        实现方式：为任务换发新的队列令牌并以最高优先级重新入队，worker 消费时校验令牌，
+        旧队列元素自动失效。
+        """
+        with self._lock:
+            t = self._tasks.get(tid)
+            if not t or t["status"] != "pending" or not t.get("_queued"):
+                return False
+            self._seq += 1
+            t["_ticket"] = self._seq
+            t["priority"] = True
+            self._queue.put((0, self._seq, tid))
+            t["logs"].append("任务已置顶，将优先执行")
+            self._persist_locked()
+            return True
+
+    def clear_finished(self) -> int:
+        """清空全部终态任务记录（D9）：done / failed / cancelled 一并删除，返回删除数。"""
+        with self._lock:
+            stale = [tid for tid, t in self._tasks.items() if t["status"] in _TERMINAL]
+            for tid in stale:
+                self._tasks.pop(tid, None)
+            if stale:
+                self._persist_locked()
+            return len(stale)
+
     # ---------------- 内部实现 ----------------
+
+    @staticmethod
+    def _public(t: dict[str, Any]) -> dict[str, Any]:
+        """剔除下划线开头的内部字段（队列令牌等），避免泄漏到 API 与持久化展示。"""
+        return {k: v for k, v in t.items() if not k.startswith("_")}
 
     def _execute(self, task: dict[str, Any]) -> None:
         """执行单个任务：线程池按并发数并行处理 URL，逐个记录结果并落盘。"""
@@ -149,7 +235,7 @@ class DownloadTaskManager:
         items: list[dict[str, Any]] = task["items"]
         concurrency = max(1, min(config.DOWNLOAD_CONCURRENCY, task["total"]))
         next_idx = 0
-        futures: "dict[cf.Future[tuple[dict[str, int], str | None, str | None]], int]" = {}
+        futures: "dict[cf.Future[tuple[dict[str, int], str | None, str | None, float]], int]" = {}
         with cf.ThreadPoolExecutor(
             max_workers=concurrency, thread_name_prefix="download-url"
         ) as pool:
@@ -166,8 +252,8 @@ class DownloadTaskManager:
                 done, _ = cf.wait(futures, return_when=cf.FIRST_COMPLETED)
                 for fut in done:
                     i = futures.pop(fut)
-                    stats, saved_dir, error = fut.result()
-                    self._record_result(task, i, stats, saved_dir, error)
+                    stats, saved_dir, error, elapsed = fut.result()
+                    self._record_result(task, i, stats, saved_dir, error, elapsed)
                 # 每完成一个补提交一个，直到全部提交或已请求取消
                 while (
                     next_idx < task["total"]
@@ -196,12 +282,14 @@ class DownloadTaskManager:
         stats: dict[str, int],
         saved_dir: str | None,
         error: str | None,
+        elapsed: float,
     ) -> None:
         """记录单个 URL 的下载结果（状态判定口径与 download_files 汇总一致）。"""
         item: dict[str, Any] = task["items"][idx]
         item["stats"] = stats
         if saved_dir:
             item["saved_dir"] = saved_dir
+        item["elapsed"] = round(elapsed, 1)
         if error:
             item["error"] = error
         ok_items = sum(v for k, v in stats.items() if k not in ("跳过", "失败"))
@@ -233,8 +321,22 @@ class DownloadTaskManager:
         with self._lock:
             self._persist_locked()
 
+    def _prune_locked(self) -> None:
+        """历史裁剪（D9）：任务数超出 DOWNLOAD_TASK_MAX_KEEP 时，
+        按创建时间从旧到新删除终态任务（运行中/排队任务不删）。"""
+        overflow = len(self._tasks) - config.DOWNLOAD_TASK_MAX_KEEP
+        if overflow <= 0:
+            return
+        terminal_sorted = sorted(
+            (t for t in self._tasks.values() if t["status"] in _TERMINAL),
+            key=lambda t: t["created_at"],
+        )
+        for t in terminal_sorted[:overflow]:
+            self._tasks.pop(t["id"], None)
+
     def _persist_locked(self) -> None:
         """在持锁状态下将全部任务写盘（临时文件 + 原子替换，避免写一半损坏）。"""
+        self._prune_locked()
         try:
             config.DOWNLOAD_TASKS_FILE.parent.mkdir(parents=True, exist_ok=True)
             tmp = config.DOWNLOAD_TASKS_FILE.with_suffix(".json.tmp")

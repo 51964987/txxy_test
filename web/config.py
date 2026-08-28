@@ -33,6 +33,12 @@ PORT = int(os.environ.get("TXXY_WEB_PORT", "8088"))
 # ---------------- 下载中心（URL 批量下载） ----------------
 # 单任务内并行下载的 URL 数：并发过高易触发源站限流/封禁，默认 2 保守取值。
 DOWNLOAD_CONCURRENCY = int(os.environ.get("TXXY_DOWNLOAD_CONCURRENCY", "2"))
+# 任务间并行数（全局 worker 线程数）：默认 1 = 任务严格串行（最保守，防源站反爬）；
+# 调大后多个任务可同时执行，每个任务内部仍按 DOWNLOAD_CONCURRENCY 并行下载。
+DOWNLOAD_TASK_CONCURRENCY = int(os.environ.get("TXXY_DOWNLOAD_TASK_CONCURRENCY", "1"))
+# 任务历史保留条数上限：持久化时超出部分按创建时间从旧到新裁剪（仅删终态任务），
+# 防止 download_tasks.json 无限膨胀。
+DOWNLOAD_TASK_MAX_KEEP = int(os.environ.get("TXXY_DOWNLOAD_TASK_MAX_KEEP", "200"))
 # 单次批量提交的 URL 数量上限：防止误操作一次性提交过量下载请求。
 DOWNLOAD_MAX_BATCH = int(os.environ.get("TXXY_DOWNLOAD_MAX_BATCH", "50"))
 # 下载任务历史持久化文件：服务重启后任务列表/状态不丢失。

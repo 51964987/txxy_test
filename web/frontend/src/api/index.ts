@@ -315,6 +315,8 @@ export interface DownloadItem {
   stats: Record<string, number>
   error: string | null
   saved_dir: string | null
+  /** 单链接耗时（秒，1 位小数；未执行为 null） */
+  elapsed?: number | null
 }
 
 export interface DownloadTask {
@@ -366,6 +368,9 @@ export const api = {
   downloadTasks: () => get<{ tasks: DownloadTask[] }>('/downloads'),
   downloadTask: (id: string) => get<DownloadTask>(`/downloads/${id}`),
   cancelDownload: (id: string) => post<{ id: string }>(`/downloads/${id}/cancel`),
+  retryDownload: (id: string) => post<{ id: string; retried: number }>(`/downloads/${id}/retry`),
+  prioritizeDownload: (id: string) => post<{ id: string }>(`/downloads/${id}/prioritize`),
+  clearDownloads: () => post<{ cleared: number }>('/downloads/clear'),
   deleteDownload: (id: string) => del<{ id: string }>(`/downloads/${id}`),
 }
 
