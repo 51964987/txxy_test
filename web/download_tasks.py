@@ -32,15 +32,17 @@ import download_files  # noqa: E402
 _TERMINAL = {"done", "failed", "cancelled"}
 
 
-def _run_one(url: str) -> tuple[dict[str, int], str | None]:
-    """执行单个 URL 下载，返回 (stats, error)。
+def _run_one(url: str) -> tuple[dict[str, int], str | None, str | None]:
+    """执行单个 URL 下载，返回 (stats, saved_dir, error)。
 
-    单 URL 的异常兜底为失败记录，不中断整个任务。
+    saved_dir 为下载保存目录（相对 downloads/ 的路径，无法确定时为 None），
+    供资源管理页按目录关联下载任务；单 URL 的异常兜底为失败记录，不中断整个任务。
     """
     try:
-        return download_files.process_one(url), None
+        stats, saved_dir = download_files.process_one_detail(url)
+        return stats, saved_dir, None
     except Exception as exc:  # 任务级兜底：单个 URL 失败不影响其余 URL
-        return {}, str(exc)
+        return {}, None, str(exc)
 
 
 class DownloadTaskManager:
@@ -147,7 +149,7 @@ class DownloadTaskManager:
         items: list[dict[str, Any]] = task["items"]
         concurrency = max(1, min(config.DOWNLOAD_CONCURRENCY, task["total"]))
         next_idx = 0
-        futures: "dict[cf.Future[tuple[dict[str, int], str | None]], int]" = {}
+        futures: "dict[cf.Future[tuple[dict[str, int], str | None, str | None]], int]" = {}
         with cf.ThreadPoolExecutor(
             max_workers=concurrency, thread_name_prefix="download-url"
         ) as pool:
@@ -164,8 +166,8 @@ class DownloadTaskManager:
                 done, _ = cf.wait(futures, return_when=cf.FIRST_COMPLETED)
                 for fut in done:
                     i = futures.pop(fut)
-                    stats, error = fut.result()
-                    self._record_result(task, i, stats, error)
+                    stats, saved_dir, error = fut.result()
+                    self._record_result(task, i, stats, saved_dir, error)
                 # 每完成一个补提交一个，直到全部提交或已请求取消
                 while (
                     next_idx < task["total"]
@@ -188,11 +190,18 @@ class DownloadTaskManager:
         self._save()
 
     def _record_result(
-        self, task: dict[str, Any], idx: int, stats: dict[str, int], error: str | None
+        self,
+        task: dict[str, Any],
+        idx: int,
+        stats: dict[str, int],
+        saved_dir: str | None,
+        error: str | None,
     ) -> None:
         """记录单个 URL 的下载结果（状态判定口径与 download_files 汇总一致）。"""
         item: dict[str, Any] = task["items"][idx]
         item["stats"] = stats
+        if saved_dir:
+            item["saved_dir"] = saved_dir
         if error:
             item["error"] = error
         ok_items = sum(v for k, v in stats.items() if k not in ("跳过", "失败"))

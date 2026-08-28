@@ -7,7 +7,7 @@ from datetime import timedelta
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
 import config
@@ -21,8 +21,11 @@ router = APIRouter()
 
 # P2-13 接口限流：按 (client_ip, 路径) 固定窗口计数，超限返回 429
 # /posts/export 导出为较重操作，限 5 次/分；/resources 扫描较快，限 60 次/分
+# B5 图片预览按需点击加载，限 60 次/分；B8 打开目录为执行类操作，限 10 次/分
 ExportRateLimit = Annotated[None, Depends(ratelimit.rate_limit(5, 60))]
 ResourcesRateLimit = Annotated[None, Depends(ratelimit.rate_limit(60, 60))]
+FileRateLimit = Annotated[None, Depends(ratelimit.rate_limit(60, 60))]
+OpenRateLimit = Annotated[None, Depends(ratelimit.rate_limit(10, 60))]
 
 # ================= 响应模型（P1-10） =================
 # 仅覆盖结构稳定的核心接口；/runs、/resources 因字段条件性存在（运行中 / 日志回退等）不强制
@@ -747,6 +750,45 @@ def runs_detail(date_str: str) -> dict[str, Any]:
 @router.get("/resources")
 def resources_list(_: ResourcesRateLimit) -> dict[str, Any]:
     return resources.scan()
+
+
+class ResourceOpenReq(BaseModel):
+    """B8 打开目录请求体：downloads/ 内相对路径（空串表示打开 downloads/ 根目录）。"""
+
+    rel_path: str = ""
+
+
+@router.get("/resources/source")
+def resources_source(name: str) -> dict[str, Any]:
+    """目录来源回溯（B1）：目录名（= 页面标题）匹配 posts 返回原帖信息。"""
+    name = (name or "").strip()
+    if not name:
+        raise HTTPException(400, "缺少目录名")
+    return db.cached(f"res_src_{name}", lambda: resources.source_lookup(name))
+
+
+@router.get("/resources/file")
+def resources_file(_: FileRateLimit, path: str) -> FileResponse:
+    """受控图片预览（B5）：仅允许 downloads/ 内、扩展名在图片白名单内的文件，inline 返回。"""
+    target = resources.resolve_safe(path)
+    if target is None:
+        raise HTTPException(404, "文件不存在或路径越界")
+    media_type = resources.PREVIEW_TYPES.get(target.suffix.lower())
+    if media_type is None:
+        raise HTTPException(400, "仅支持预览图片文件")
+    return FileResponse(target, media_type=media_type)
+
+
+@router.post("/resources/open")
+def resources_open(_: OpenRateLimit, req: ResourceOpenReq) -> dict[str, Any]:
+    """调起系统文件管理器打开 downloads/ 下的目录（B8，仅 Windows 生效）。"""
+    try:
+        ok = resources.open_folder(req.rel_path)
+    except OSError as e:
+        raise HTTPException(501, str(e))
+    if not ok:
+        raise HTTPException(404, "目录不存在或路径越界")
+    return {"ok": True}
 
 
 # ---------------- 下载中心 ----------------

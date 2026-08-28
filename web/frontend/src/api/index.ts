@@ -295,6 +295,17 @@ export interface Resources {
   items: ResourceItem[]
 }
 
+/** 资源目录来源帖（B1：目录名 = 帖子标题，匹配 posts 表结果） */
+export interface ResourceSource {
+  matched: boolean
+  title?: string
+  fid?: string | null
+  fid_name?: string
+  date?: string
+  author?: string
+  url?: string
+}
+
 export type DownloadItemStatus = 'pending' | 'ok' | 'skip' | 'fail' | 'cancelled'
 export type DownloadTaskStatus = 'pending' | 'running' | 'done' | 'failed' | 'cancelled'
 
@@ -348,6 +359,9 @@ export const api = {
   runDetail: (dir: string) => get<RunDetail>(`/runs/${dir}`),
   runDetailById: (id: number) => get<RunDetail>(`/runs/detail/${id}`),
   resources: () => get<Resources>('/resources'),
+  resourceSource: (name: string) => get<ResourceSource>('/resources/source', { name }),
+  openResourceFolder: (relPath: string) =>
+    post<{ ok: boolean }>('/resources/open', { rel_path: relPath }),
   submitDownload: (urls: string[]) => post<{ id: string; count: number }>('/downloads', { urls }),
   downloadTasks: () => get<{ tasks: DownloadTask[] }>('/downloads'),
   downloadTask: (id: string) => get<DownloadTask>(`/downloads/${id}`),
@@ -360,6 +374,11 @@ export function exportCsvUrl(p: Record<string, string | undefined>): string {
   const qs = new URLSearchParams()
   for (const [k, v] of Object.entries(p)) if (v) qs.set(k, v)
   return `/api/posts/export?${qs.toString()}`
+}
+
+/** 生成资源图片预览地址（B5：受控接口，仅 downloads/ 内图片白名单） */
+export function resourceFileUrl(relPath: string): string {
+  return `/api/resources/file?path=${encodeURIComponent(relPath)}`
 }
 
 export function formatSize(bytes: number): string {
