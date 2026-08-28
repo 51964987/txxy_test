@@ -106,10 +106,10 @@ async function loadTasks() {
     const r = await api.downloadTasks()
     const map: Record<string, { id: string; status: string }> = {}
     for (const t of r.tasks) {
-      for (const it of t.items) {
-        if (!it.saved_dir) continue
+      // R1 起任务列表为概要视图，saved_dirs 为该任务已保存目录的去重集合
+      for (const dir0 of t.saved_dirs ?? []) {
         // saved_dir 统一取顶层目录名（与资源目录 name 同口径）
-        const dir = it.saved_dir.replace(/\\/g, '/').replace(/\/+$/, '').split('/')[0]
+        const dir = dir0.replace(/\\/g, '/').replace(/\/+$/, '').split('/')[0]
         if (dir && !map[dir]) map[dir] = { id: t.id, status: t.status }
       }
     }

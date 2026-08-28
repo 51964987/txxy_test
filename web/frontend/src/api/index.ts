@@ -319,19 +319,32 @@ export interface DownloadItem {
   elapsed?: number | null
 }
 
-export interface DownloadTask {
+/** 任务概要（R1：GET /downloads 与 SSE 推送同构，不含 items/logs） */
+export interface DownloadTaskSummary {
   id: string
   status: DownloadTaskStatus
-  urls: string[]
   total: number
   done: number
-  items: DownloadItem[]
-  logs: string[]
   created_at: string
   started_at: string | null
   finished_at: string | null
   cancel_requested: boolean
+  priority?: boolean
+  /** 各状态链接计数（ok/skip/fail/running/pending/cancelled） */
+  items_summary?: Record<string, number>
+  /** 已产生的保存目录（供资源管理页 B7 关联） */
+  saved_dirs?: string[]
 }
+
+/** 任务详情（GET /downloads/{tid}：概要字段 + 逐 URL 明细与日志） */
+export interface DownloadTaskDetail extends DownloadTaskSummary {
+  urls: string[]
+  items: DownloadItem[]
+  logs: string[]
+}
+
+/** 兼容别名：详情即完整任务结构 */
+export type DownloadTask = DownloadTaskDetail
 
 export const api = {
   config: () => get<AppConfig>('/config'),
@@ -365,8 +378,9 @@ export const api = {
   openResourceFolder: (relPath: string) =>
     post<{ ok: boolean }>('/resources/open', { rel_path: relPath }),
   submitDownload: (urls: string[]) => post<{ id: string; count: number }>('/downloads', { urls }),
-  downloadTasks: () => get<{ tasks: DownloadTask[] }>('/downloads'),
-  downloadTask: (id: string) => get<DownloadTask>(`/downloads/${id}`),
+  downloadTasks: () => get<{ tasks: DownloadTaskSummary[] }>('/downloads'),
+  downloadTask: (id: string) => get<DownloadTaskDetail>(`/downloads/${id}`),
+  checkDownloadDup: (urls: string[]) => post<{ duplicated: string[] }>('/downloads/check-dup'),
   cancelDownload: (id: string) => post<{ id: string }>(`/downloads/${id}/cancel`),
   retryDownload: (id: string) => post<{ id: string; retried: number }>(`/downloads/${id}/retry`),
   prioritizeDownload: (id: string) => post<{ id: string }>(`/downloads/${id}/prioritize`),

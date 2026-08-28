@@ -8,16 +8,17 @@ import {
 import {
   api,
   isAborted,
-  type DownloadTask,
+  type DownloadTaskDetail,
+  type DownloadTaskSummary,
 } from '../api'
 
-const REFRESH_INTERVAL = 3000 // 任务页固定 3s 轮询（页面可见时）
+const REFRESH_INTERVAL = 3000 // 轮询降级通道间隔（SSE 正常时不轮询）
 
-const tasks = ref<DownloadTask[]>([])
+const tasks = ref<DownloadTaskSummary[]>([])
 const loading = ref(false)
 const error = ref('') // 轮询失败提示信息
 
-let timer: number | null = null
+let pollTimer: number | null = null
 
 // ---- D8 提交区：多行粘贴自动拆解 URL ----
 const inputText = ref('') // 原始输入（每行一个 URL，兼容分号/逗号/空格分隔）
@@ -62,7 +63,7 @@ const filterOptions = computed(() => [
   { label: `失败（${failedCount.value}）`, value: 'failed' },
   { label: `已取消（${cancelledCount.value}）`, value: 'cancelled' },
 ])
-const filteredTasks = computed<DownloadTask[]>(() => {
+const filteredTasks = computed<DownloadTaskSummary[]>(() => {
   if (filterStatus.value === 'all') return tasks.value
   if (filterStatus.value === 'active')
     return tasks.value.filter((t) => t.status === 'running' || t.status === 'pending')
@@ -76,13 +77,7 @@ async function submitUrls() {
     ElMessage.warning('请输入至少一个有效 URL（http/https 开头）')
     return
   }
-  const doneSet = new Set<string>()
-  for (const t of tasks.value) {
-    for (const it of t.items) {
-      if (it.status === 'ok' || it.status === 'skip') doneSet.add(it.url)
-    }
-  }
-  const dup = urls.filter((u) => doneSet.has(u))
+  const dup = (await api.checkDownloadDup(urls)).duplicated
   if (dup.length > 0) {
     const go = await ElMessageBox.confirm(
       `有 ${dup.length} 个链接此前已成功下载过，重复提交会自动跳过已存在文件。仍要提交吗？`,
@@ -106,7 +101,7 @@ async function submitUrls() {
 
 // ---- D4 完成通知：轮询中检测任务状态从非终态转为终态 ----
 const knownStatus = new Map<string, string>()
-function diffAndNotify(list: DownloadTask[]) {
+function diffAndNotify(list: DownloadTaskSummary[]) {
   for (const t of list) {
     const prev = knownStatus.get(t.id)
     if (prev && prev !== t.status) {
@@ -129,7 +124,7 @@ function diffAndNotify(list: DownloadTask[]) {
 }
 
 // ---- D1/D5/D9 任务操作 ----
-async function retryTask(row: DownloadTask) {
+async function retryTask(row: DownloadTaskSummary) {
   try {
     const r = await api.retryDownload(row.id)
     ElMessage.success(`已创建重试任务（${r.retried} 个链接）`)
@@ -140,7 +135,7 @@ async function retryTask(row: DownloadTask) {
   }
 }
 
-async function prioritizeTask(row: DownloadTask) {
+async function prioritizeTask(row: DownloadTaskSummary) {
   try {
     await api.prioritizeDownload(row.id)
     ElMessage.success('任务已置顶，将优先执行')
@@ -174,7 +169,7 @@ async function clearFinished() {
   }
 }
 
-async function cancelTask(row: DownloadTask) {
+async function cancelTask(row: DownloadTaskSummary) {
   try {
     await api.cancelDownload(row.id)
     ElMessage.success('已请求取消')
@@ -185,7 +180,7 @@ async function cancelTask(row: DownloadTask) {
   }
 }
 
-async function deleteTask(row: DownloadTask) {
+async function deleteTask(row: DownloadTaskSummary) {
   const go = await ElMessageBox.confirm('确定删除该任务记录吗？', '删除任务', {
     type: 'warning',
     confirmButtonText: '删除',
@@ -204,13 +199,29 @@ async function deleteTask(row: DownloadTask) {
   }
 }
 
-// ---- 详情抽屉 ----
+// ---- 详情抽屉（R1：明细与日志按需加载，列表仅持概要） ----
 const detailVisible = ref(false)
-const detailTask = ref<DownloadTask | null>(null)
+const detailId = ref('')
+const detailTask = ref<DownloadTaskDetail | null>(null)
+const detailLoading = ref(false)
 
-function showDetail(row: DownloadTask) {
-  detailTask.value = row
+async function fetchDetail(first = false) {
+  if (!detailId.value) return
+  if (first) detailLoading.value = true
+  try {
+    detailTask.value = await api.downloadTask(detailId.value)
+  } catch (e) {
+    if (!isAborted(e)) ElMessage.error(`加载详情失败: ${(e as Error).message}`)
+  } finally {
+    if (first) detailLoading.value = false
+  }
+}
+
+function showDetail(row: DownloadTaskSummary) {
+  detailId.value = row.id
+  detailTask.value = null
   detailVisible.value = true
+  void fetchDetail(true)
 }
 
 function statusTagType(status: string): string {
@@ -252,13 +263,14 @@ function itemText(status: string): string {
   return map[status] ?? status
 }
 
-// ---- 轮询 ----
+// ---- 任务更新通道：R2 SSE 实时推送为主，3s 轮询作为断线降级 ----
 async function loadTasks() {
   try {
     const r = await api.downloadTasks()
     error.value = ''
     tasks.value = r.tasks
     diffAndNotify(r.tasks)
+    if (detailVisible.value && detailId.value) void fetchDetail()
   } catch (e) {
     if (isAborted(e)) return
     error.value = (e as Error).message
@@ -274,14 +286,57 @@ function onVisibility() {
   if (!document.hidden) void loadTasks()
 }
 
+// 轮询降级通道（SSE 正常时停止）
+function startPolling() {
+  if (pollTimer !== null) return
+  pollTimer = window.setInterval(tick, REFRESH_INTERVAL)
+}
+function stopPolling() {
+  if (pollTimer !== null) {
+    window.clearInterval(pollTimer)
+    pollTimer = null
+  }
+}
+
+// SSE 主通道：EventSource 断线由浏览器自动重连（onerror 期间开启轮询兜底，onopen 恢复后停止）
+let es: EventSource | null = null
+const usingSse = ref(false)
+function startSse() {
+  if (es) return
+  es = new EventSource('/api/downloads/events')
+  es.addEventListener('task_update', (e) => {
+    usingSse.value = true
+    error.value = ''
+    stopPolling()
+    const list = JSON.parse((e as MessageEvent).data) as DownloadTaskSummary[]
+    tasks.value = list
+    diffAndNotify(list)
+    if (detailVisible.value && detailId.value) void fetchDetail()
+  })
+  es.onopen = () => {
+    usingSse.value = true
+    error.value = ''
+    stopPolling()
+  }
+  es.onerror = () => {
+    usingSse.value = false
+    startPolling()
+  }
+}
+
 onMounted(() => {
   void loadTasks()
-  timer = window.setInterval(tick, REFRESH_INTERVAL)
+  startSse()
+  startPolling() // SSE 首帧到达前的兜底（收到首帧后自动停止）
   document.addEventListener('visibilitychange', onVisibility)
 })
 
 onBeforeUnmount(() => {
-  if (timer !== null) window.clearInterval(timer)
+  if (es) {
+    es.close()
+    es = null
+  }
+  stopPolling()
   document.removeEventListener('visibilitychange', onVisibility)
 })
 </script>
@@ -352,9 +407,10 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <!-- D3 状态筛选 + D9 清空历史 -->
+      <!-- D3 状态筛选 + D9 清空历史 + R2 实时通道标识 -->
       <div class="toolbar">
         <el-segmented v-model="filterStatus" :options="filterOptions" />
+        <span v-if="usingSse" class="sse-badge" title="服务端推送，进度亚秒级更新">实时推送</span>
         <el-button class="clear-btn" @click="clearFinished">清空已完成</el-button>
       </div>
 
@@ -417,8 +473,13 @@ onBeforeUnmount(() => {
       <el-empty v-if="tasks.length === 0 && !error" description="暂无下载任务，可在上方粘贴链接提交" />
     </div>
 
-    <!-- 任务详情抽屉 -->
-    <el-drawer v-model="detailVisible" :title="`任务详情 ${detailTask?.id ?? ''}`" size="55%">
+    <!-- 任务详情抽屉（R1：明细按需加载） -->
+    <el-drawer
+      v-model="detailVisible"
+      :title="`任务详情 ${detailTask?.id ?? detailId}`"
+      size="55%"
+      v-loading="detailLoading"
+    >
       <template v-if="detailTask">
         <div class="detail-summary">
           <el-descriptions :column="2" size="small" border>
@@ -555,5 +616,28 @@ onBeforeUnmount(() => {
 
 .error-text {
   color: #ef4444;
+}
+
+/* R2 SSE 实时推送标识 */
+.sse-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: #10b981;
+}
+
+.sse-badge::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #10b981;
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.18);
+}
+
+/* R4 进度条平滑过渡：消除推送/轮询粒度带来的台阶感 */
+:deep(.el-progress-bar__inner) {
+  transition: width 0.6s ease;
 }
 </style>

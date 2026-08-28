@@ -212,11 +212,13 @@ python -X utf8 web/app.py          # 启动后访问 http://127.0.0.1:8088（需
   - 帖子浏览（`/posts`）：版块多选 / 日期区间 / 标题或作者关键词筛选，分页排序（发布日期/发布时间/点赞/回复），支持从数据总览下钻（带 `fid` / `author` / `sort` 预筛选，下钻作者回填关键词框）；操作栏图标按钮（悬浮「打开/复制链接/下载」），表格多选 + 一键「批量下载」到下载中心，一键导出 CSV（10 列带 BOM，Excel 可直接打开，限 5 次/分）；
   - 运行记录：读取 `db/posts.db` 的 `run_days`/`run_sections`（每次运行一条、历史保留，含运行时间），**每页 5 条分页**，页面内 4s 轮询实时刷新（running 状态实时进度），点击查看各版块成功/失败/CSV 与 SQLite 条数/耗时；
   - 资源管理：扫描 `downloads/` 目录，按文件夹分组展示文件清单与大小；**全局搜索 / 类型筛选**（跨全部目录，命中片段高亮，命中文件带「所属目录」列，目录名命中可一键展开）；目录按时间 / 名称排序；目录头显示**类型构成摘要**、**来源帖回溯**（作者/日期，可跳原帖或下钻帖子浏览）、**下载任务关联**标记（跳转下载中心）与「未下载到媒体」空壳提示；图片行**点击预览**（大图查看器）；**容量洞察卡**（类型分布占比 / 最大目录 / Top10 大文件）；「打开」按钮调起资源管理器；搜索/筛选/排序/展开状态会话记忆；批量复制路径；加载失败重试与手动刷新（限流：扫描 60 次/分、图片预览 60 次/分、打开目录 10 次/分）；
-  - 下载中心（`/downloads`）：页内粘贴多行链接直接提交（自动拆解去重、无效行提示，重复提交二次确认），异步执行并实时展示任务进度、逐 URL 明细（含耗时）与任务日志；状态筛选与汇总（进行中/已完成/失败/已取消）、任务完成通知；失败任务「重试」重跑未成功链接、排队任务「优先执行」插队、「清空已完成」与历史自动轮转（默认保留 200 条，`TXXY_DOWNLOAD_TASK_MAX_KEEP`）；另有帖子浏览多选批量/单行下载、数据总览热门榜单行下载入口；后端 `download_tasks.py` 任务队列（任务间并发数 `TXXY_DOWNLOAD_TASK_CONCURRENCY` 默认 1 串行，队列支持插队），状态持久化到 `outputs/download_tasks.json`（`TXXY_DOWNLOAD_TASKS_FILE`，Web 进程不触碰 `posts.db`）；
+  - 下载中心（`/downloads`）：页内粘贴多行链接直接提交（自动拆解去重、无效行提示，重复提交前经 `check-dup` 接口二次确认），异步执行并以 **SSE 实时推送**进度（亚秒级，断线自动降级 3s 轮询），逐 URL 明细（含耗时）与任务日志在「详情」抽屉按需加载；状态筛选与汇总（进行中/已完成/失败/已取消）、任务完成通知；失败任务「重试」重跑未成功链接、排队任务「优先执行」插队、「清空已完成」与历史自动轮转（默认保留 200 条，`TXXY_DOWNLOAD_TASK_MAX_KEEP`）；另有帖子浏览多选批量/单行下载、数据总览热门榜单行下载入口；后端 `download_tasks.py` 任务队列（任务间并发数 `TXXY_DOWNLOAD_TASK_CONCURRENCY` 默认 1 串行，队列支持插队），状态持久化到 `outputs/download_tasks.json`（`TXXY_DOWNLOAD_TASKS_FILE`，写盘前自动轮转一份 `.bak` 上一代备份，Web 进程不触碰 `posts.db`）；
 - **下载中心接口**（`/api/downloads`）：
-  - `GET /api/downloads`：任务列表（含状态、进度、逐 URL 明细）；
+  - `GET /api/downloads`：任务列表（概要：状态、进度、`items_summary` 计数、`saved_dirs`，不含明细）；
   - `POST /api/downloads`：提交下载任务（`{ "urls": [...] }`，立即返回任务 ID，异步执行）；
-  - `GET /api/downloads/{tid}`：任务详情；
+  - `GET /api/downloads/{tid}`：任务详情（含逐 URL 明细与日志，前端按需加载）；
+  - `GET /api/downloads/events`：SSE 实时进度流（`task_update` 事件推送全量任务概要快照，500ms diff 有变化才推）；
+  - `POST /api/downloads/check-dup`：提交前重复检测（返回历史曾成功下载的 URL 子集）；
   - `POST /api/downloads/{tid}/cancel`：取消运行中任务；
   - `POST /api/downloads/{tid}/retry`：重跑失败任务（收集 fail/cancelled/遗留 running 项生成新任务，返回 `{retried}`）；
   - `POST /api/downloads/{tid}/prioritize`：排队任务插队（仅 pending 有效；优先级队列 + 令牌失效机制防重复消费）；

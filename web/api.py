@@ -1,6 +1,8 @@
 """txxy 数据展示 API（全部只读）。"""
+import asyncio
 import csv
 import io
+import json
 from datetime import date as date_cls
 from datetime import timedelta
 
@@ -819,10 +821,58 @@ def downloads_submit(req: DownloadSubmitReq) -> dict[str, Any]:
 
 @router.get("/downloads")
 def downloads_list() -> dict[str, Any]:
-    """全部下载任务（含状态、进度、逐 URL 明细），按创建时间倒序。"""
-    tasks = download_tasks.manager.list()
+    """全部下载任务概要（R1：不含 items/logs，含状态计数与 saved_dirs），按创建时间倒序。
+
+    逐 URL 明细与日志通过 GET /api/downloads/{tid} 按需获取。
+    """
+    tasks = download_tasks.manager.summary()
     tasks.sort(key=lambda t: t["created_at"], reverse=True)
     return {"tasks": tasks}
+
+
+class DownloadCheckReq(BaseModel):
+    """提交前重复检测请求体（D2）。"""
+
+    urls: list[str]
+
+
+@router.post("/downloads/check-dup")
+def downloads_check_dup(req: DownloadCheckReq) -> dict[str, Any]:
+    """提交前重复检测（D2）：返回 urls 中历史上曾成功（ok/skip）过的子集。"""
+    return {"duplicated": download_tasks.manager.dup_check(req.urls)}
+
+
+@router.get("/downloads/events")
+async def downloads_events() -> StreamingResponse:
+    """SSE 任务进度流（R2）：每 500ms 对任务概要做内存 diff，有变化才推 task_update 事件。
+
+    - 事件 data 为全部任务概要快照（与 GET /api/downloads 同构），前端整体替换即可；
+    - 首帧必推（客户端建立连接即拿到当前状态）；空闲 15s 推一次注释心跳防中间层断开；
+    - 客户端断开时 StreamingResponse 生成器被取消，无残留资源；
+    - 响应头禁缓存并预防反向代理缓冲（X-Accel-Buffering: no）。
+    """
+    headers = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+
+    async def gen():
+        last = ""
+        idle = 0.0
+        # 首帧必推
+        last = json.dumps(download_tasks.manager.summary(), ensure_ascii=False)
+        yield f"event: task_update\ndata: {last}\n\n"
+        while True:
+            await asyncio.sleep(0.5)
+            payload = json.dumps(download_tasks.manager.summary(), ensure_ascii=False)
+            if payload != last:
+                last = payload
+                idle = 0.0
+                yield f"event: task_update\ndata: {payload}\n\n"
+            else:
+                idle += 0.5
+                if idle >= 15.0:
+                    idle = 0.0
+                    yield ": ping\n\n"
+
+    return StreamingResponse(gen(), media_type="text/event-stream", headers=headers)
 
 
 @router.get("/downloads/{tid}")

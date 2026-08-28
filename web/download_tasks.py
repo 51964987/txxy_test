@@ -15,9 +15,14 @@
 - 本模块运行在 Web 进程内，仅做文件系统下载，不触碰 posts.db（Web 进程严禁写库）；
 - 不调用 download_files 的 file_logger.setup()，避免劫持 Web 进程全局 stdout。
 """
+# 延迟注解求值（PEP 563）：类内定义的 list 方法会遮蔽内置 list，
+# 导致后续方法注解 list[...] 在类体求值时报 'function' object is not subscriptable
+from __future__ import annotations
+
 import concurrent.futures as cf
 import json
 import queue
+import shutil
 import sys
 import threading
 import time
@@ -131,15 +136,54 @@ class DownloadTaskManager:
         return task["id"]
 
     def list(self) -> list[dict[str, Any]]:
-        """全部任务（概要，含 items/logs 供前端直接渲染；剔除下划线内部字段）。"""
+        """全部任务（完整，含 items/logs；内部与详情接口使用）。"""
         with self._lock:
             return [self._public(t) for t in self._tasks.values()]
 
+    def summary(self) -> list[dict[str, Any]]:
+        """全部任务概要（R1 列表/SSE 推送用）：不含 items/logs/urls，含状态计数与已保存目录。
+
+        - items_summary：各状态链接计数（ok/skip/fail/running/pending/cancelled），
+          进度条与汇总展示无需完整明细；
+        - saved_dirs：任务已产生的保存目录（去重），供资源管理页做「目录 → 任务」关联（B7）。
+        """
+        with self._lock:
+            return [self._summary(t) for t in self._tasks.values()]
+
+    def _summary(self, t: dict[str, Any]) -> dict[str, Any]:
+        counts: dict[str, int] = {
+            "ok": 0, "skip": 0, "fail": 0, "running": 0, "pending": 0, "cancelled": 0
+        }
+        saved_dirs: list[str] = []
+        for it in t["items"]:
+            s = it.get("status", "pending")
+            counts[s] = counts.get(s, 0) + 1
+            sd = it.get("saved_dir")
+            if sd and sd not in saved_dirs:
+                saved_dirs.append(sd)
+        base = self._public(t)
+        base.pop("items", None)
+        base.pop("urls", None)
+        base.pop("logs", None)
+        base["items_summary"] = counts
+        base["saved_dirs"] = saved_dirs
+        return base
+
     def get(self, tid: str) -> dict[str, Any] | None:
-        """单个任务详情，不存在返回 None。"""
+        """单个任务详情（含 items/logs），不存在返回 None。"""
         with self._lock:
             t = self._tasks.get(tid)
             return self._public(t) if t else None
+
+    def dup_check(self, urls: list[str]) -> list[str]:
+        """提交前重复检测（D2）：返回 urls 中历史上曾成功（ok/skip）过的子集。"""
+        done: set[str] = set()
+        with self._lock:
+            for t in self._tasks.values():
+                for it in t["items"]:
+                    if it.get("status") in ("ok", "skip"):
+                        done.add(it["url"])
+        return [u for u in urls if u in done]
 
     def cancel(self, tid: str) -> bool:
         """取消未完成任务（pending/running）：标记取消标志，worker 会在下一个 URL 前收手。"""
@@ -335,10 +379,20 @@ class DownloadTaskManager:
             self._tasks.pop(t["id"], None)
 
     def _persist_locked(self) -> None:
-        """在持锁状态下将全部任务写盘（临时文件 + 原子替换，避免写一半损坏）。"""
+        """在持锁状态下将全部任务写盘（临时文件 + 原子替换，避免写一半损坏）。
+
+        写盘前把现有非空文件轮转为 .bak（保留上一代），防止异常状态下以空数据覆盖后
+        无从恢复（曾发生：服务异常重启序列中持久化文件被写空导致任务历史丢失）。
+        """
         self._prune_locked()
         try:
             config.DOWNLOAD_TASKS_FILE.parent.mkdir(parents=True, exist_ok=True)
+            bak = config.DOWNLOAD_TASKS_FILE.with_suffix(".json.bak")
+            if (
+                config.DOWNLOAD_TASKS_FILE.exists()
+                and config.DOWNLOAD_TASKS_FILE.stat().st_size > 2
+            ):
+                shutil.copyfile(config.DOWNLOAD_TASKS_FILE, bak)
             tmp = config.DOWNLOAD_TASKS_FILE.with_suffix(".json.tmp")
             tmp.write_text(
                 json.dumps(self._tasks, ensure_ascii=False, indent=2), encoding="utf-8"
