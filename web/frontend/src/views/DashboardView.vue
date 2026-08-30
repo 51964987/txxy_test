@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, shallowRef, nextTick, type ShallowRef } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, shallowRef, nextTick, watch, type ShallowRef } from 'vue'
 import { useRouter } from 'vue-router'
 import { graphic, init as echartsInit, use } from 'echarts/core'
 import { CanvasRenderer } from 'echarts/renderers'
@@ -15,6 +15,7 @@ import { ElMessage } from 'element-plus'
 import { Download } from '@element-plus/icons-vue'
 import { api, isAborted, type Boards, type FidDistItem, type Overview, type RunSummary, type TodayTop, type TopAuthor, type TopFid, type TrendByFid, type TrendPoint } from '../api'
 import { useDashboardStore } from '../stores/dashboard'
+import { useAppStore } from '../stores/app'
 import { formatShortTime } from '../utils/time'
 import RollingNumber from '../components/RollingNumber.vue'
 
@@ -32,6 +33,37 @@ use([
 const router = useRouter()
 
 const store = useDashboardStore()
+const app = useAppStore()
+
+// 页面根容器：ResizeObserver 的观察目标。侧栏折叠 / 移动抽屉 / 进入全屏都不会改变
+// 窗口尺寸，仅靠 window.resize 无法驱动 ECharts 重排，必须由容器尺寸变化驱动
+const rootRef = ref<HTMLDivElement | null>(null)
+
+/**
+ * ECharts Tooltip 挂载配置：
+ * - 常态挂 body 顶层（appendToBody），防止被卡片裁切
+ * - 真全屏时浏览器只渲染全屏元素及其后代，挂 body 的 tooltip 不可见，
+ *   改为就地挂到全屏元素内
+ * - 降级伪全屏是文档流内的 fixed 覆盖层，body 弹层仍可见，维持 appendToBody
+ */
+function tipMount(): { appendToBody: boolean; appendTo?: () => HTMLElement } {
+  if (app.fullscreen && !app.pseudoFullscreen) {
+    return { appendToBody: false, appendTo: () => document.fullscreenElement as HTMLElement }
+  }
+  return { appendToBody: true }
+}
+
+/** 真全屏时 ElMessage 挂在 body 上不可见：先退出全屏再提示，保证用户能看到反馈 */
+async function notifyError(msg: string): Promise<void> {
+  if (app.fullscreen && !app.pseudoFullscreen) await app.exitFullscreen()
+  ElMessage.error(msg)
+}
+
+/** 成功提示同理：全屏态点击榜单「下载」后需要看到创建结果 */
+async function notifySuccess(msg: string): Promise<void> {
+  if (app.fullscreen && !app.pseudoFullscreen) await app.exitFullscreen()
+  ElMessage.success(msg)
+}
 
 // ===== P0：首屏区块 =====
 const overview = ref<Overview | null>(null)
@@ -200,7 +232,7 @@ async function loadP0(initial = false) {
   } catch (e) {
     if (isAborted(e)) return
     if (!initial) return // 轮询失败静默，下轮自动重试
-    ElMessage.error(`加载总览数据失败: ${(e as Error).message}`)
+    void notifyError(`加载总览数据失败: ${(e as Error).message}`)
   } finally {
     loadingP0.value = false
   }
@@ -222,7 +254,7 @@ async function loadBoards() {
   } catch (e) {
     if (isAborted(e)) return
     if (boards.value) return // 轮询刷新（榜单已存在）失败静默，下轮重试
-    ElMessage.error(`加载热门榜失败: ${(e as Error).message}`)
+    void notifyError(`加载热门榜失败: ${(e as Error).message}`)
   } finally {
     loadingBoards.value = false
   }
@@ -269,9 +301,11 @@ function renderTrendChart() {
     const data = trend.value.map((t) => t.count)
     const needZoom = trend.value.length > 31
     trendChart.value.setOption({
+      // 大屏态关闭过渡动画：图表放大后重绘成本更高，避免逐点描线拖慢轮询
+      animation: !app.fullscreen,
       tooltip: {
         trigger: 'axis',
-        appendToBody: true,
+        ...tipMount(),
         z: 99999,
         // tooltip 皮肤与「分版块发布对比」保持一致（富格式内容保留）
         backgroundColor: 'rgba(20,28,48,0.92)',
@@ -388,9 +422,11 @@ function renderHBarChart(
   const c = chart.value ??= initChart(el)
   c.setOption(
     {
+      animation: !app.fullscreen,
       tooltip: {
         trigger: 'item',
-        appendToBody: true, // 项目规范：Tooltip 顶层
+        // 项目规范：Tooltip 顶层；真全屏时改挂到全屏元素内（挂 body 不显示）
+        ...tipMount(),
         // 鼠标不可进入 tooltip，移除后立即隐藏——避免 appendToBody 下 tooltip DOM
         // 残留在 body 内导致「鼠标移开后 tooltip 不消失」的观感
         enterable: false,
@@ -502,6 +538,49 @@ function onResize() {
   fidChart.value?.resize()
 }
 
+/**
+ * 大屏模式切换时重建全部图表实例：
+ * ECharts 的 Tooltip 挂载容器（appendTo / appendToBody）在实例初始化时即确定，
+ * 后续 setOption 修改不生效；真全屏下挂 body 的 tooltip 不显示，故必须重建。
+ */
+function rebuildCharts(): void {
+  trendChart.value?.dispose()
+  trendChart.value = null
+  fidTrendChart.value?.dispose()
+  fidTrendChart.value = null
+  authorChart.value?.dispose()
+  authorChart.value = null
+  fidChart.value?.dispose()
+  fidChart.value = null
+  // 「事件仅注册一次」的保护标记需复位，否则新实例不再绑定双向 Tooltip 联动
+  trendTipSynced = false
+  fidTipSynced = false
+  // 清空 P1-8 数据指纹，强制重新 setOption（动画开关也在 option 中）
+  lastTrendKey = ''
+  lastFidTrendKey = ''
+  lastAuthorKey = ''
+  lastFidKey = ''
+  stopTrendCarousel()
+  renderTrendChart()
+  renderFidTrendChart()
+  renderAuthorChart()
+  renderFidChart()
+  onResize()
+  if (trend.value.length) startTrendCarousel(0)
+}
+
+// 容器尺寸变化驱动图表重排：侧栏折叠 / 移动抽屉 / 大屏全屏都不会触发 window.resize，
+// 只能观察内容容器本身；用 rAF 合并同一帧内的多次回调，避免连续抖动
+let resizeObserver: ResizeObserver | null = null
+let resizeFrame = 0
+function onContainerResize() {
+  if (resizeFrame) return
+  resizeFrame = requestAnimationFrame(() => {
+    resizeFrame = 0
+    onResize()
+  })
+}
+
 function syncAutoRefresh() {
   if (store.autoRefresh) {
     if (!refreshTimer) refreshTimer = setInterval(() => autoRefreshTick(), REFRESH_INTERVAL)
@@ -596,9 +675,30 @@ onMounted(() => {
 
   syncAutoRefresh()
   store.registerAutoChange(syncAutoRefresh)
-  window.addEventListener('resize', onResize)
+  if (typeof ResizeObserver !== 'undefined' && rootRef.value) {
+    resizeObserver = new ResizeObserver(onContainerResize)
+    resizeObserver.observe(rootRef.value)
+  } else {
+    // 兜底：不支持 ResizeObserver 的旧浏览器退回窗口级监听
+    window.addEventListener('resize', onResize)
+  }
   document.addEventListener('visibilitychange', onVisibilityChange)
 })
+
+/**
+ * 大屏模式切换：重建图表以切换 Tooltip 挂载方式（挂 body 在全屏下不显示）；
+ * 进入大屏时同时补齐懒加载区块，否则视口变高后下半屏会出现空白卡片。
+ */
+watch(
+  () => app.fullscreen,
+  async (v) => {
+    await nextTick()
+    rebuildCharts()
+    if (!v) return
+    fidTrendVisible.value = true
+    await Promise.allSettled([loadBoards(), loadFidTrend()])
+  },
+)
 
 onBeforeUnmount(() => {
   if (refreshTimer) {
@@ -633,6 +733,12 @@ onBeforeUnmount(() => {
   }
   stopTrendCarousel()
   store.registerAutoChange(null)
+  resizeObserver?.disconnect()
+  resizeObserver = null
+  if (resizeFrame) {
+    cancelAnimationFrame(resizeFrame)
+    resizeFrame = 0
+  }
   window.removeEventListener('resize', onResize)
   document.removeEventListener('visibilitychange', onVisibilityChange)
   trendChart.value?.dispose()
@@ -646,9 +752,9 @@ function openUrl(url: string) {
 async function downloadUrl(url: string) {
   try {
     const r = await api.submitDownload([url])
-    ElMessage.success(`已创建下载任务（${r.count} 个链接），可在下载中心查看进度`)
+    await notifySuccess(`已创建下载任务（${r.count} 个链接），可在下载中心查看进度`)
   } catch (e) {
-    ElMessage.error(`创建下载任务失败: ${(e as Error).message}`)
+    await notifyError(`创建下载任务失败: ${(e as Error).message}`)
   }
 }
 
@@ -808,7 +914,7 @@ async function loadTrendOnly(prevLen?: number) {
     startTrendCarousel(400, prevLen)
   } catch (e) {
     if (isAborted(e)) return
-    ElMessage.error(`加载趋势数据失败: ${(e as Error).message}`)
+    void notifyError(`加载趋势数据失败: ${(e as Error).message}`)
   } finally {
     trendSwitching.value = false
     trendLoading = false
@@ -879,7 +985,7 @@ async function loadFidTrend() {
     renderFidTrendChart()
   } catch (e) {
     if (isAborted(e)) return
-    ElMessage.error(`加载分版块趋势失败: ${(e as Error).message}`)
+    void notifyError(`加载分版块趋势失败: ${(e as Error).message}`)
   } finally {
     loadingFidTrend.value = false
     fidTrendSwitching.value = false
@@ -1020,11 +1126,12 @@ function renderFidTrendChart() {
   const needZoom = dates.length > 31
   const option = {
     backgroundColor: 'transparent',
+    animation: !app.fullscreen,
     // 与全站趋势趋势图保持完全一致的绘图区，使 Y 轴高度对齐
     grid: { top: 30, right: 20, bottom: needZoom ? 46 : 28, left: 44 },
     tooltip: {
       trigger: 'axis',
-      appendToBody: true,
+      ...tipMount(),
       z: 99999,
       backgroundColor: 'rgba(20,28,48,0.92)',
       borderColor: 'rgba(255,255,255,0.12)',
@@ -1102,7 +1209,7 @@ function renderFidTrendChart() {
 </script>
 
 <template>
-  <div>
+  <div ref="rootRef" class="dashboard" :class="{ 'is-fullscreen': app.fullscreen }">
     <!-- 统计卡片 -->
     <div class="stat-grid">
       <template v-if="overview">
@@ -1204,6 +1311,7 @@ function renderFidTrendChart() {
             class="day-select"
             filterable
             allow-create
+            :teleported="!app.fullscreen"
             reserve-keyword="false"
             default-first-option
             placeholder="选择/输入天数"
@@ -1327,7 +1435,7 @@ function renderFidTrendChart() {
               <a class="title-link board-title" :title="item.title" @click.stop.prevent="openUrl(item.url)">
                 {{ item.title }}
               </a>
-              <el-tooltip content="下载" placement="top">
+              <el-tooltip content="下载" placement="top" :teleported="!app.fullscreen">
                 <el-button link size="small" type="success" :icon="Download" class="board-download" @click.stop.prevent="downloadUrl(item.url)" />
               </el-tooltip>
               <span class="board-metric">
@@ -1354,7 +1462,7 @@ function renderFidTrendChart() {
               <a class="title-link board-title" :title="item.title" @click.stop.prevent="openUrl(item.url)">
                 {{ item.title }}
               </a>
-              <el-tooltip content="下载" placement="top">
+              <el-tooltip content="下载" placement="top" :teleported="!app.fullscreen">
                 <el-button link size="small" type="success" :icon="Download" class="board-download" @click.stop.prevent="downloadUrl(item.url)" />
               </el-tooltip>
               <span class="board-metric">
@@ -1381,7 +1489,7 @@ function renderFidTrendChart() {
               <a class="title-link board-title" :title="item.title" @click.prevent="openUrl(item.url)">
                 {{ item.title }}
               </a>
-              <el-tooltip content="下载" placement="top">
+              <el-tooltip content="下载" placement="top" :teleported="!app.fullscreen">
                 <el-button link size="small" type="success" :icon="Download" class="board-download" @click.stop.prevent="downloadUrl(item.url)" />
               </el-tooltip>
               <span class="board-metric">
@@ -1411,7 +1519,7 @@ function renderFidTrendChart() {
               <a class="title-link board-title" :title="item.title" @click.prevent="openUrl(item.url)">
                 {{ item.title }}
               </a>
-              <el-tooltip content="下载" placement="top">
+              <el-tooltip content="下载" placement="top" :teleported="!app.fullscreen">
                 <el-button link size="small" type="success" :icon="Download" class="board-download" @click.stop.prevent="downloadUrl(item.url)" />
               </el-tooltip>
               <span class="board-metric">
@@ -1431,6 +1539,31 @@ function renderFidTrendChart() {
 </template>
 
 <style scoped>
+/* 大屏（全屏）态：图表高度按视口剩余高度三等分，KPI 与区块间距收紧，尽量一屏铺满 */
+.dashboard.is-fullscreen {
+  --chart-h: max(240px, calc((100vh - 220px) / 3));
+}
+
+.dashboard.is-fullscreen .stat-grid,
+.dashboard.is-fullscreen .trend-row,
+.dashboard.is-fullscreen .chart-row,
+.dashboard.is-fullscreen .board-row {
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.dashboard.is-fullscreen .stat-card {
+  padding: 14px 18px;
+}
+
+.dashboard.is-fullscreen .stat-value {
+  font-size: 32px;
+}
+
+.dashboard.is-fullscreen .board-list {
+  max-height: calc(var(--chart-h) - 40px);
+}
+
 /* 每日发布趋势 + 版块分布：左右 1:1 等宽，与热门榜保持一致间距 */
 .chart-row {
   display: grid;
@@ -1512,6 +1645,7 @@ function renderFidTrendChart() {
   gap: 12px;
   flex-wrap: wrap;
   justify-content: flex-end;
+  position: relative; /* 全屏时天数下拉就地挂载，以本容器为定位基准 */
 }
 .link-badge {
   display: inline-flex;
@@ -1601,14 +1735,14 @@ function renderFidTrendChart() {
 }
 .trend-chart-wrap {
   position: relative;
-  height: 320px;
+  height: var(--chart-h, 320px);
   width: 100%;
   overflow: hidden; /* 遏制 ECharts canvas 初始化瞬间的横向溢出 */
   min-width: 0;
 }
-/* 半宽卡片：图表略矮，左右等高对齐 */
+/* 半宽卡片：图表略矮，左右等高对齐（大屏态跟随 --chart-h 统一高度） */
 .trend-half .trend-chart-wrap {
-  height: 300px;
+  height: var(--chart-h, 300px);
 }
 /* 动态天数切换下拉框 */
 .day-select {
@@ -1676,7 +1810,7 @@ function renderFidTrendChart() {
 
 .chart-wrap {
   position: relative;
-  height: 320px; /* 与排行榜 8 行可视区等高 */
+  height: var(--chart-h, 320px); /* 与排行榜 8 行可视区等高 */
   overflow: hidden; /* 遏制 ECharts / 排行榜容器瞬时横向溢出 */
   min-width: 0;
 }
@@ -1744,6 +1878,7 @@ function renderFidTrendChart() {
   padding: 9px 10px;
   border: 1px solid #ebeef5;
   border-radius: 6px;
+  position: relative; /* 全屏时「下载」tooltip 就地挂载，以本卡片为定位基准 */
   background: #fafbfc;
   font-size: 13px;
   min-width: 0;
