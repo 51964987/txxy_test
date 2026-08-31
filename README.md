@@ -43,7 +43,7 @@ txxy_test/
 │   ├── db.py           # 只读 SQLite 访问层（PRAGMA query_only + 5s TTL 缓存 + URL 归一化）
 │   ├── ratelimit.py    # 接口限流（纯标准库固定窗口计数；/posts/export 5 次/分、/resources 60 次/分，超限 429）
 │   ├── runs.py         # 运行记录读取（SQLite run_days/run_sections 优先，日志兼容回退；孤儿 running 展示降级）
-│   ├── resources.py    # 资源管理：扫描 downloads/ 目录（只读），按文件夹分组返回文件清单
+│   ├── resources.py    # 资源管理：扫描 downloads/（只读）+ 受控图片预览 / 视频播放 + 回收站软删除（不写库）
 │   ├── download_tasks.py  # 下载中心后端核心（任务队列，异步下载 + 状态持久化）
 │   └── frontend/       # Vue3 + Vite + TypeScript + Element Plus + Pinia + ECharts SPA
 │       └── src/stores/  # Pinia 状态：app.ts（布局状态：移动断点 / 侧栏折叠 / 抽屉 / 大屏全屏）+ dashboard.ts（总览 / 实时时钟 / 自动刷新状态）
@@ -214,8 +214,19 @@ python -X utf8 web/app.py          # 启动后访问 http://127.0.0.1:8088（需
     - 布局：趋势双图 `1fr 1fr`、活跃榜双视图 `1fr 1fr`、热门榜 4 栏等宽，间距统一 16px；窄屏自动降级为单列；大屏态图表高度按视口三等分（`--chart-h`）、间距收紧，尽量一屏铺满；
   - 帖子浏览（`/posts`）：版块多选 / 日期区间 / 标题或作者关键词筛选，分页排序（发布日期/发布时间/点赞/回复），支持从数据总览下钻（带 `fid` / `author` / `sort` 预筛选，下钻作者回填关键词框）；操作栏图标按钮（悬浮「打开/复制链接/下载」），表格多选 + 一键「批量下载」到下载中心，一键导出 CSV（10 列带 BOM，Excel 可直接打开，限 5 次/分）；
   - 运行记录：读取 `db/posts.db` 的 `run_days`/`run_sections`（每次运行一条、历史保留，含运行时间），**每页 5 条分页**，页面内 4s 轮询实时刷新（running 状态实时进度），点击查看各版块成功/失败/CSV 与 SQLite 条数/耗时；
-  - 资源管理：扫描 `downloads/` 目录，按文件夹分组展示文件清单与大小；**全局搜索 / 类型筛选**（跨全部目录，命中片段高亮，命中文件带「所属目录」列，目录名命中可一键展开）；目录按时间 / 名称排序；目录头显示**类型构成摘要**、**来源帖回溯**（作者/日期，可跳原帖或下钻帖子浏览）、**下载任务关联**标记（跳转下载中心）与「未下载到媒体」空壳提示；图片行**点击预览**（大图查看器）；**容量洞察卡**（类型分布占比 / 最大目录 / Top10 大文件）；「打开」按钮调起资源管理器；搜索/筛选/排序/展开状态会话记忆；批量复制路径；加载失败重试与手动刷新（限流：扫描 60 次/分、图片预览 60 次/分、打开目录 10 次/分）；
+  - 资源管理：扫描 `downloads/` 目录，按文件夹分组展示文件清单与大小；**全局搜索 / 类型筛选**（跨全部目录，命中片段高亮，命中文件带「所属目录」列，目录名命中可一键展开）；目录按时间 / 名称排序；目录头显示**类型构成摘要**、**来源帖回溯**（作者/日期，可跳原帖或下钻帖子浏览）、**下载任务关联**标记（跳转下载中心）与「未下载到媒体」空壳提示；图片行**点击预览**（大图查看器）；**视频行「播放」**（弹窗播放，支持同列表连续播放，覆盖全部视频扩展名，拖动进度走 HTTP Range）；文件行「删除」与目录头「删除目录」（**软删除**到 `outputs/trash/`，默认保留 7 天）；工具栏「回收站」抽屉可**恢复**或**彻底删除**（含清空，彻底删除需二次确认）；**容量洞察卡**（类型分布占比 / 最大目录 / Top10 大文件）；「打开」按钮调起资源管理器；搜索/筛选/排序/展开状态会话记忆；批量复制路径；加载失败重试与手动刷新（限流：扫描 60 次/分、图片预览 60 次/分、视频播放 300 次/分、打开目录 10 次/分、删除类 10 次/分）；
   - 下载中心（`/downloads`）：页内粘贴多行链接直接提交（自动拆解去重、无效行提示，重复提交前经 `check-dup` 接口二次确认），异步执行并以 **SSE 实时推送**进度（亚秒级，断线自动降级 3s 轮询），逐 URL 明细（含耗时）与任务日志在「详情」抽屉按需加载；状态筛选与汇总（进行中/已完成/失败/已取消）、任务完成通知；失败任务「重试」重跑未成功链接、排队任务「优先执行」插队、「清空已完成」与历史自动轮转（默认保留 200 条，`TXXY_DOWNLOAD_TASK_MAX_KEEP`）；另有帖子浏览多选批量/单行下载、数据总览热门榜单行下载入口；后端 `download_tasks.py` 任务队列（任务间并发数 `TXXY_DOWNLOAD_TASK_CONCURRENCY` 默认 1 串行，队列支持插队），状态持久化到 `outputs/download_tasks.json`（`TXXY_DOWNLOAD_TASKS_FILE`，写盘前自动轮转一份 `.bak` 上一代备份，Web 进程不触碰 `posts.db`）；
+- **资源管理接口**（`/api/resources`）：
+  - `GET /api/resources`：扫描结果（目录分组 + 文件清单；增量缓存按顶层目录签名，限 60 次/分）；
+  - `GET /api/resources/file?path=`：受控图片预览（限 60 次/分，仅图片白名单）；
+  - `GET /api/resources/video?path=`：受控视频播放（限 300 次/分，视频白名单，支持 Range 返回 206）；
+  - `GET /api/resources/source?name=`：目录来源帖回溯（只读查 `posts` 表）；
+  - `POST /api/resources/open`：调起资源管理器打开目录（限 10 次/分）；
+  - `POST /api/resources/delete`：`{ path, is_dir }` 软删除到回收站（限 10 次/分）；
+  - `GET /api/resources/trash`：回收站清单（含每项剩余保留天数）；
+  - `POST /api/resources/restore`：`{ id }` 恢复到原路径（限 10 次/分）；
+  - `POST /api/resources/purge`：`{ id }` 彻底删除，id 为空则清空回收站（限 10 次/分）；
+  - 删除为**软删除**：资源先移入 `outputs/trash/<id>/` 并记入 `index.json`，默认保留 7 天（`TXXY_TRASH_KEEP_DAYS`）；过期项只做标记，需手动清空或逐项彻底删除才真正释放空间；路径校验复用 `resolve()` 限定 `downloads/` 内，Web 进程不写库。
 - **下载中心接口**（`/api/downloads`）：
   - `GET /api/downloads`：任务列表（概要：状态、进度、`items_summary` 计数、`saved_dirs`，不含明细）；
   - `POST /api/downloads`：提交下载任务（`{ "urls": [...] }`，立即返回任务 ID，异步执行）；
@@ -230,7 +241,7 @@ python -X utf8 web/app.py          # 启动后访问 http://127.0.0.1:8088（需
   - 任务状态持久化于 `outputs/download_tasks.json`（由 `TXXY_DOWNLOAD_TASKS_FILE` 配置），历史终态任务按 `TXXY_DOWNLOAD_TASK_MAX_KEEP`（默认 200）自动裁剪；Web 进程仅做文件系统下载（复用 `download_files.process_one_detail`），不写 `posts.db`；
 - **只读安全**：后端以 `PRAGMA query_only=ON` 只读访问 `db/posts.db`，绝不写库，与抓取写进程（WAL 模式）安全并发；
 - **URL 归一化**：旧数据中 `http://127.0.0.1:1024` 前缀在展示层统一替换为 `PUBLIC_ROOT`（`web/config.py`，默认与 `run_batch.REMOTE_ROOT_URL` 一致，支持 `PUBLIC_ROOT` 环境变量覆盖），**不改数据库**；
-- **配置**：`web/config.py` 顶部可用环境变量覆盖（`TXXY_WEB_HOST` 地址 / `TXXY_WEB_PORT` 端口 / `PUBLIC_ROOT` 域名 / `POSTS_DB` 数据库路径 / `TXXY_DOWNLOAD_*` 下载中心参数等），默认监听 `127.0.0.1:8088`（8080 常被本机其他程序占用）；
+- **配置**：`web/config.py` 顶部可用环境变量覆盖（`TXXY_WEB_HOST` 地址 / `TXXY_WEB_PORT` 端口 / `PUBLIC_ROOT` 域名 / `POSTS_DB` 数据库路径 / `TXXY_DOWNLOAD_*` 下载中心参数 / `TXXY_TRASH_DIR` 回收站目录 / `TXXY_TRASH_KEEP_DAYS` 回收站保留天数（默认 7）等），默认监听 `127.0.0.1:8088`（8080 常被本机其他程序占用）；
 - **自动刷新开关**：`TXXY_ENABLE_AUTO_REFRESH`（默认 `1` 开启）控制数据总览的自动刷新功能——开启时 Header 显示"自动刷新"开关、前端启动 5s 轮询（`REFRESH_INTERVAL=5000`），抓取过程中 KPI 卡与折线图准实时更新；后端统计接口配套 5s TTL 缓存（`web/db.py` 的 `_TTL=5`），避免轮询空转打库；如需关闭，启动前设置 `TXXY_ENABLE_AUTO_REFRESH=0`（或直接改 `web/config.py` 为 `False`）。
 - **开发模式**：`cd web/frontend && npm run dev` 启动 Vite（端口 5173，`/api` 自动代理到 8088）热更新；改完执行 `npm run build` 重新构建，再启动 `python -X utf8 web/app.py` 生效。
 
@@ -290,7 +301,7 @@ schtasks /Delete /TN "txxy_daily_batch" /F
 | 文档 | 主题 |
 |---|---|
 | `docs/数据总览大屏设计与优化总览.md` | 数据总览页（KPI/趋势/版块分布/热门榜）现状、已落地优化与待确认候选方案、API 与加载刷新 |
-| `docs/资源管理页面优化方案.md` | 资源管理页独立优化建议（P0 已落地，P1/P2 待确认） |
+| `docs/资源管理页面优化方案.md` | 资源管理页优化：P0/P1 已落地实施记录；第八节为新增需求评估（删除功能、视频播放，待确认） |
 | `docs/Docker部署方案.md` | 容器化与三环境一键部署 |
 | `docs/性能优化方案-数据总览卡顿.md` | 数据总览页 SQL/前端懒加载性能排查与优化 |
 | `docs/性能优化方案-帖子浏览页卡顿.md` | 帖子浏览页 `/api/posts` 分页与索引性能排查与优化 |

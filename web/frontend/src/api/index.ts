@@ -280,6 +280,27 @@ export interface ResourceFile {
   category: 'image' | 'video' | 'torrent' | 'text' | 'other'
 }
 
+/** 回收站条目（软删除，保留期内可恢复） */
+export interface TrashItem {
+  id: string
+  /** 原相对路径（相对 downloads/） */
+  rel: string
+  name: string
+  is_dir: boolean
+  size: number
+  deleted_at: string
+  /** 是否已过保留期 */
+  expired: boolean
+  /** 剩余保留天数 */
+  remain_days: number
+}
+
+export interface TrashResp {
+  items: TrashItem[]
+  keep_days: number
+  total_size: number
+}
+
 export interface ResourceItem {
   name: string
   file_count: number
@@ -377,6 +398,14 @@ export const api = {
   resourceSource: (name: string) => get<ResourceSource>('/resources/source', { name }),
   openResourceFolder: (relPath: string) =>
     post<{ ok: boolean }>('/resources/open', { rel_path: relPath }),
+  deleteResource: (path: string, isDir: boolean) =>
+    post<{ ok: boolean; id: string; rel: string; size: number }>('/resources/delete', {
+      path,
+      is_dir: isDir,
+    }),
+  trashList: () => get<TrashResp>('/resources/trash'),
+  restoreResource: (id: string) => post<{ ok: boolean; rel: string }>('/resources/restore', { id }),
+  purgeResource: (id: string) => post<{ ok: boolean; count: number }>('/resources/purge', { id }),
   submitDownload: (urls: string[]) => post<{ id: string; count: number }>('/downloads', { urls }),
   downloadTasks: () => get<{ tasks: DownloadTaskSummary[] }>('/downloads'),
   downloadTask: (id: string) => get<DownloadTaskDetail>(`/downloads/${id}`),
@@ -398,6 +427,11 @@ export function exportCsvUrl(p: Record<string, string | undefined>): string {
 /** 生成资源图片预览地址（B5：受控接口，仅 downloads/ 内图片白名单） */
 export function resourceFileUrl(relPath: string): string {
   return `/api/resources/file?path=${encodeURIComponent(relPath)}`
+}
+
+/** 生成资源视频播放地址（受控接口，仅 downloads/ 内视频白名单，支持 Range） */
+export function resourceVideoUrl(relPath: string): string {
+  return `/api/resources/video?path=${encodeURIComponent(relPath)}`
 }
 
 export function formatSize(bytes: number): string {

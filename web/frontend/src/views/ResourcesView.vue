@@ -1,17 +1,20 @@
 <script setup lang="ts">
 import { computed, h, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElButton, ElMessage, ElResult, ElTag } from 'element-plus'
+import { ElButton, ElMessage, ElMessageBox, ElResult, ElTag } from 'element-plus'
 import type { Columns } from 'element-plus'
 import {
   api,
   formatSize,
   isAborted,
   resourceFileUrl,
+  resourceVideoUrl,
   type ResourceFile,
   type ResourceItem,
   type ResourceSource,
   type Resources,
+  type TrashItem,
+  type TrashResp,
 } from '../api'
 
 const router = useRouter()
@@ -73,9 +76,10 @@ async function load() {
   loadError.value = ''
   try {
     data.value = await api.resources()
-    // 加载完成后并行补齐目录级信息：来源帖（B1）与下载任务关联（B7）
+    // 加载完成后并行补齐目录级信息：来源帖（B1）与下载任务关联（B7）；回收站数量用于工具栏角标
     void loadSources((data.value?.items ?? []).map((i) => i.name))
     void loadTasks()
+    void loadTrash()
   } catch (e) {
     if (isAborted(e)) return
     loadError.value = (e as Error).message
@@ -395,6 +399,162 @@ function closeViewer() {
   viewerVisible.value = false
 }
 
+// ===== 视频播放（弹窗，支持同列表连续播放）=====
+const videoVisible = ref(false)
+const videoList = ref<ResourceFile[]>([])
+const videoIndex = ref(0)
+const videoRef = ref<HTMLVideoElement | null>(null)
+const videoTitle = computed(() => videoList.value[videoIndex.value]?.name ?? '')
+const videoUrl = computed(() => {
+  const cur = videoList.value[videoIndex.value]
+  return cur ? resourceVideoUrl(cur.rel_path) : ''
+})
+
+function playVideo(file: ResourceFile, list: ResourceFile[]) {
+  const vids = list.filter((f) => f.category === 'video')
+  const idx = vids.findIndex((f) => f.rel_path === file.rel_path)
+  if (idx < 0) return
+  videoList.value = vids
+  videoIndex.value = idx
+  videoVisible.value = true
+}
+
+function goVideo(step: number) {
+  const next = videoIndex.value + step
+  if (next < 0 || next >= videoList.value.length) return
+  videoIndex.value = next
+}
+
+/** 播放结束自动连播下一个；已是最后一个则不做处理 */
+function onVideoEnded() {
+  if (videoIndex.value < videoList.value.length - 1) goVideo(1)
+}
+
+/** 关闭时暂停并释放 src，避免后台继续缓冲占用带宽 */
+function closeVideo() {
+  const el = videoRef.value
+  if (el) {
+    el.pause()
+    el.removeAttribute('src')
+    el.load()
+  }
+  videoVisible.value = false
+}
+
+// ===== 删除（软删除：移入回收站，保留期内可恢复）=====
+async function removeFile(file: ResourceFile) {
+  try {
+    await ElMessageBox.confirm(
+      `确定删除文件「${file.name}」（${formatSize(Number(file.size))}）？\n移入回收站后 ${trashKeepDays.value} 天内可恢复。`,
+      '删除确认',
+      { type: 'warning', confirmButtonText: '移入回收站', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
+  try {
+    await api.deleteResource(file.rel_path, false)
+    ElMessage.success('已移入回收站')
+    await load()
+  } catch (e) {
+    if (isAborted(e)) return
+    ElMessage.error(`删除失败: ${(e as Error).message}`)
+  }
+}
+
+async function removeFolder(item: ResourceItem) {
+  try {
+    await ElMessageBox.confirm(
+      `确定删除目录「${item.name}」及其 ${item.file_count} 个文件（${formatSize(item.total_size)}）？\n移入回收站后 ${trashKeepDays.value} 天内可恢复。`,
+      '删除目录确认',
+      { type: 'warning', confirmButtonText: '移入回收站', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
+  try {
+    await api.deleteResource(item.name, true)
+    ElMessage.success('目录已移入回收站')
+    if (active.value === item.name) active.value = ''
+    await load()
+  } catch (e) {
+    if (isAborted(e)) return
+    ElMessage.error(`删除失败: ${(e as Error).message}`)
+  }
+}
+
+// ===== 回收站 =====
+const trashVisible = ref(false)
+const trash = ref<TrashResp>({ items: [], keep_days: 7, total_size: 0 })
+const trashKeepDays = computed(() => trash.value.keep_days || 7)
+
+async function loadTrash() {
+  try {
+    trash.value = await api.trashList()
+  } catch (e) {
+    if (isAborted(e)) return
+    ElMessage.error(`加载回收站失败: ${(e as Error).message}`)
+  }
+}
+
+async function openTrash() {
+  trashVisible.value = true
+  await loadTrash()
+}
+
+async function restoreItem(item: TrashItem) {
+  try {
+    await api.restoreResource(item.id)
+    ElMessage.success('已恢复到原位置')
+    await Promise.all([loadTrash(), load()])
+  } catch (e) {
+    if (isAborted(e)) return
+    ElMessage.error(`恢复失败: ${(e as Error).message}`)
+  }
+}
+
+async function purgeItem(item: TrashItem) {
+  try {
+    await ElMessageBox.confirm(
+      `彻底删除「${item.name}」？该操作不可恢复。`,
+      '彻底删除确认',
+      { type: 'error', confirmButtonText: '彻底删除', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
+  try {
+    await api.purgeResource(item.id)
+    ElMessage.success('已彻底删除')
+    await loadTrash()
+  } catch (e) {
+    if (isAborted(e)) return
+    ElMessage.error(`删除失败: ${(e as Error).message}`)
+  }
+}
+
+async function purgeAll() {
+  const count = trash.value.items.length
+  if (!count) return
+  try {
+    await ElMessageBox.confirm(
+      `彻底删除回收站中全部 ${count} 项？该操作不可恢复。`,
+      '清空回收站确认',
+      { type: 'error', confirmButtonText: '全部彻底删除', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
+  try {
+    const r = await api.purgeResource('')
+    ElMessage.success(`已彻底删除 ${r.count} 项`)
+    await loadTrash()
+  } catch (e) {
+    if (isAborted(e)) return
+    ElMessage.error(`清空失败: ${(e as Error).message}`)
+  }
+}
+
 // B2 全局结果中点击命中目录：清空筛选并回到目录模式展开该目录
 function clearFiltersAndExpand(name: string) {
   keyword.value = ''
@@ -475,13 +635,18 @@ const columns: Columns<ResourceFile> = [
   {
     key: 'actions',
     title: '操作',
-    width: 150,
+    width: 210,
     cellRenderer: ({ rowData }) => {
       const btns = [
         h(
           ElButton,
           { link: true, onClick: () => copyPath(rowData.rel_path) },
           () => '复制路径',
+        ),
+        h(
+          ElButton,
+          { link: true, type: 'danger', onClick: () => removeFile(rowData) },
+          () => '删除',
         ),
       ]
       if (rowData.category === 'image') {
@@ -490,6 +655,14 @@ const columns: Columns<ResourceFile> = [
             ElButton,
             { link: true, type: 'primary', onClick: () => previewImage(rowData, activeFiles.value) },
             () => '预览',
+          ),
+        )
+      } else if (rowData.category === 'video') {
+        btns.unshift(
+          h(
+            ElButton,
+            { link: true, type: 'primary', onClick: () => playVideo(rowData, activeFiles.value) },
+            () => '播放',
           ),
         )
       }
@@ -541,13 +714,18 @@ const globalColumns: Columns<ResourceFile> = [
   {
     key: 'actions',
     title: '操作',
-    width: 150,
+    width: 210,
     cellRenderer: ({ rowData }) => {
       const btns = [
         h(
           ElButton,
           { link: true, onClick: () => copyPath(rowData.rel_path) },
           () => '复制路径',
+        ),
+        h(
+          ElButton,
+          { link: true, type: 'danger', onClick: () => removeFile(rowData) },
+          () => '删除',
         ),
       ]
       if (rowData.category === 'image') {
@@ -556,6 +734,14 @@ const globalColumns: Columns<ResourceFile> = [
             ElButton,
             { link: true, type: 'primary', onClick: () => previewImage(rowData, globalFiles.value) },
             () => '预览',
+          ),
+        )
+      } else if (rowData.category === 'video') {
+        btns.unshift(
+          h(
+            ElButton,
+            { link: true, type: 'primary', onClick: () => playVideo(rowData, globalFiles.value) },
+            () => '播放',
           ),
         )
       }
@@ -715,6 +901,9 @@ onBeforeUnmount(() => {
             <el-option label="目录：按名称排序" value="name" />
           </el-select>
           <el-button class="copy-all" @click="copyAllPaths">复制全部路径</el-button>
+          <el-button type="warning" plain @click="openTrash">
+            回收站<template v-if="trash.items.length">（{{ trash.items.length }}）</template>
+          </el-button>
         </div>
 
         <!-- B2 全局结果模式：命中目录 + 跨目录文件清单 -->
@@ -814,6 +1003,9 @@ onBeforeUnmount(() => {
               <el-button link type="primary" class="open-btn" @click.stop="openFolder(item)">
                 打开
               </el-button>
+              <el-button link type="danger" class="del-btn" @click.stop="removeFolder(item)">
+                删除目录
+              </el-button>
             </div>
 
             <el-collapse-transition>
@@ -851,6 +1043,82 @@ onBeforeUnmount(() => {
       teleported
       @close="closeViewer"
     />
+
+    <!-- 视频播放弹窗：同一列表内可连续播放，播放结束自动下一个 -->
+    <el-dialog
+      v-model="videoVisible"
+      :title="videoTitle"
+      width="70%"
+      top="6vh"
+      destroy-on-close
+      @close="closeVideo"
+    >
+      <video
+        ref="videoRef"
+        class="video-player"
+        :src="videoUrl"
+        controls
+        preload="metadata"
+        autoplay
+        @ended="onVideoEnded"
+      />
+      <template #footer>
+        <div class="video-footer">
+          <span class="text-muted">
+            第 {{ videoList.length ? videoIndex + 1 : 0 }} / {{ videoList.length }} 个
+          </span>
+          <div>
+            <el-button :disabled="videoIndex <= 0" @click="goVideo(-1)">上一个</el-button>
+            <el-button
+              type="primary"
+              :disabled="videoIndex >= videoList.length - 1"
+              @click="goVideo(1)"
+            >
+              下一个
+            </el-button>
+          </div>
+        </div>
+      </template>
+    </el-dialog>
+
+    <!-- 回收站：软删除项，保留期内可恢复，也可彻底删除 -->
+    <el-drawer v-model="trashVisible" title="回收站" size="520px">
+      <div class="trash-head">
+        <span class="text-muted">
+          共 {{ trash.items.length }} 项 · {{ formatSize(trash.total_size) }} · 保留
+          {{ trash.keep_days }} 天
+        </span>
+        <el-button
+          type="danger"
+          plain
+          size="small"
+          :disabled="!trash.items.length"
+          @click="purgeAll"
+        >
+          清空回收站
+        </el-button>
+      </div>
+      <el-empty v-if="!trash.items.length" description="回收站为空" />
+      <div v-else class="trash-list">
+        <div v-for="it in trash.items" :key="it.id" class="trash-item">
+          <div class="trash-main">
+            <div class="trash-name" :title="it.rel">
+              {{ it.name }}
+              <el-tag v-if="it.is_dir" size="small" class="trash-tag">目录</el-tag>
+            </div>
+            <div class="trash-meta text-muted">
+              {{ formatSize(it.size) }} ·
+              <template v-if="it.expired">已过保留期</template>
+              <template v-else>剩余 {{ it.remain_days }} 天</template>
+            </div>
+          </div>
+          <div class="trash-ops">
+            <el-button link type="primary" size="small" @click="restoreItem(it)">恢复</el-button>
+            <el-button link type="danger" size="small" @click="purgeItem(it)">彻底删除</el-button>
+          </div>
+        </div>
+      </div>
+    </el-drawer>
   </div>
 </template>
 
@@ -1095,6 +1363,80 @@ onBeforeUnmount(() => {
 .open-btn {
   flex-shrink: 0;
   margin-left: 0;
+}
+
+.del-btn {
+  flex-shrink: 0;
+  margin-left: 0;
+}
+
+/* 视频播放弹窗 */
+.video-player {
+  width: 100%;
+  max-height: 70vh;
+  background: #000;
+  border-radius: 6px;
+  display: block;
+}
+
+.video-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+/* 回收站抽屉 */
+.trash-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.trash-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.trash-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--app-border);
+  border-radius: 6px;
+}
+
+.trash-main {
+  min-width: 0;
+  flex: 1;
+}
+
+.trash-name {
+  font-size: 13px;
+  color: #303133;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.trash-tag {
+  margin-left: 6px;
+}
+
+.trash-meta {
+  margin-top: 4px;
+  font-size: 12px;
+}
+
+.trash-ops {
+  flex-shrink: 0;
+  display: flex;
+  gap: 4px;
 }
 
 .folder-body {

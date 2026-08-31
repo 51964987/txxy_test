@@ -28,6 +28,10 @@ ExportRateLimit = Annotated[None, Depends(ratelimit.rate_limit(5, 60))]
 ResourcesRateLimit = Annotated[None, Depends(ratelimit.rate_limit(60, 60))]
 FileRateLimit = Annotated[None, Depends(ratelimit.rate_limit(60, 60))]
 OpenRateLimit = Annotated[None, Depends(ratelimit.rate_limit(10, 60))]
+# 视频播放会产生大量 Range 请求（拖进度条一次 3~10 个），限流放宽到 300 次/分
+VideoRateLimit = Annotated[None, Depends(ratelimit.rate_limit(300, 60))]
+# 删除 / 恢复 / 彻底删除为破坏性操作，限 10 次/分
+DeleteRateLimit = Annotated[None, Depends(ratelimit.rate_limit(10, 60))]
 
 # ================= 响应模型（P1-10） =================
 # 仅覆盖结构稳定的核心接口；/runs、/resources 因字段条件性存在（运行中 / 日志回退等）不强制
@@ -791,6 +795,68 @@ def resources_open(_: OpenRateLimit, req: ResourceOpenReq) -> dict[str, Any]:
     if not ok:
         raise HTTPException(404, "目录不存在或路径越界")
     return {"ok": True}
+
+
+@router.get("/resources/video")
+def resources_video(_: VideoRateLimit, path: str) -> FileResponse:
+    """受控视频播放：仅允许 downloads/ 内、扩展名在视频白名单内的文件。
+
+    复用 resolve_safe 做防穿越校验；Range 由 Starlette FileResponse 原生支持（返回 206），
+    前端可直接拖动进度条，无需自行分片。
+    """
+    target = resources.resolve_safe(path)
+    if target is None:
+        raise HTTPException(404, "文件不存在或路径越界")
+    media_type = resources.PLAYABLE_TYPES.get(target.suffix.lower())
+    if media_type is None:
+        raise HTTPException(400, "仅支持播放视频文件")
+    return FileResponse(target, media_type=media_type)
+
+
+class ResourceDeleteReq(BaseModel):
+    """删除请求体：path 为 downloads/ 内相对路径，is_dir 区分文件与目录。"""
+
+    path: str
+    is_dir: bool = False
+
+
+class ResourceIdReq(BaseModel):
+    """按回收站条目 ID 操作（恢复 / 彻底删除）。"""
+
+    id: str
+
+
+@router.post("/resources/delete")
+def resources_delete(_: DeleteRateLimit, req: ResourceDeleteReq) -> dict[str, Any]:
+    """软删除：移入 outputs/trash/ 保留 TRASH_KEEP_DAYS 天，可在回收站内恢复或彻底删除。"""
+    r = resources.move_to_trash(req.path, req.is_dir)
+    if not r["ok"]:
+        raise HTTPException(400, str(r["reason"]))
+    return r
+
+
+@router.get("/resources/trash")
+def resources_trash() -> dict[str, Any]:
+    """回收站清单：含每项的剩余保留天数与是否已过期。"""
+    return resources.list_trash()
+
+
+@router.post("/resources/restore")
+def resources_restore(_: DeleteRateLimit, req: ResourceIdReq) -> dict[str, Any]:
+    """从回收站恢复到 downloads/ 下的原路径（目标已存在时拒绝，避免覆盖）。"""
+    r = resources.restore_trash(req.id)
+    if not r["ok"]:
+        raise HTTPException(400, str(r["reason"]))
+    return r
+
+
+@router.post("/resources/purge")
+def resources_purge(_: DeleteRateLimit, req: ResourceIdReq) -> dict[str, Any]:
+    """彻底删除：id 非空时删除该项，id 为空字符串时清空回收站全部条目。"""
+    r = resources.purge_trash(req.id)
+    if not r["ok"]:
+        raise HTTPException(400, str(r["reason"]))
+    return r
 
 
 # ---------------- 下载中心 ----------------

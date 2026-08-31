@@ -46,6 +46,11 @@ DOWNLOAD_TASKS_FILE = Path(
     os.environ.get("TXXY_DOWNLOAD_TASKS_FILE", str(BASE_DIR / "outputs" / "download_tasks.json"))
 )
 
+# ---------------- 资源管理：回收站（软删除） ----------------
+# 删除的资源先移入回收站，保留期到期后可彻底清理；永久删除入口在回收站内提供
+TRASH_DIR = Path(os.environ.get("TXXY_TRASH_DIR", str(BASE_DIR / "outputs" / "trash")))
+TRASH_KEEP_DAYS = int(os.environ.get("TXXY_TRASH_KEEP_DAYS", "7"))
+
 # 数据总览【自动刷新】总开关：默认开启（Header 显示自动刷新开关并启动轮询，
 # 抓取过程中 KPI 准实时更新）。如需关闭可设环境变量 TXXY_ENABLE_AUTO_REFRESH=0。
 # 前端 /api/config 读取该值，为 False 时不显示自动刷新开关、不启动轮询。
