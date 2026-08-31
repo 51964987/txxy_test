@@ -16,20 +16,21 @@ REM      --no-rebuild / false / 0 / no / off   skip build
 REM      omitted                               skip build, start with existing dist
 REM
 REM    scope-arg:
-REM      --lan      listen on all interfaces and open firewall, LAN devices can access
-REM      --no-lan   localhost only, default
+REM      --lan      listen on all interfaces and open firewall, LAN devices can
+REM                 access. THIS IS THE DEFAULT.
+REM      --no-lan   localhost only
 REM
 REM  examples:
-REM    start_web.bat                    localhost, no rebuild
+REM    start_web.bat                    LAN access by default, no rebuild
 REM    start_web.bat --rebuild          rebuild frontend, then start
-REM    start_web.bat --lan              allow phone and other LAN devices
-REM    start_web.bat --rebuild --lan    rebuild and allow LAN access
+REM    start_web.bat --no-lan           localhost only
+REM    start_web.bat --rebuild --no-lan rebuild, localhost only
 REM ============================================================
 
 if not defined TXXY_WEB_PORT set "TXXY_WEB_PORT=8088"
 set "PORT=%TXXY_WEB_PORT%"
 set "ARG_BUILD="
-set "LAN=0"
+set "LAN=1"
 
 REM ---------------- parse arguments ----------------
 :parse
@@ -51,12 +52,14 @@ shift
 goto :parse
 
 :parsed
-if "%LAN%"=="1" goto :setlan
-set "TXXY_WEB_HOST=127.0.0.1"
+REM 外部已用环境变量指定监听地址时沿用，脚本不覆盖（与 config.py 的环境变量约定一致）
+if defined TXXY_WEB_HOST goto :afterhost
+if "%LAN%"=="0" goto :setlocalhost
+set "TXXY_WEB_HOST=0.0.0.0"
 goto :afterhost
 
-:setlan
-set "TXXY_WEB_HOST=0.0.0.0"
+:setlocalhost
+set "TXXY_WEB_HOST=127.0.0.1"
 
 :afterhost
 echo ============================================

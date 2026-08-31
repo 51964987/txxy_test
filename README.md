@@ -28,7 +28,7 @@ txxy_test/
 ├── media_download.py   # 通用下载核心（Referer 降级重试 / 内容校验 / 断点续传）
 ├── init_db.py          # SQLite 数据库一次性初始化（幂等：建表 + 中文注释表 + 全量查询索引）
 ├── run_daily.bat       # Windows 计划任务批处理入口（固定工作目录）
-├── start_web.bat       # 一键启动前端展示服务（调用 start_web.py；支持 --rebuild 重新编译、--lan 允许局域网/手机访问）
+├── start_web.bat       # 一键启动前端展示服务（调用 start_web.py；默认局域网可访问，支持 --rebuild 重新编译、--no-lan 仅本机访问）
 ├── start_web.py        # Web 启动器（默认用现有 dist 快速启动；传 true/--rebuild 重新编译前端；解释器缺依赖时自动切换）
 ├── kill_port.bat       # 按端口结束占用进程（如释放 8088 端口）
 ├── requirements.txt
@@ -194,10 +194,10 @@ downloads/帖子标题/
 以网页形式浏览抓取数据（**只读**，不影响抓取/下载任务）：
 
 ```bash
-start_web.bat                      # 一键启动（默认不编译，用现有 dist 快速启动；未构建时自动 npm install + npm run build；解释器缺 fastapi 时自动切换可用 Python）
+start_web.bat                      # 一键启动：默认监听 0.0.0.0（手机等同网设备可访问，无鉴权），不编译，用现有 dist 快速启动；未构建时自动 npm install + npm run build；解释器缺 fastapi 时自动切换可用 Python
 start_web.bat --rebuild            # 重新编译前端后启动（兼容旧写法 true / 1 / yes / on）
-start_web.bat --lan                # 监听 0.0.0.0 并自动放行防火墙，供手机等同网设备访问（无鉴权，用完建议改回默认）
-start_web.bat --rebuild --lan      # 重新编译 + 局域网访问（两个参数顺序任意）
+start_web.bat --no-lan             # 仅本机访问（监听 127.0.0.1），不需要局域网暴露时用
+start_web.bat --rebuild --no-lan   # 重新编译 + 仅本机访问（两个参数顺序任意）
 # 或手动：
 pip install fastapi uvicorn        # 首次（已写入 requirements.txt）
 python -X utf8 web/app.py          # 启动后访问 http://127.0.0.1:8088（需使用装有依赖的解释器）
