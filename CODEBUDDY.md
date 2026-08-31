@@ -69,9 +69,9 @@ txxy_test/                  # 抓取脚本在项目根：scraper.py / run_batch.
     ├── runs.py / resources.py / download_tasks.py  # 运行记录 / 资源扫描 / 下载中心队列
     └── frontend/src/
         ├── api/ stores/ router/ layout/ components/ views/ utils/
-        └── views/    # Dashboard / Posts / Runs / Resources / Downloads 五个页面
+        └── views/    # Dashboard / Posts / Runs / Resources / Downloads / Trash 六个页面
 ```
-路由固定为 `/`、`/posts`、`/runs`、`/resources`、`/downloads` 五条。
+路由为 `/`、`/posts`、`/runs`、`/resources`、`/downloads`、`/trash` 六条（`/trash` 为 2026-08-31 经用户确认新增的回收管理页，此前为五条）。
 
 ## 项目专属约束（必须遵守）
 1. **自动刷新默认开启**：`config.ENABLE_AUTO_REFRESH` 默认 `1`；前端 `REFRESH_INTERVAL = 5000` 轮询；`db._TTL = 5`。禁止回退为关闭 / 30s 轮询 / 60s 缓存，除非用户明确要求。

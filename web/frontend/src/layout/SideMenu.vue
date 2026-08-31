@@ -3,6 +3,7 @@ import { computed, type Component } from 'vue'
 import { useRoute } from 'vue-router'
 import {
   Clock,
+  Delete,
   Document,
   Download,
   FolderOpened,
@@ -29,6 +30,7 @@ const MENU_ITEMS: MenuItem[] = [
   { path: '/runs', title: '运行记录', icon: Clock },
   { path: '/resources', title: '资源管理', icon: FolderOpened },
   { path: '/downloads', title: '下载中心', icon: Download },
+  { path: '/trash', title: '回收管理', icon: Delete },
 ]
 
 const route = useRoute()

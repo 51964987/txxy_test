@@ -33,6 +33,12 @@ const router = createRouter({
       component: () => import('../views/DownloadsView.vue'),
       meta: { title: '下载中心' },
     },
+    {
+      path: '/trash',
+      name: 'trash',
+      component: () => import('../views/TrashView.vue'),
+      meta: { title: '回收管理' },
+    },
   ],
 })
 
