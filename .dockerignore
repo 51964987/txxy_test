@@ -8,6 +8,12 @@ db/
 outputs/
 downloads/
 docs/
+# 宿主机一键部署脚本与 overlay 编排（仅宿主机使用，镜像内不需要）
+deploy/
+# 宿主机运维脚本（导入/备份，仅宿主机使用）
+scripts/
+backups/
+docker/bundle/
 web/frontend/node_modules/
 web/frontend/dist/
 _server.log

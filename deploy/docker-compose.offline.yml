@@ -1,0 +1,20 @@
+# ============================================================
+# overlay：私有（离线）Linux 环境
+#
+# 用法（不带 --build，镜像由 docker load 导入，现场无网络不可构建）：
+#   docker compose -f docker-compose.yml -f deploy/docker-compose.offline.yml up -d
+#
+# 前置：
+#   1) 在联网构建机执行 bash docker/build-offline.sh 生成 tar，拷贝到离线机；
+#   2) 离线机执行：docker load -i txxy-<version>-<hash10>.tar
+#   3) .env 中设置 TXXY_IMAGE=txxy:<version>-<hash10>
+#
+# 说明：离线环境无法访问源站，抓取不可用，因此不要启用 cron
+#       （基础编排中 cron 已在 profiles 内，默认不启动）。
+#       本环境定位为纯数据展示，数据需按 scripts/import-data.sh 预先导入。
+# ============================================================
+services:
+  web:
+    image: ${TXXY_IMAGE:-txxy:latest}
+  cron:
+    image: ${TXXY_IMAGE:-txxy:latest}

@@ -1,25 +1,75 @@
+# ============================================================
+# txxy 基础编排（默认：数据使用命名卷，与宿主机隔离）
+#
+# 数据策略（overlay 方式：共用部分只在本文件维护一次）
+#   默认隔离   : docker compose up -d --build
+#   共用宿主机 : docker compose -f docker-compose.yml -f deploy/docker-compose.host-db.yml up -d --build
+#   离线环境   : docker compose -f docker-compose.yml -f deploy/docker-compose.offline.yml up -d
+#
+# 定时抓取（cron）默认不启动，需显式启用：
+#   docker compose --profile cron up -d --build
+# 离线环境无法访问源站，不要启用 cron。
+# ============================================================
 services:
   web:
     build: .
+    image: ${TXXY_IMAGE:-txxy:latest}
     command: ["bash", "docker/entrypoint.sh"]
     ports:
-      - "18088:8088"            # 环境A 若本地 8088 仍被占用, 改如 "18088:8088"
+      - "${TXXY_HOST_PORT:-18088}:8088"
     env_file: .env
     volumes:
-      - ./db:/app/db                  # bind mount: 环境A 即共用本地 db/posts.db
-      - ./outputs:/app/outputs
-      - ./downloads:/app/downloads
+      - txxy_db:/app/db
+      - txxy_outputs:/app/outputs
+      - txxy_downloads:/app/downloads
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      # 用 Python 内置 urllib 探测，避免为健康检查额外安装 curl
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8088/api/health')",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    logging: &default-logging
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   cron:
     build: .
+    image: ${TXXY_IMAGE:-txxy:latest}
     command: ["bash", "docker/entrypoint_cron.sh"]
+    user: root # cron 需 root 安装 crontab；web 已使用镜像内非 root 用户
+    depends_on:
+      web:
+        condition: service_healthy # 等 web 完成建库建表后再启动，避免并发初始化
     env_file: .env
     volumes:
-      - ./db:/app/db
-      - ./outputs:/app/outputs
-      - ./downloads:/app/downloads
+      - txxy_db:/app/db
+      - txxy_outputs:/app/outputs
+      - txxy_downloads:/app/downloads
     restart: unless-stopped
+    profiles: ["cron"] # 默认不启动：离线/纯展示场景无需抓取
+    stop_grace_period: 40s
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+          cpus: "1.5"
+    logging: *default-logging
 
-# 说明: 数据目录统一 bind mount 宿主机 ./db ./outputs ./downloads, 无需命名卷声明;
-# 若某目录想改用命名卷, 改回 "txxy_xxx:/app/xxx" 并在下方 volumes 段声明。
+volumes:
+  txxy_db:
+  txxy_outputs:
+  txxy_downloads:

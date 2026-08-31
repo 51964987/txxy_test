@@ -46,3 +46,15 @@ web/frontend/dist/
 # 前端依赖包
 web/frontend/node_modules/
 
+
+
+
+# 离线镜像导出产物（体积大，不入库）
+docker/bundle/
+
+
+
+
+# 命名卷备份产物
+backups/
+

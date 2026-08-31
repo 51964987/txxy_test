@@ -1,0 +1,27 @@
+# ============================================================
+# overlay：共用宿主机数据目录（bind mount）
+#
+# 用法：
+#   docker compose -f docker-compose.yml -f deploy/docker-compose.host-db.yml up -d --build
+#
+# 适用：环境 A（Win11 + Docker Desktop）希望容器直接读写宿主机现有的
+#       db/posts.db、outputs/、downloads/，无需按导入步骤迁移数据。
+#
+# 注意：
+#   1) 此模式下容器与宿主机 Python 进程共用同一个 SQLite 文件，
+#      同一时刻只应有一方执行抓取（停掉宿主机计划任务 txxy_daily_batch，或错开时间）；
+#   2) 若容器报「数据目录不可写」，说明宿主机目录属主与容器内
+#      appuser(uid 1000) 不匹配，请在宿主机执行：
+#        sudo chown -R 1000:1000 db outputs downloads
+# ============================================================
+services:
+  web:
+    volumes:
+      - ./db:/app/db
+      - ./outputs:/app/outputs
+      - ./downloads:/app/downloads
+  cron:
+    volumes:
+      - ./db:/app/db
+      - ./outputs:/app/outputs
+      - ./downloads:/app/downloads

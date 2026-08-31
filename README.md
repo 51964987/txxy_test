@@ -32,9 +32,12 @@ txxy_test/
 ├── start_web.py        # Web 启动器（默认用现有 dist 快速启动；传 true/--rebuild 重新编译前端；解释器缺依赖时自动切换）
 ├── kill_port.bat       # 按端口结束占用进程（如释放 8088 端口）
 ├── requirements.txt
-├── Dockerfile / docker-compose.yml / docker-compose.named-volumes.yml  # Docker 化部署交付物（默认 bind mount / 备用命名卷）
-├── deploy_windows.ps1 / deploy_wsl.sh / deploy_linux.sh                # Win11 / WSL / Linux 三环境一键部署脚本
-├── docker/             # 容器入口脚本（entrypoint.sh / entrypoint_cron.sh / txxy_cron 定时抓取）
+├── Dockerfile / docker-compose.yml                                     # Docker 化部署交付物（默认：命名卷隔离，web 非 root）
+├── deploy/             # 部署相关：四环境一键脚本 + overlay 编排（脚本自动切换项目根，任意目录可调用；Docker 部署端口统一 18088，与本地 start_web.bat 的 8088 错开）
+│   ├── deploy_windows.ps1 / deploy_wsl.sh / deploy_linux.sh / deploy_offline.sh  # Win11 / WSL / Linux / 离线 Linux
+│   └── docker-compose.host-db.yml / docker-compose.offline.yml         # overlay：共用宿主机 DB / 离线环境
+├── docker/             # 容器入口脚本（entrypoint.sh / entrypoint_cron.sh / txxy_cron 定时抓取 / build-offline.sh 离线镜像导出）
+├── scripts/            # 部署辅助脚本（import-data.sh 导入历史数据 / backup.sh 备份命名卷）
 ├── docs/               # 设计与优化方案文档（主题索引见文末「设计文档索引」）
 ├── web/                # 前端数据展示服务（FastAPI + Vue3 SPA，只读访问 db/posts.db）
 │   ├── app.py          # 服务入口（托管 /api 接口 + 前端静态资源；GZip 压缩、/api 请求耗时监控日志）
@@ -302,8 +305,8 @@ schtasks /Delete /TN "txxy_daily_batch" /F
 | 文档 | 主题 |
 |---|---|
 | `docs/数据总览大屏设计与优化总览.md` | 数据总览页（KPI/趋势/版块分布/热门榜）现状、已落地优化与待确认候选方案、API 与加载刷新 |
-| `docs/资源管理页面优化方案.md` | 资源管理页优化：P0/P1 已落地实施记录；第八节为新增需求评估（删除功能、视频播放，待确认） |
-| `docs/Docker部署方案.md` | 容器化与三环境一键部署 |
+| `docs/资源管理页面优化方案.md` | 资源管理页优化：P0/P1 已落地；第八节新增需求（删除软删除、视频播放、回收管理页 `/trash`）已落地 |
+| `docs/Docker部署方案.md` | 容器化与四环境部署（Win11 / WSL / 联网 Linux / 离线 Linux）：默认命名卷隔离、可选共用宿主机 DB、cron profile 化、web 非 root、健康检查；离线以镜像 tar 交付 |
 | `docs/性能优化方案-数据总览卡顿.md` | 数据总览页 SQL/前端懒加载性能排查与优化 |
 | `docs/性能优化方案-帖子浏览页卡顿.md` | 帖子浏览页 `/api/posts` 分页与索引性能排查与优化 |
 | `docs/下载中心设计与实现.md` | 下载中心（download_tasks）设计与实现：任务队列、异步下载、状态持久化、前端轮询；含优化建议 v2（待确认） |
