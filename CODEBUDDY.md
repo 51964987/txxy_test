@@ -84,3 +84,4 @@ txxy_test/                  # 抓取脚本在项目根：scraper.py / run_batch.
 8. **禁止**：引入项目未用新依赖（React/Tailwind/Redux 等）、Web 写库、改动既有路由路径与 history 模式、`<script setup>` 外使用 Options API。
 9. **交付自检**：前端改动后 `cd web/frontend && npx vue-tsc --noEmit` 必须 0 错误，且 `read_lints`（ts-plugin IDE 诊断）也必须 0 错误——两者对模板的类型检查严格度不同，需双通道都通过；后端 `python web/app.py` 可启动且既有接口行为不变。
 10. **模板禁止对 setup 变量内联赋值**：`<script setup>` 顶层 `let` 变量（带字面量初始值，如 `let x: boolean = false`）在模板中直接写 `@mouseenter="x = true"`，会被 ts-plugin 按初始值收窄为字面量类型 `false` 而误报「不能将类型 true 分配给类型 false」（vue-tsc 不报此错）；一律用方法包装，如 `@mouseenter="setPaused(true)"`。
+11. **下钻必须继承上下文口径（数字自洽）**：从榜单 / 统计图表下钻到明细页时，必须携带当前生效的筛选口径（统计范围、时间窗口等），保证「榜单上的数字」与「明细页条数」严格一致——榜上显示 431 条，点进去就必须是这 431 条，而不是该维度的全部数据（如该作者累计 4314 条）。这是 BI 与看板类产品的通行做法（Grafana 的 dashboard variables、GA 的全局日期范围均如此）。判断标准：下钻目标是**明细记录列表**则继承上下文；是**实体档案页**（看全貌）则不必。明细页必须把生效条件集中展示为摘要条并支持逐项清除，让用户看得见、能调整，而不是散落在筛选框里靠猜。

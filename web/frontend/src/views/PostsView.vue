@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { CopyDocument, Download, Search, View } from '@element-plus/icons-vue'
@@ -66,6 +66,9 @@ async function load() {
 
 function doSearch() {
   queryText.value = filters.q.trim()
+  // 主动输入关键词即视为放弃「作者精确过滤」：否则下钻带来的 author 条件会残留，
+  // 出现「换了关键词却仍被旧作者限制」的结果
+  filters.author = ''
   page.value = 1
   load()
 }
@@ -80,6 +83,85 @@ function doReset() {
   sort.value = 'date_desc'
   load()
 }
+
+/** 日期跨度天数（含首尾），用于条件条直观显示「共 N 天」 */
+function dateRangeDays(from: string, to: string): number {
+  const a = new Date(`${from}T00:00:00`).getTime()
+  const b = new Date(`${to}T00:00:00`).getTime()
+  if (Number.isNaN(a) || Number.isNaN(b)) return 0
+  return Math.round((b - a) / 86400000) + 1
+}
+
+/** 近 N 日的起止日期（含今天），与数据总览活跃榜口径一致 */
+function lastDays(days: number): [Date, Date] {
+  const to = new Date()
+  const from = new Date()
+  from.setDate(from.getDate() - (days - 1))
+  return [from, to]
+}
+
+const dateShortcuts = [
+  { text: '近 7 日', value: () => lastDays(7) },
+  { text: '近 30 日', value: () => lastDays(30) },
+]
+
+/**
+ * 当前生效的查询条件汇总（顶部摘要条）。
+ * 大屏下钻会同时带上作者/版块与时间范围，集中展示并支持逐项清除，
+ * 避免用户对着筛选框猜测「现在究竟按什么在过滤」。
+ */
+const activeFilters = computed(() => {
+  const list: { key: string; label: string; clear: () => void }[] = []
+  if (filters.fid.length) {
+    const names = filters.fid.map((f) => fidMeta.value.find((m) => m.fid === f)?.name ?? f)
+    list.push({
+      key: 'fid',
+      label: `版块：${names.join('、')}`,
+      clear: () => {
+        filters.fid = []
+        page.value = 1
+        load()
+      },
+    })
+  }
+  if (filters.author) {
+    list.push({
+      key: 'author',
+      label: `作者：${filters.author}（精确）`,
+      clear: () => {
+        filters.author = ''
+        filters.q = ''
+        queryText.value = ''
+        page.value = 1
+        load()
+      },
+    })
+  } else if (queryText.value) {
+    list.push({
+      key: 'q',
+      label: `关键词：${queryText.value}`,
+      clear: () => {
+        queryText.value = ''
+        filters.q = ''
+        page.value = 1
+        load()
+      },
+    })
+  }
+  if (filters.dateRange) {
+    const [from, to] = filters.dateRange
+    list.push({
+      key: 'date',
+      label: `日期：${from} ~ ${to}（共 ${dateRangeDays(from, to)} 天）`,
+      clear: () => {
+        filters.dateRange = null
+        page.value = 1
+        load()
+      },
+    })
+  }
+  return list
+})
 
 function onPageChange(p: number) {
   page.value = p
@@ -206,6 +288,7 @@ onMounted(() => {
             range-separator="至"
             start-placeholder="开始日期"
             end-placeholder="结束日期"
+            :shortcuts="dateShortcuts"
             style="width: 250px"
           />
         </div>
@@ -224,6 +307,21 @@ onMounted(() => {
           </el-input>
         </div>
         <el-button @click="doReset">重置</el-button>
+      </div>
+      <!-- 当前查询条件：大屏下钻会带上作者/版块与时间范围，集中展示且可逐项清除 -->
+      <div v-if="activeFilters.length" class="active-filters">
+        <span class="af-label">当前条件</span>
+        <el-tag
+          v-for="f in activeFilters"
+          :key="f.key"
+          closable
+          size="small"
+          type="info"
+          @close="f.clear"
+        >
+          {{ f.label }}
+        </el-tag>
+        <el-button link type="primary" size="small" @click="doReset">清空全部</el-button>
       </div>
     </div>
 
@@ -329,6 +427,25 @@ onMounted(() => {
 <style scoped>
 .filter-bar {
   display: flex;
+  flex-wrap: wrap;
+}
+
+/* 当前查询条件摘要条：大屏下钻会带上作者/版块与时间范围，集中展示且可逐项清除 */
+.active-filters {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  width: 100%;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed #ebeef5;
+}
+
+.af-label {
+  color: #909399;
+  font-size: 12px;
+  white-space: nowrap;
 }
 
 .filter-row {

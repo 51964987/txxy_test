@@ -97,20 +97,28 @@ class TodayFidsResp(BaseModel):
 
 
 class TopAuthorResp(BaseModel):
-    """活跃作者（按累计发帖量排序）。"""
+    """活跃作者条目：主值随 range 口径变化，附今日/近7日/近30日与环比。"""
     author: str
     total: int
     today: int
     week: int
+    month: int
+    prev_week: int
+    delta: float | None = None   # 环比百分比；None = 前 7 日无基准（新增）
+    value: int                   # 当前口径下的排序主值
 
 
 class TopFidResp(BaseModel):
-    """活跃版块（按累计发帖量排序，与活跃作者榜同构）。"""
+    """活跃版块条目（与活跃作者榜同构）。"""
     fid: str | None = None
     name: str
     total: int
     today: int
     week: int
+    month: int
+    prev_week: int
+    delta: float | None = None
+    value: int
 
 
 class TrendPointResp(BaseModel):
@@ -406,61 +414,109 @@ def stats_today_fids(limit: Annotated[int, Query(ge=1, le=30)] = 8) -> TodayFids
     return db.cached("today_fids_v1", _calc)
 
 
-@router.get("/stats/top_authors")
-def stats_top_authors(limit: Annotated[int, Query(ge=1, le=30)] = 10) -> list[TopAuthorResp]:
-    """活跃作者榜：按累计发帖量降序，附今日 / 近 7 日发帖数。"""
-    today = date_cls.today().isoformat()
-    week_ago = (date_cls.today() - timedelta(days=6)).isoformat()
+def _delta(cur: int, prev: int) -> float | None:
+    """近 7 日相对前 7 日的环比百分比。
 
+    前值为 0 时没有计算基准：当前值同为 0 记 0，否则返回 None（前端按「新增」展示）。
+    """
+    if prev <= 0:
+        return None if cur > 0 else 0.0
+    return round((cur - prev) / prev * 100, 1)
+
+
+def _top_rank(col: str, range_key: str, limit: int) -> list[dict]:
+    """活跃榜通用查询（作者榜与版块榜同构）。
+
+    range_key：all=累计、7d=近 7 日、30d=近 30 日。
+    非累计口径只保留该窗口内有发帖的行，否则榜单会被大量 0 值占满。
+    同时过滤 date < 2000-01-01 的脏数据（历史解析异常的日期会落到 1970）。
+    """
+    today = date_cls.today()
+    d_today = today.isoformat()
+    week_ago = (today - timedelta(days=6)).isoformat()       # 近 7 日（含今天）
+    month_ago = (today - timedelta(days=29)).isoformat()     # 近 30 日（含今天）
+    prev_start = (today - timedelta(days=13)).isoformat()    # 前 7 日起
+    prev_end = (today - timedelta(days=7)).isoformat()       # 前 7 日止
+
+    # col 为内部常量（author / fid），不来自用户输入
+    rank_col = {"all": "total", "7d": "week_c", "30d": "month_c"}[range_key]
+    having = "" if range_key == "all" else f" HAVING {rank_col} > 0"
+    sql = (
+        f"SELECT {col} AS key, COUNT(*) AS total,"
+        " SUM(CASE WHEN date = ? THEN 1 ELSE 0 END) AS today_c,"
+        " SUM(CASE WHEN date >= ? THEN 1 ELSE 0 END) AS week_c,"
+        " SUM(CASE WHEN date >= ? THEN 1 ELSE 0 END) AS month_c,"
+        " SUM(CASE WHEN date BETWEEN ? AND ? THEN 1 ELSE 0 END) AS prev_week_c"
+        f" FROM posts WHERE {col} IS NOT NULL AND {col} <> '' AND date >= '2000-01-01'"
+        f" GROUP BY {col}{having}"
+        f" ORDER BY {rank_col} DESC, {col} LIMIT ?"
+    )
+    return [
+        {
+            "key": r["key"],
+            "total": r["total"],
+            "today": r["today_c"],
+            "week": r["week_c"],
+            "month": r["month_c"],
+            "prev_week": r["prev_week_c"],
+            "delta": _delta(r["week_c"], r["prev_week_c"]),
+            "value": r[rank_col],
+        }
+        for r in db.query(sql, (d_today, week_ago, month_ago, prev_start, prev_end, limit))
+    ]
+
+
+@router.get("/stats/top_authors")
+def stats_top_authors(
+    limit: Annotated[int, Query(ge=1, le=30)] = 10,
+    range_key: Annotated[str, Query(alias="range", pattern="^(all|7d|30d)$")] = "all",
+) -> list[TopAuthorResp]:
+    """活跃作者榜。
+
+    range=all 按累计发帖量、7d 按近 7 日、30d 按近 30 日降序；
+    附今日 / 近 7 日 / 近 30 日，以及近 7 日相对前 7 日的环比。
+    """
     def _calc():
-        rows = db.query(
-            "SELECT author, COUNT(*) AS total," +
-            " SUM(CASE WHEN date = ? THEN 1 ELSE 0 END) AS today_c," +
-            " SUM(CASE WHEN date >= ? THEN 1 ELSE 0 END) AS week_c" +
-            " FROM posts WHERE author IS NOT NULL AND author <> ''" +
-            " GROUP BY author ORDER BY total DESC, author LIMIT ?",
-            (today, week_ago, limit),
-        )
         return [
             {
-                "author": r["author"],
+                "author": r["key"],
                 "total": r["total"],
-                "today": r["today_c"],
-                "week": r["week_c"],
+                "today": r["today"],
+                "week": r["week"],
+                "month": r["month"],
+                "prev_week": r["prev_week"],
+                "delta": r["delta"],
+                "value": r["value"],
             }
-            for r in rows
+            for r in _top_rank("author", range_key, limit)
         ]
 
-    return db.cached("top_authors_v1", _calc)
+    return db.cached(f"top_authors_v2:{range_key}:{limit}", _calc)
 
 
 @router.get("/stats/top_fids")
-def stats_top_fids(limit: Annotated[int, Query(ge=1, le=30)] = 10) -> list[TopFidResp]:
-    """活跃版块榜：按累计发帖量降序，附今日 / 近 7 日发帖数（与活跃作者榜同构）。"""
-    today = date_cls.today().isoformat()
-    week_ago = (date_cls.today() - timedelta(days=6)).isoformat()
-
+def stats_top_fids(
+    limit: Annotated[int, Query(ge=1, le=30)] = 10,
+    range_key: Annotated[str, Query(alias="range", pattern="^(all|7d|30d)$")] = "all",
+) -> list[TopFidResp]:
+    """活跃版块榜（与活跃作者榜同构，range 口径一致）。"""
     def _calc():
-        rows = db.query(
-            "SELECT fid, COUNT(*) AS total," +
-            " SUM(CASE WHEN date = ? THEN 1 ELSE 0 END) AS today_c," +
-            " SUM(CASE WHEN date >= ? THEN 1 ELSE 0 END) AS week_c" +
-            " FROM posts WHERE fid IS NOT NULL" +
-            " GROUP BY fid ORDER BY total DESC, fid LIMIT ?",
-            (today, week_ago, limit),
-        )
         return [
             {
-                "fid": r["fid"],
-                "name": config.fid_name(r["fid"]),
+                "fid": r["key"],
+                "name": config.fid_name(r["key"]),
                 "total": r["total"],
-                "today": r["today_c"],
-                "week": r["week_c"],
+                "today": r["today"],
+                "week": r["week"],
+                "month": r["month"],
+                "prev_week": r["prev_week"],
+                "delta": r["delta"],
+                "value": r["value"],
             }
-            for r in rows
+            for r in _top_rank("fid", range_key, limit)
         ]
 
-    return db.cached("top_fids_v1", _calc)
+    return db.cached(f"top_fids_v2:{range_key}:{limit}", _calc)
 
 
 @router.get("/stats/month_top")

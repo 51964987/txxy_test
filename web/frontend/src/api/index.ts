@@ -191,6 +191,10 @@ export interface TopAuthor {
   total: number
   today: number
   week: number
+  month: number
+  prev_week: number
+  delta: number | null // 近 7 日环比百分比；null = 前 7 日无基准（新增）
+  value: number // 当前口径下的排序主值
 }
 
 export interface TopFid {
@@ -199,6 +203,10 @@ export interface TopFid {
   total: number
   today: number
   week: number
+  month: number
+  prev_week: number
+  delta: number | null
+  value: number
 }
 
 export interface TrendPoint {
@@ -372,8 +380,9 @@ export const api = {
   overview: () => get<Overview>('/stats/overview'),
   boards: () => get<Boards>('/stats/boards'),
   todayTop: (limit = 10) => get<TodayTop>('/stats/today_top', { limit }),
-  topAuthors: (limit = 10) => get<TopAuthor[]>('/stats/top_authors', { limit }),
-  topFids: (limit = 10) => get<TopFid[]>('/stats/top_fids', { limit }),
+  topAuthors: (limit = 10, range = 'all') =>
+    get<TopAuthor[]>('/stats/top_authors', { limit, range }),
+  topFids: (limit = 10, range = 'all') => get<TopFid[]>('/stats/top_fids', { limit, range }),
   monthTop: (limit = 10) => get<TodayTop>('/stats/month_top', { limit }),
   trend: (days: number) => get<TrendPoint[]>('/stats/trend', { days }),
   trendByFid: (days: number, top = 8) =>

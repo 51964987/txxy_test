@@ -85,8 +85,36 @@ const trendRef = shallowRef<HTMLDivElement | null>(null)
 const trendChart = shallowRef<ECharts | null>(null)
 
 // ===== 活跃作者 / 活跃版块 榜（随首屏加载，横向条形图）=====
+/** 活跃榜统计口径：all=累计 / 7d=近 7 日 / 30d=近 30 日 */
+type RankRange = 'all' | '7d' | '30d'
 const topAuthors = ref<TopAuthor[]>([])
 const topFids = ref<TopFid[]>([])
+const authorRange = ref<RankRange>('all')
+const fidRange = ref<RankRange>('all')
+
+/** 口径中文名，用于卡片副标题与 tooltip（两卡共用，保持文案一致） */
+const RANGE_LABEL: Record<RankRange, string> = {
+  all: '累计',
+  '7d': '近 7 日',
+  '30d': '近 30 日',
+}
+
+/**
+ * 按当前统计口径给出下钻的时间范围，使榜单数字与帖子页结果自洽：
+ * 在「近 7 日」榜上看到 431 条，点进去就应是这 431 条，而不是该作者的全部 4314 条。
+ * all 口径返回 null（不限制日期，等价于看全部）。
+ * 「近 N 日」= 含今天往前 N 天，与后端 _top_rank 的算法口径一致。
+ */
+function rankDateRange(range: RankRange): { date_from: string; date_to: string } | null {
+  if (range === 'all') return null
+  const days = range === '7d' ? 7 : 30
+  const fmt = (d: Date) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  const to = new Date()
+  const from = new Date()
+  from.setDate(from.getDate() - (days - 1))
+  return { date_from: fmt(from), date_to: fmt(to) }
+}
 // B1 抓取中徽标：最新一条 running 运行记录（null 表示当前无批次在跑）
 const runningBatch = ref<RunSummary | null>(null)
 const authorChartRef = shallowRef<HTMLDivElement | null>(null)
@@ -206,8 +234,8 @@ async function loadP0(initial = false) {
       api.overview(),
       api.trend(trendDays.value),
       api.fidDist(),
-      api.topAuthors(),
-      api.topFids(),
+      api.topAuthors(10, authorRange.value),
+      api.topFids(10, fidRange.value),
     ])
     overview.value = o
     trend.value = t
@@ -400,7 +428,9 @@ function renderTrendChart() {
 }
 
 function goDist(fid?: string) {
-  if (fid) router.push({ path: '/posts', query: { fid } })
+  if (fid) {
+    router.push({ path: '/posts', query: { fid, ...(rankDateRange(fidRange.value) ?? {}) } })
+  }
 }
 
 function initChart(el: HTMLDivElement): ECharts {
@@ -408,15 +438,31 @@ function initChart(el: HTMLDivElement): ECharts {
 }
 
 /** 排名榜横向条形图通用渲染：Top-N 主数值 + 副指标 tooltip，可指定点击回调 */
+/** 环比展示：null=前 7 日无基准（视为新增），0=持平，其余为百分比 */
+function deltaText(delta: number | null | undefined): { text: string; cls: string } {
+  if (delta === null || delta === undefined) return { text: '新增', cls: 'new' }
+  if (delta === 0) return { text: '持平', cls: 'flat' }
+  return delta > 0
+    ? { text: `↑${delta}%`, cls: 'up' }
+    : { text: `↓${Math.abs(delta)}%`, cls: 'down' }
+}
+
 function renderHBarChart(
   el: HTMLDivElement,
   chart: ShallowRef<ECharts | null>,
   lastKeyRef: { v: string },
-  items: { name: string; value: number; extra: string }[],
+  items: {
+    name: string
+    value: number
+    extra: string
+    delta?: number | null
+    valueLabel?: string
+  }[],
   colors: string[],
   onClick?: (i: number) => void,
 ) {
-  const key = items.map((d) => `${d.name}:${d.value}`).join('|')
+  // 指纹纳入口径：切换口径后即使数值相同也要重绘
+  const key = items.map((d) => `${d.name}:${d.value}:${d.valueLabel ?? ''}`).join('|')
   if (key === lastKeyRef.v) return // P1-8：数据指纹无变化跳过重绘
   lastKeyRef.v = key
   const c = chart.value ??= initChart(el)
@@ -433,9 +479,20 @@ function renderHBarChart(
         hideDelay: 0,
         transitionDuration: 0,
         z: 99999,
-        formatter: (p: any) => `${p.name}<br/>累计 ${p.value.toLocaleString()} 条<br/>${p.data.extra ?? ''}`,
+        formatter: (p: any) => {
+          const label = p.data.valueLabel ?? '当前'
+          const d = deltaText(p.data.delta)
+          const cmp =
+            d.cls === 'new'
+              ? '环比：新增（前 7 日无数据）'
+              : d.cls === 'flat'
+                ? '环比：与前一个 7 日持平'
+                : `环比：${d.text}（近 7 日 vs 前 7 日）`
+          return `${p.name}<br/>${label} ${p.value.toLocaleString()} 条<br/>${p.data.extra ?? ''}<br/>${cmp}`
+        },
       },
-      grid: { left: 8, right: 44, top: 6, bottom: 6, containLabel: true },
+      // 右侧留出条尾「数值 + 环比」的空间，避免长标签被裁切
+      grid: { left: 8, right: 92, top: 6, bottom: 6, containLabel: true },
       // Y 轴横向线显示，X 轴竖向线隐藏（项目图表网格线规则）
       xAxis: {
         type: 'value',
@@ -461,9 +518,26 @@ function renderHBarChart(
           data: items.map((d, i) => ({
             value: d.value,
             extra: d.extra,
+            delta: d.delta,
+            valueLabel: d.valueLabel,
             itemStyle: { color: colors[i] ?? '#6366f1', borderRadius: [0, 6, 6, 0] },
           })),
-          label: { show: true, position: 'right', color: '#606266', fontSize: 11, formatter: '{c}' },
+          label: {
+            show: true,
+            position: 'right',
+            // 条尾同时给出主值与环比：涨跌用颜色区分，一眼看出谁在上升
+            formatter: (p: any) => {
+              const d = deltaText(p.data.delta)
+              return `{v|${p.value.toLocaleString()}}  {${d.cls}|${d.text}}`
+            },
+            rich: {
+              v: { color: '#606266', fontSize: 11 },
+              up: { color: '#10b981', fontSize: 11 },
+              down: { color: '#ef4444', fontSize: 11 },
+              flat: { color: '#909399', fontSize: 11 },
+              new: { color: '#f59e0b', fontSize: 11 },
+            },
+          },
         },
       ],
     },
@@ -493,18 +567,20 @@ function renderAuthorChart() {
     { v: lastAuthorKey },
     topAuthors.value.map((a) => ({
       name: a.author,
-      value: a.total,
-      extra: `今日 ${a.today} · 近 7 日 ${a.week}`,
+      value: a.value,
+      extra: `累计 ${a.total} · 今日 ${a.today} · 近 7 日 ${a.week} · 近 30 日 ${a.month}`,
+      delta: a.delta,
+      valueLabel: RANGE_LABEL[authorRange.value],
     })),
     colors,
     (i) => goAuthor(topAuthors.value[i]?.author ?? ''),
   )
 }
 
-/** 活跃作者下钻：跳到帖子浏览页，按作者精确过滤 */
+/** 活跃作者下钻：按作者精确过滤，并继承当前统计口径的时间范围 */
 function goAuthor(author: string) {
   if (!author) return
-  router.push({ path: '/posts', query: { author } })
+  router.push({ path: '/posts', query: { author, ...(rankDateRange(authorRange.value) ?? {}) } })
 }
 
 /** 通用下钻：跳到帖子浏览页，带 fid/sort 等过滤条件贴合原卡片场景 */
@@ -523,12 +599,50 @@ function renderFidChart() {
     { v: lastFidKey },
     topFids.value.map((f) => ({
       name: f.name,
-      value: f.total,
-      extra: `今日 ${f.today} · 近 7 日 ${f.week}`,
+      value: f.value,
+      extra: `累计 ${f.total} · 今日 ${f.today} · 近 7 日 ${f.week} · 近 30 日 ${f.month}`,
+      delta: f.delta,
+      valueLabel: RANGE_LABEL[fidRange.value],
     })),
     topFids.value.map((f) => colorForFid(f.fid ?? '')),
     (i) => goDist(topFids.value[i]?.fid ?? undefined),
   )
+}
+
+/**
+ * 切换活跃榜口径：只重新拉取对应榜单，不整页刷新。
+ * 必须清空图表数据指纹（lastXxxKey）——指纹由「名称:数值」构成，
+ * 切换口径后数值可能完全不变（例如累计值），不清空会导致图表不重绘。
+ */
+async function switchRank(which: 'author' | 'fid', range: RankRange) {
+  try {
+    if (which === 'author') {
+      authorRange.value = range
+      topAuthors.value = await api.topAuthors(10, range)
+      lastAuthorKey = ''
+      await nextTick()
+      renderAuthorChart()
+    } else {
+      fidRange.value = range
+      topFids.value = await api.topFids(10, range)
+      lastFidKey = ''
+      await nextTick()
+      renderFidChart()
+    }
+  } catch (e) {
+    if (isAborted(e)) return
+    void notifyError(`切换榜单口径失败: ${(e as Error).message}`)
+  }
+}
+
+/** 口径切换入口：以 unknown 接收，避免模板箭头函数参数触发隐式 any */
+function onAuthorRangeChange(v: unknown) {
+  void switchRank('author', v as RankRange)
+}
+
+/** 同上：活跃版块榜口径切换 */
+function onFidRangeChange(v: unknown) {
+  void switchRank('fid', v as RankRange)
 }
 
 function onResize() {
@@ -1389,26 +1503,58 @@ function renderFidTrendChart() {
     <!-- 图表（P0）：左活跃作者 + 右活跃版块，均为横向条形图 -->
     <div class="chart-row">
       <div class="page-card chart-card">
-        <div class="chart-head" style="margin-bottom: 8px">
-          <span class="chart-title">活跃作者 Top10</span>
-          <span class="chart-sub">按累计发帖量</span>
+        <div class="chart-head" style="margin-bottom: 6px">
+          <div class="chart-head-left">
+            <span class="chart-title">活跃作者 Top10</span>
+          </div>
+          <div class="chart-head-right">
+            <el-radio-group
+              :model-value="authorRange"
+              size="small"
+              @change="onAuthorRangeChange"
+            >
+              <el-radio-button value="all">累计</el-radio-button>
+              <el-radio-button value="7d">近 7 日</el-radio-button>
+              <el-radio-button value="30d">近 30 日</el-radio-button>
+            </el-radio-group>
+          </div>
+        </div>
+        <div class="chart-sub" style="margin-bottom: 8px">
+          按{{ RANGE_LABEL[authorRange] }}发帖量 · 点击查看该作者帖子
         </div>
         <div class="chart-wrap">
           <div v-if="!topAuthors.length && loadingP0" class="chart chart-loading">
             <el-skeleton animated :rows="8" />
           </div>
+          <div v-else-if="!topAuthors.length" class="chart chart-empty">该时间段暂无数据</div>
           <div v-else ref="authorChartRef" class="chart"></div>
         </div>
       </div>
       <div class="page-card chart-card">
-        <div class="chart-head" style="margin-bottom: 8px">
-          <span class="chart-title">活跃版块 Top10</span>
-          <span class="chart-sub">按累计发帖量 · 点击查看版块</span>
+        <div class="chart-head" style="margin-bottom: 6px">
+          <div class="chart-head-left">
+            <span class="chart-title">活跃版块 Top10</span>
+          </div>
+          <div class="chart-head-right">
+            <el-radio-group
+              :model-value="fidRange"
+              size="small"
+              @change="onFidRangeChange"
+            >
+              <el-radio-button value="all">累计</el-radio-button>
+              <el-radio-button value="7d">近 7 日</el-radio-button>
+              <el-radio-button value="30d">近 30 日</el-radio-button>
+            </el-radio-group>
+          </div>
+        </div>
+        <div class="chart-sub" style="margin-bottom: 8px">
+          按{{ RANGE_LABEL[fidRange] }}发帖量 · 点击查看该版块帖子
         </div>
         <div class="chart-wrap">
           <div v-if="!topFids.length && loadingP0" class="chart chart-loading">
             <el-skeleton animated :rows="8" />
           </div>
+          <div v-else-if="!topFids.length" class="chart chart-empty">该时间段暂无数据</div>
           <div v-else ref="fidChartRef" class="chart"></div>
         </div>
       </div>
@@ -1861,6 +2007,15 @@ function renderFidTrendChart() {
 .chart-sub {
   font-size: 12px;
   color: #909399;
+}
+
+/* 榜单空态：某口径下无数据时的占位，避免图表区一片空白 */
+.chart-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #909399;
+  font-size: 12px;
 }
 
 .board-list {
