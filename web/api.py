@@ -81,6 +81,10 @@ class TodayTopItemResp(BaseModel):
 class TodayTopResp(BaseModel):
     date: str
     items: list[TodayTopItemResp]
+    # 时间窗内的帖子总数（today_top=当日 / month_top=当月），用于说明榜单的样本规模
+    total: int = 0
+    # 时间窗内有数据的天数（today_top 恒为 1 / month_top=当月已入库天数），用于月初样本提示
+    days: int = 0
 
 
 class TodayFidsItemResp(BaseModel):
@@ -174,6 +178,9 @@ _SORTS = {
     "created_at_asc": "created_at ASC",
     "likes_desc": "CAST(likes AS INTEGER) DESC, date DESC",
     "replies_desc": "CAST(replies AS INTEGER) DESC, date DESC",
+    # 互动量（点赞+回复综合）。排序表达式与热门榜「最新最热 / 本月最热」完全一致，
+    # 保证从榜单下钻到帖子页后，列表顺序与榜单顺序相同（口径一致）。
+    "engagement_desc": "(CAST(likes AS INTEGER) + CAST(replies AS INTEGER)) DESC, date DESC",
 }
 
 
@@ -354,10 +361,15 @@ def stats_today_top(limit: Annotated[int, Query(ge=1, le=50)] = 10) -> TodayTopR
                     (latest, limit),
                 )
             ]
+            total = conn.execute(
+                "SELECT COUNT(*) AS c FROM posts WHERE date = ?", (latest,)
+            ).fetchone()["c"]
         finally:
             conn.close()
         return {
             "date": latest,
+            "total": total,
+            "days": 1,
             "items": [
                 {
                     "fid": r["fid"],
@@ -372,7 +384,7 @@ def stats_today_top(limit: Annotated[int, Query(ge=1, le=50)] = 10) -> TodayTopR
             ],
         }
 
-    return db.cached("today_top_v1", _calc)
+    return db.cached("today_top_v2", _calc)
 
 
 @router.get("/stats/today_fids")
@@ -540,10 +552,18 @@ def stats_month_top(limit: Annotated[int, Query(ge=1, le=50)] = 10) -> TodayTopR
                     (month, limit),
                 )
             ]
+            total = conn.execute(
+                "SELECT COUNT(*) AS c FROM posts WHERE substr(date, 1, 7) = ?", (month,)
+            ).fetchone()["c"]
+            days = conn.execute(
+                "SELECT COUNT(DISTINCT date) AS c FROM posts WHERE substr(date, 1, 7) = ?", (month,)
+            ).fetchone()["c"]
         finally:
             conn.close()
         return {
             "date": month,
+            "total": total,
+            "days": days,
             "items": [
                 {
                     "fid": r["fid"],
@@ -558,7 +578,7 @@ def stats_month_top(limit: Annotated[int, Query(ge=1, le=50)] = 10) -> TodayTopR
             ],
         }
 
-    return db.cached("month_top_v1", _calc)
+    return db.cached("month_top_v2", _calc)
 
 
 @router.get("/stats/trend")

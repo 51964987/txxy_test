@@ -583,9 +583,64 @@ function goAuthor(author: string) {
   router.push({ path: '/posts', query: { author, ...(rankDateRange(authorRange.value) ?? {}) } })
 }
 
-/** 通用下钻：跳到帖子浏览页，带 fid/sort 等过滤条件贴合原卡片场景 */
+/**
+ * 通用下钻：跳到帖子浏览页，带 fid/sort 等过滤条件贴合原卡片场景。
+ * 注意：此函数【不带时间语义】——目前仅被「点赞/回复最高帖」这类「全站历史最高」卡片使用（无时间范围）。
+ * 若未来被「最新最热 / 本月最热 / 活跃榜」等有时间窗口的入口复用，必须在此并入 rankDateRange(...)，
+ * 否则会出现「榜单显示 431 条，点进去却看到 4314 条全部」的口径不一致问题。
+ */
 function goPostsWith(query: Record<string, string>) {
   router.push({ path: '/posts', query })
+}
+
+/**
+ * 带时间窗的下钻：跳到帖子浏览页并自动并入起止日期。
+ * 用于「最新最热」（当日）与「本月最热」（当月）这类有明确时间语义的卡片——
+ * 榜单只统计该时间窗内的帖，下钻后的列表必须限定同一时间窗，
+ * 否则会出现「榜单 10 条、点进去却看到全库」的口径矛盾。
+ */
+function goPostsInRange(
+  query: Record<string, string>,
+  range: { from: string; to: string } | null,
+) {
+  if (!range) return
+  router.push({ path: '/posts', query: { date_from: range.from, date_to: range.to, ...query } })
+}
+
+/** 最新最热的时间窗：最新数据日期当天 */
+function dayRange(date?: string) {
+  return date ? { from: date, to: date } : null
+}
+
+/**
+ * 本月最热的时间窗：最新数据月份的月初~月末。
+ * 注意用接口返回的 month（=最新数据所属月），不能用当前时间——
+ * 跨月边界时（今天 9/1 但最新数据还是 8/31）「本月」指的是 8 月而非 9 月。
+ */
+function monthRange(month?: string) {
+  if (!month) return null
+  const [y, m] = month.split('-').map(Number)
+  if (!y || !m) return null
+  const lastDay = new Date(y, m, 0).getDate() // 下月第 0 天 = 本月最后一天
+  return { from: `${month}-01`, to: `${month}-${String(lastDay).padStart(2, '0')}` }
+}
+
+/** 相对今天的文案：0→今天，1→昨天，n→N 天前 */
+function relDayText(date?: string) {
+  if (!date) return ''
+  const d = new Date(`${date}T00:00:00`)
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  const diff = Math.round((today.getTime() - d.getTime()) / 86_400_000)
+  if (diff <= 0) return '今天'
+  if (diff === 1) return '昨天'
+  return `${diff} 天前`
+}
+
+/** 互动量（点赞+回复）：热门榜的排序依据，显式展示以免用户看不懂榜单顺序 */
+function engagement(item: { likes?: number; replies?: number }) {
+  // Number() 兜底：互动数字段在不同接口口径下可能是字符串，直接 + 会变成拼接
+  return Number(item.likes ?? 0) + Number(item.replies ?? 0)
 }
 
 /** 活跃版块 Top10：横向条形图，主值=累计发帖，颜色按版块色板，点击跳版块列表 */
@@ -1621,7 +1676,21 @@ function renderFidTrendChart() {
         <div class="page-card chart-card">
           <div class="chart-head" style="margin-bottom: 8px">
             <span class="chart-title">最新最热</span>
-            <span v-if="todayTop?.date" class="board-date">{{ todayTop.date.slice(5) }}</span>
+            <span v-if="todayTop?.date" class="chart-head-right">
+              <el-tooltip
+                :content="`按数据最新日 ${todayTop.date}（${relDayText(todayTop.date)}）统计，当日共 ${todayTop.total} 帖；排序依据=点赞+回复`"
+                placement="top"
+                :teleported="!app.fullscreen"
+              >
+                <span class="board-date">{{ todayTop.date.slice(5) }}</span>
+              </el-tooltip>
+              <el-link
+                type="primary"
+                :underline="false"
+                class="more-link"
+                @click="goPostsInRange({ sort: 'engagement_desc' }, dayRange(todayTop?.date))"
+              >查看更多</el-link>
+            </span>
           </div>
           <div v-if="loadingBoards" class="board-list">
             <div v-for="i in 4" :key="i" class="board-card">
@@ -1629,21 +1698,29 @@ function renderFidTrendChart() {
             </div>
           </div>
           <div v-else class="board-list">
-            <div v-for="(item, i) in todayTop?.items ?? []" :key="item.url" class="board-card" @click="openUrl(item.url)">
+            <div
+              v-for="(item, i) in todayTop?.items ?? []"
+              :key="item.url"
+              class="board-card"
+              @click="goPostsInRange(item.fid ? { fid: item.fid, sort: 'engagement_desc' } : { sort: 'engagement_desc' }, dayRange(todayTop?.date))"
+            >
               <span :class="rankClass(i)">{{ i + 1 }}</span>
               <el-tag size="small" type="danger" class="board-tag">{{ item.name }}</el-tag>
-              <a class="title-link board-title" :title="item.title" @click.prevent="openUrl(item.url)">
+              <a class="title-link board-title" :title="item.title" @click.stop.prevent="openUrl(item.url)">
                 {{ item.title }}
               </a>
               <el-tooltip content="下载" placement="top" :teleported="!app.fullscreen">
                 <el-button link size="small" type="success" :icon="Download" class="board-download" @click.stop.prevent="downloadUrl(item.url)" />
               </el-tooltip>
-              <span class="board-metric">
-                <el-icon><Star /></el-icon>{{ metricText(item.likes) }}
-              </span>
-              <span class="board-metric">
-                <el-icon><ChatDotRound /></el-icon>{{ metricText(item.replies) }}
-              </span>
+              <el-tooltip
+                :content="`互动量 ${engagement(item)} = 点赞 ${item.likes} + 回复 ${item.replies}（本榜排序依据）`"
+                placement="top"
+                :teleported="!app.fullscreen"
+              >
+                <span class="board-metric board-metric-main">
+                  <el-icon><Star /></el-icon>{{ metricText(engagement(item)) }}
+                </span>
+              </el-tooltip>
             </div>
             <div v-if="!todayTop?.items?.length" class="text-muted">暂无数据</div>
           </div>
@@ -1651,7 +1728,21 @@ function renderFidTrendChart() {
         <div class="page-card chart-card">
           <div class="chart-head" style="margin-bottom: 8px">
             <span class="chart-title">本月最热</span>
-            <span v-if="monthTop?.date" class="board-date">{{ monthTop.date }}</span>
+            <span v-if="monthTop?.date" class="chart-head-right">
+              <el-tooltip
+                :content="`按数据最新月份 ${monthTop.date} 统计，当月共 ${monthTop.total} 帖 / 覆盖 ${monthTop.days} 天${monthTop.days < 7 ? '（样本较少，榜单波动大）' : ''}；排序依据=点赞+回复`"
+                placement="top"
+                :teleported="!app.fullscreen"
+              >
+                <span class="board-date">{{ monthTop.date }}</span>
+              </el-tooltip>
+              <el-link
+                type="primary"
+                :underline="false"
+                class="more-link"
+                @click="goPostsInRange({ sort: 'engagement_desc' }, monthRange(monthTop?.date))"
+              >查看更多</el-link>
+            </span>
           </div>
           <div v-if="loadingBoards" class="board-list">
             <div v-for="i in 4" :key="i" class="board-card">
@@ -1659,21 +1750,30 @@ function renderFidTrendChart() {
             </div>
           </div>
           <div v-else class="board-list">
-            <div v-for="(item, i) in monthTop?.items ?? []" :key="item.url" class="board-card" @click="openUrl(item.url)">
+            <div
+              v-for="(item, i) in monthTop?.items ?? []"
+              :key="item.url"
+              class="board-card"
+              @click="goPostsInRange(item.fid ? { fid: item.fid, sort: 'engagement_desc' } : { sort: 'engagement_desc' }, monthRange(monthTop?.date))"
+            >
               <span :class="rankClass(i)">{{ i + 1 }}</span>
               <el-tag size="small" type="success" class="board-tag">{{ item.name }}</el-tag>
-              <a class="title-link board-title" :title="item.title" @click.prevent="openUrl(item.url)">
+              <a class="title-link board-title" :title="item.title" @click.stop.prevent="openUrl(item.url)">
                 {{ item.title }}
               </a>
+              <span class="board-postdate" :title="`发布于 ${item.date}`">{{ item.date.slice(5) }}</span>
               <el-tooltip content="下载" placement="top" :teleported="!app.fullscreen">
                 <el-button link size="small" type="success" :icon="Download" class="board-download" @click.stop.prevent="downloadUrl(item.url)" />
               </el-tooltip>
-              <span class="board-metric">
-                <el-icon><Star /></el-icon>{{ metricText(item.likes) }}
-              </span>
-              <span class="board-metric">
-                <el-icon><ChatDotRound /></el-icon>{{ metricText(item.replies) }}
-              </span>
+              <el-tooltip
+                :content="`互动量 ${engagement(item)} = 点赞 ${item.likes} + 回复 ${item.replies}（本榜排序依据）`"
+                placement="top"
+                :teleported="!app.fullscreen"
+              >
+                <span class="board-metric board-metric-main">
+                  <el-icon><Star /></el-icon>{{ metricText(engagement(item)) }}
+                </span>
+              </el-tooltip>
             </div>
             <div v-if="!monthTop?.items?.length" class="text-muted">暂无数据</div>
           </div>
@@ -2095,6 +2195,19 @@ function renderFidTrendChart() {
   gap: 3px;
   color: #606266;
   font-weight: 600;
+}
+
+/* 互动量主指标：本榜的排序依据，用主色强调（点赞/回复明细放 tooltip） */
+.board-metric-main {
+  color: #2f6fed;
+}
+
+/* 本月最热的发布日小字；最新最热各行都是同一天，展示无信息量故不渲染 */
+.board-postdate {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: #909399;
+  font-variant-numeric: tabular-nums;
 }
 
 </style>

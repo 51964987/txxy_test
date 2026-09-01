@@ -184,6 +184,10 @@ export interface TodayTopItem {
 export interface TodayTop {
   date: string
   items: TodayTopItem[]
+  /** 时间窗内帖子总数（当日 / 当月） */
+  total: number
+  /** 时间窗内有数据的天数（最新最热恒为 1 / 本月最热=当月已入库天数） */
+  days: number
 }
 
 export interface TopAuthor {

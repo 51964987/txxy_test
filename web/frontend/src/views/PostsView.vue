@@ -33,7 +33,18 @@ const queryText = ref('')
 // 下钻支持的合法 sort 选项（与模板 el-select 的 value 严格一致）
 const SORT_OPTIONS = new Set([
   'date_desc', 'date_asc', 'created_at_desc', 'created_at_asc', 'likes_desc', 'replies_desc',
+  'engagement_desc',
 ])
+/** 排序中文名，供「当前条件」摘要条展示（与下方 el-select 的 option label 严格一致） */
+const SORT_LABEL: Record<string, string> = {
+  date_desc: '日期倒序',
+  date_asc: '日期正序',
+  created_at_desc: '发布时间倒序',
+  created_at_asc: '发布时间正序',
+  likes_desc: '点赞数倒序',
+  replies_desc: '回复数倒序',
+  engagement_desc: '互动量倒序',
+}
 
 async function loadFidMeta() {
   try {
@@ -155,6 +166,18 @@ const activeFilters = computed(() => {
       label: `日期：${from} ~ ${to}（共 ${dateRangeDays(from, to)} 天）`,
       clear: () => {
         filters.dateRange = null
+        page.value = 1
+        load()
+      },
+    })
+  }
+  // 排序：仅非默认（日期倒序）时进摘要条，避免每条都显示噪音；清除即还原默认
+  if (sort.value !== 'date_desc') {
+    list.push({
+      key: 'sort',
+      label: `排序：${SORT_LABEL[sort.value] ?? sort.value}`,
+      clear: () => {
+        sort.value = 'date_desc'
         page.value = 1
         load()
       },
@@ -339,6 +362,7 @@ onMounted(() => {
             <el-option label="发布时间正序" value="created_at_asc" />
             <el-option label="点赞数倒序" value="likes_desc" />
             <el-option label="回复数倒序" value="replies_desc" />
+            <el-option label="互动量倒序" value="engagement_desc" />
           </el-select>
           <el-button
             type="success"
