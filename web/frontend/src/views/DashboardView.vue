@@ -13,7 +13,7 @@ import {
 import type { ECharts } from 'echarts/core'
 import { ElMessage } from 'element-plus'
 import { Download } from '@element-plus/icons-vue'
-import { api, isAborted, type Boards, type FidDistItem, type Overview, type RunSummary, type TodayTop, type TopAuthor, type TopFid, type TrendByFid, type TrendPoint } from '../api'
+import { api, isAborted, type BoardDaily, type Boards, type BoardSort, type FidDistItem, type Overview, type RunSummary, type TodayTop, type TodayTopItem, type TopAuthor, type TopFid, type TrendByFid, type TrendPoint } from '../api'
 import { useDashboardStore } from '../stores/dashboard'
 import { useAppStore } from '../stores/app'
 import { formatShortTime } from '../utils/time'
@@ -76,6 +76,12 @@ const boards = ref<Boards | null>(null)
 const todayTop = ref<TodayTop | null>(null)
 const monthTop = ref<TodayTop | null>(null)
 const loadingBoards = ref(false)
+
+// 最新最热 / 本月最热的排序维度（两卡独立记忆），切换只重拉对应榜单
+const todaySort = ref<BoardSort>('engagement')
+const monthSort = ref<BoardSort>('engagement')
+const loadingToday = ref(false)
+const loadingMonth = ref(false)
 const p1AreaRef = ref<HTMLDivElement | null>(null)
 
 let trendObserver: IntersectionObserver | null = null
@@ -273,8 +279,8 @@ async function loadBoards() {
   try {
     const [b, tt, mt] = await Promise.all([
       api.boards(),
-      api.todayTop(),
-      api.monthTop(),
+      api.todayTop(10, todaySort.value),
+      api.monthTop(10, monthSort.value),
     ])
     boards.value = b
     todayTop.value = tt
@@ -286,6 +292,98 @@ async function loadBoards() {
   } finally {
     loadingBoards.value = false
   }
+}
+
+/** 榜单排序维度 → 帖子页 sort 参数，保证下钻后列表顺序与榜单一致 */
+const BOARD_SORT_TO_POSTS: Record<BoardSort, string> = {
+  engagement: 'engagement_desc',
+  likes: 'likes_desc',
+  replies: 'replies_desc',
+  hot: 'hot_desc',
+}
+
+/** 排序维度下拉的候选项（与后端 _BOARD_SORTS 一一对应） */
+const BOARD_SORT_OPTIONS: { value: BoardSort; label: string }[] = [
+  { value: 'engagement', label: '综合' },
+  { value: 'likes', label: '点赞' },
+  { value: 'replies', label: '回复' },
+  { value: 'hot', label: '热度' },
+]
+
+/** 各排序维度的口径说明，进卡头 tooltip，避免「按什么排」靠猜 */
+const BOARD_SORT_HINT: Record<BoardSort, string> = {
+  engagement: '点赞+回复',
+  likes: '点赞数',
+  replies: '回复数',
+  hot: '时间衰减热度（同分下越新越靠前）',
+}
+
+async function reloadTodayTop() {
+  loadingToday.value = true
+  try {
+    todayTop.value = await api.todayTop(10, todaySort.value)
+  } catch (e) {
+    if (isAborted(e)) return
+    void notifyError(`切换「最新最热」排序失败: ${(e as Error).message}`)
+  } finally {
+    loadingToday.value = false
+  }
+}
+
+async function reloadMonthTop() {
+  loadingMonth.value = true
+  try {
+    monthTop.value = await api.monthTop(10, monthSort.value)
+  } catch (e) {
+    if (isAborted(e)) return
+    void notifyError(`切换「本月最热」排序失败: ${(e as Error).message}`)
+  } finally {
+    loadingMonth.value = false
+  }
+}
+
+/** 切换排序：只重拉对应榜单，不整页刷新 */
+function onTodaySortChange(v: BoardSort) {
+  todaySort.value = v
+  void reloadTodayTop()
+}
+
+function onMonthSortChange(v: BoardSort) {
+  monthSort.value = v
+  void reloadMonthTop()
+}
+
+/** 互动率（回复/点赞）：<0.3 围观型（高赞低回）、≥1 热议型（讨论度高于点赞） */
+function replyRate(item: TodayTopItem) {
+  const likes = Number(item.likes ?? 0)
+  const replies = Number(item.replies ?? 0)
+  if (likes <= 0) return replies > 0 ? Number.POSITIVE_INFINITY : 0
+  return replies / likes
+}
+
+/** 互动率说明（进 tooltip）：解释「它凭什么排在这」 */
+function rateText(item: TodayTopItem) {
+  const r = replyRate(item)
+  const shown = Number.isFinite(r) ? r.toFixed(2) : '∞'
+  const kind = r >= 1 ? '热议型' : r >= 0.3 ? '均衡型' : '围观型'
+  return `互动率 ${shown}（回复 ${item.replies} / 点赞 ${item.likes}）· ${kind}`
+}
+
+/** 仅热议型显示行内「热议」小标，否则每行都挂标签等于没有标签 */
+function isHotTalk(item: TodayTopItem) {
+  const r = replyRate(item)
+  return Number.isFinite(r) ? r >= 1 : Number(item.replies ?? 0) > 0
+}
+
+/** sparkline 柱高：按当月峰值归一化，最小 8% 保证矮柱可见 */
+function sparkHeight(v: number) {
+  const max = Math.max(...(monthTop.value?.daily ?? []).map((d) => d.value), 1)
+  return `${Math.max(8, Math.round((v / max) * 100))}%`
+}
+
+/** sparkline 单点 tooltip */
+function sparkText(d: BoardDaily) {
+  return `${d.date} 互动量 ${d.value}`
 }
 
 /** P1-8：各图表数据指纹缓存，数据未变化时跳过重复 setOption，避免轮询期间空重绘 */
@@ -1632,7 +1730,7 @@ function renderFidTrendChart() {
           <div v-else class="board-list">
             <div v-for="(item, i) in boards?.top_likes ?? []" :key="item.fid" class="board-card" @click="goPostsWith({ fid: item.fid, sort: 'likes_desc' })">
               <span :class="rankClass(i)">{{ i + 1 }}</span>
-              <el-tag size="small" type="danger" class="board-tag">{{ item.name }}</el-tag>
+              <el-tag size="small" type="info" class="board-tag">{{ item.name }}</el-tag>
               <a class="title-link board-title" :title="item.title" @click.stop.prevent="openUrl(item.url)">
                 {{ item.title }}
               </a>
@@ -1659,7 +1757,7 @@ function renderFidTrendChart() {
           <div v-else class="board-list">
             <div v-for="(item, i) in boards?.top_replies ?? []" :key="item.fid" class="board-card" @click="goPostsWith({ fid: item.fid, sort: 'replies_desc' })">
               <span :class="rankClass(i)">{{ i + 1 }}</span>
-              <el-tag size="small" type="warning" class="board-tag">{{ item.name }}</el-tag>
+              <el-tag size="small" type="info" class="board-tag">{{ item.name }}</el-tag>
               <a class="title-link board-title" :title="item.title" @click.stop.prevent="openUrl(item.url)">
                 {{ item.title }}
               </a>
@@ -1678,17 +1776,20 @@ function renderFidTrendChart() {
             <span class="chart-title">最新最热</span>
             <span v-if="todayTop?.date" class="chart-head-right">
               <el-tooltip
-                :content="`按数据最新日 ${todayTop.date}（${relDayText(todayTop.date)}）统计，当日共 ${todayTop.total} 帖；排序依据=点赞+回复`"
+                :content="`按数据最新日 ${todayTop.date}（${relDayText(todayTop.date)}）统计，当日共 ${todayTop.total} 帖；排序依据=${BOARD_SORT_HINT[todaySort]}`"
                 placement="top"
                 :teleported="!app.fullscreen"
               >
                 <span class="board-date">{{ todayTop.date.slice(5) }}</span>
               </el-tooltip>
+              <el-select v-model="todaySort" size="small" class="board-sort" @change="onTodaySortChange">
+                <el-option v-for="o in BOARD_SORT_OPTIONS" :key="o.value" :label="o.label" :value="o.value" />
+              </el-select>
               <el-link
                 type="primary"
                 :underline="false"
                 class="more-link"
-                @click="goPostsInRange({ sort: 'engagement_desc' }, dayRange(todayTop?.date))"
+                @click="goPostsInRange({ sort: BOARD_SORT_TO_POSTS[todaySort] }, dayRange(todayTop?.date))"
               >查看更多</el-link>
             </span>
           </div>
@@ -1702,18 +1803,21 @@ function renderFidTrendChart() {
               v-for="(item, i) in todayTop?.items ?? []"
               :key="item.url"
               class="board-card"
-              @click="goPostsInRange(item.fid ? { fid: item.fid, sort: 'engagement_desc' } : { sort: 'engagement_desc' }, dayRange(todayTop?.date))"
+              @click="goPostsInRange(item.fid ? { fid: item.fid, sort: BOARD_SORT_TO_POSTS[todaySort] } : { sort: BOARD_SORT_TO_POSTS[todaySort] }, dayRange(todayTop?.date))"
             >
               <span :class="rankClass(i)">{{ i + 1 }}</span>
-              <el-tag size="small" type="danger" class="board-tag">{{ item.name }}</el-tag>
+              <el-tag size="small" type="info" class="board-tag">{{ item.name }}</el-tag>
               <a class="title-link board-title" :title="item.title" @click.stop.prevent="openUrl(item.url)">
                 {{ item.title }}
               </a>
+              <el-tooltip v-if="isHotTalk(item)" content="热议型：回复数不低于点赞数" placement="top" :teleported="!app.fullscreen">
+                <span class="board-flag">热议</span>
+              </el-tooltip>
               <el-tooltip content="下载" placement="top" :teleported="!app.fullscreen">
                 <el-button link size="small" type="success" :icon="Download" class="board-download" @click.stop.prevent="downloadUrl(item.url)" />
               </el-tooltip>
               <el-tooltip
-                :content="`互动量 ${engagement(item)} = 点赞 ${item.likes} + 回复 ${item.replies}（本榜排序依据）`"
+                :content="`互动量 ${engagement(item)} = 点赞 ${item.likes} + 回复 ${item.replies} · ${rateText(item)}`"
                 placement="top"
                 :teleported="!app.fullscreen"
               >
@@ -1730,19 +1834,34 @@ function renderFidTrendChart() {
             <span class="chart-title">本月最热</span>
             <span v-if="monthTop?.date" class="chart-head-right">
               <el-tooltip
-                :content="`按数据最新月份 ${monthTop.date} 统计，当月共 ${monthTop.total} 帖 / 覆盖 ${monthTop.days} 天${monthTop.days < 7 ? '（样本较少，榜单波动大）' : ''}；排序依据=点赞+回复`"
+                :content="`按数据最新月份 ${monthTop.date} 统计，当月共 ${monthTop.total} 帖 / 覆盖 ${monthTop.days} 天${monthTop.days < 7 ? '（样本较少，榜单波动大）' : ''}；排序依据=${BOARD_SORT_HINT[monthSort]}`"
                 placement="top"
                 :teleported="!app.fullscreen"
               >
                 <span class="board-date">{{ monthTop.date }}</span>
               </el-tooltip>
+              <el-select v-model="monthSort" size="small" class="board-sort" @change="onMonthSortChange">
+                <el-option v-for="o in BOARD_SORT_OPTIONS" :key="o.value" :label="o.label" :value="o.value" />
+              </el-select>
               <el-link
                 type="primary"
                 :underline="false"
                 class="more-link"
-                @click="goPostsInRange({ sort: 'engagement_desc' }, monthRange(monthTop?.date))"
+                @click="goPostsInRange({ sort: BOARD_SORT_TO_POSTS[monthSort] }, monthRange(monthTop?.date))"
               >查看更多</el-link>
             </span>
+          </div>
+          <!-- 本月每日互动量 sparkline：一眼看出热度集中在哪几天 -->
+          <div v-if="monthTop?.daily?.length" class="board-spark">
+            <el-tooltip
+              v-for="d in monthTop.daily"
+              :key="d.date"
+              :content="sparkText(d)"
+              placement="top"
+              :teleported="!app.fullscreen"
+            >
+              <span class="spark-bar" :style="{ height: sparkHeight(d.value) }" />
+            </el-tooltip>
           </div>
           <div v-if="loadingBoards" class="board-list">
             <div v-for="i in 4" :key="i" class="board-card">
@@ -1754,13 +1873,19 @@ function renderFidTrendChart() {
               v-for="(item, i) in monthTop?.items ?? []"
               :key="item.url"
               class="board-card"
-              @click="goPostsInRange(item.fid ? { fid: item.fid, sort: 'engagement_desc' } : { sort: 'engagement_desc' }, monthRange(monthTop?.date))"
+              @click="goPostsInRange(item.fid ? { fid: item.fid, sort: BOARD_SORT_TO_POSTS[monthSort] } : { sort: BOARD_SORT_TO_POSTS[monthSort] }, monthRange(monthTop?.date))"
             >
               <span :class="rankClass(i)">{{ i + 1 }}</span>
-              <el-tag size="small" type="success" class="board-tag">{{ item.name }}</el-tag>
+              <el-tag size="small" type="info" class="board-tag">{{ item.name }}</el-tag>
               <a class="title-link board-title" :title="item.title" @click.stop.prevent="openUrl(item.url)">
                 {{ item.title }}
               </a>
+              <el-tooltip v-if="item.is_new" content="新入榜：今天首次进入 Top10" placement="top" :teleported="!app.fullscreen">
+                <span class="board-new">NEW</span>
+              </el-tooltip>
+              <el-tooltip v-if="isHotTalk(item)" content="热议型：回复数不低于点赞数" placement="top" :teleported="!app.fullscreen">
+                <span class="board-flag">热议</span>
+              </el-tooltip>
               <span class="board-postdate" :title="`发布于 ${item.date}`">{{ item.date.slice(5) }}</span>
               <el-tooltip content="下载" placement="top" :teleported="!app.fullscreen">
                 <el-button link size="small" type="success" :icon="Download" class="board-download" @click.stop.prevent="downloadUrl(item.url)" />
@@ -2208,6 +2333,57 @@ function renderFidTrendChart() {
   font-size: 12px;
   color: #909399;
   font-variant-numeric: tabular-nums;
+}
+
+/* 排序维度切换（综合/点赞/回复/热度）：窄一些，避免挤占卡头的日期与「查看更多」 */
+.board-sort {
+  width: 74px;
+  flex-shrink: 0;
+}
+
+/* 热议型标记：仅「回复数 ≥ 点赞数」时出现，否则每行都挂标签等于没标签 */
+.board-flag {
+  flex-shrink: 0;
+  font-size: 11px;
+  line-height: 16px;
+  padding: 0 4px;
+  border-radius: 3px;
+  color: #d46b08;
+  background: #fff7e6;
+  border: 1px solid #ffd591;
+}
+
+/* 新入榜标记（对比快照，今天首次进入 Top10） */
+.board-new {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 16px;
+  padding: 0 4px;
+  border-radius: 3px;
+  color: #fff;
+  background: #f5222d;
+}
+
+/* 本月每日互动量 sparkline：纯 CSS 柱状，不额外起图表实例 */
+.board-spark {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 26px;
+  margin: 0 0 8px;
+  padding: 0 2px;
+}
+
+.spark-bar {
+  flex: 1;
+  min-width: 2px;
+  background: #c9d7f5;
+  border-radius: 1px 1px 0 0;
+}
+
+.spark-bar:hover {
+  background: #2f6fed;
 }
 
 </style>

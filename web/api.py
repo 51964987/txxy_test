@@ -3,6 +3,7 @@ import asyncio
 import csv
 import io
 import json
+import threading
 from datetime import date as date_cls
 from datetime import timedelta
 
@@ -76,6 +77,15 @@ class TodayTopItemResp(BaseModel):
     likes: int
     replies: int
     date: str
+    # 新入榜：对比快照为首次出现（标记持续到当天结束）。仅本月最热计算，最新最热恒为 False
+    is_new: bool = False
+
+
+class BoardDailyResp(BaseModel):
+    """本月最热的每日互动量（卡头 sparkline 用）。"""
+
+    date: str
+    value: int
 
 
 class TodayTopResp(BaseModel):
@@ -85,6 +95,8 @@ class TodayTopResp(BaseModel):
     total: int = 0
     # 时间窗内有数据的天数（today_top 恒为 1 / month_top=当月已入库天数），用于月初样本提示
     days: int = 0
+    # 每日互动量分布（仅 month_top 填充，供 sparkline 展示本月热度走势）
+    daily: list[BoardDailyResp] = []
 
 
 class TodayFidsItemResp(BaseModel):
@@ -181,7 +193,59 @@ _SORTS = {
     # 互动量（点赞+回复综合）。排序表达式与热门榜「最新最热 / 本月最热」完全一致，
     # 保证从榜单下钻到帖子页后，列表顺序与榜单顺序相同（口径一致）。
     "engagement_desc": "(CAST(likes AS INTEGER) + CAST(replies AS INTEGER)) DESC, date DESC",
+    # 时间衰减热度（HN 式）。参照日用子查询取数据最新日，与榜单 hot 口径共用 db._hot_score，
+    # 保证从榜单下钻后列表顺序与榜单一致。
+    "hot_desc": "hot_score(likes, replies, date, (SELECT MAX(date) FROM posts)) DESC, date DESC",
 }
+
+# 热门榜「最新最热 / 本月最热」的排序维度切换。
+# 注意 hot 用子查询取参照日而非传参，使 ORDER BY 片段保持无参数，SQL 参数位序才不会错乱。
+_BOARD_SORTS = {
+    "engagement": "(CAST(likes AS INTEGER) + CAST(replies AS INTEGER)) DESC, created_at DESC",
+    "likes": "CAST(likes AS INTEGER) DESC, created_at DESC",
+    "replies": "CAST(replies AS INTEGER) DESC, created_at DESC",
+    "hot": "hot_score(likes, replies, date, (SELECT MAX(date) FROM posts)) DESC, created_at DESC",
+}
+
+
+# ================= 新入榜快照（P2-1） =================
+# 快照是 Web 进程的「自有状态」，绝不能写 posts.db（Web 只读，与抓取进程并发安全），
+# 因此落盘到 outputs/（已挂卷持久化），与 download_tasks.json 同一模式。
+_SNAP_FILE = config.OUTPUTS_DIR / "board_snapshot.json"
+_snap_lock = threading.Lock()
+
+
+def _mark_new_and_save(board_key: str, urls: list[str], today: str) -> set[str]:
+    """对比快照，返回本次「首次入榜」的 url 集合，并回写快照。
+
+    标记规则：url 在快照中的 first_seen == 今天 → 视为新入榜。
+    因此同一天内多次刷新都保持 NEW，跨天自动消失（不需要额外的清理任务）。
+    任何异常都降级为「无新入榜」，绝不影响榜单本身。
+    """
+    try:
+        with _snap_lock:
+            snap: dict[str, dict[str, str]] = {}
+            if _SNAP_FILE.exists():
+                with _SNAP_FILE.open("r", encoding="utf-8") as f:
+                    loaded = json.load(f)
+                if isinstance(loaded, dict):
+                    snap = loaded
+            board = snap.get(board_key) or {}
+            fresh = {u for u in urls if board.get(u) != today}
+            for u in urls:
+                # 首次出现记今天；已在榜的保持原值，避免跨天重复标 NEW
+                board.setdefault(u, today)
+            # 仅保留「仍在榜」与「今天新入榜」的条目，避免文件随运行时间无限膨胀
+            keep = set(urls) | fresh
+            snap[board_key] = {u: d for u, d in board.items() if u in keep}
+            _SNAP_FILE.parent.mkdir(parents=True, exist_ok=True)
+            tmp = _SNAP_FILE.with_suffix(".json.tmp")
+            with tmp.open("w", encoding="utf-8") as f:
+                json.dump(snap, f, ensure_ascii=False)
+            tmp.replace(_SNAP_FILE)
+            return fresh
+    except Exception:
+        return set()
 
 
 def _fid_list(fid: str | None) -> list[str]:
@@ -342,8 +406,16 @@ def stats_boards() -> BoardsResp:
 
 
 @router.get("/stats/today_top")
-def stats_today_top(limit: Annotated[int, Query(ge=1, le=50)] = 10) -> TodayTopResp:
-    """最新数据日期内的最热帖（按 点赞+回复 综合降序），热门榜「今日最热」栏用。"""
+def stats_today_top(
+    limit: Annotated[int, Query(ge=1, le=50)] = 10,
+    sort: Annotated[str, Query()] = "engagement",
+) -> TodayTopResp:
+    """最新数据日期内的最热帖，热门榜「最新最热」栏用。
+
+    sort: engagement=点赞+回复综合（默认）/ likes=点赞 / replies=回复 / hot=时间衰减热度。
+    新入榜标记不适用本榜——每日窗口整体更替，标记会全量刷成 NEW 而失去信息量。
+    """
+    order = _BOARD_SORTS.get(sort, _BOARD_SORTS["engagement"])
 
     def _calc():
         conn = db.open_conn()
@@ -356,8 +428,7 @@ def stats_today_top(limit: Annotated[int, Query(ge=1, le=50)] = 10) -> TodayTopR
                 dict(r)
                 for r in conn.execute(
                     "SELECT fid, title, url, likes, replies, date FROM posts" +
-                    " WHERE date = ? ORDER BY" +
-                    " (CAST(likes AS INTEGER) + CAST(replies AS INTEGER)) DESC, created_at DESC LIMIT ?",
+                    " WHERE date = ? ORDER BY " + order + " LIMIT ?",
                     (latest, limit),
                 )
             ]
@@ -384,7 +455,7 @@ def stats_today_top(limit: Annotated[int, Query(ge=1, le=50)] = 10) -> TodayTopR
             ],
         }
 
-    return db.cached("today_top_v2", _calc)
+    return db.cached(f"today_top_v3:{sort}:{limit}", _calc)
 
 
 @router.get("/stats/today_fids")
@@ -532,8 +603,16 @@ def stats_top_fids(
 
 
 @router.get("/stats/month_top")
-def stats_month_top(limit: Annotated[int, Query(ge=1, le=50)] = 10) -> TodayTopResp:
-    """本月最热帖（最新数据月份内按 点赞+回复 综合降序），热门榜「本月最热」栏用。"""
+def stats_month_top(
+    limit: Annotated[int, Query(ge=1, le=50)] = 10,
+    sort: Annotated[str, Query()] = "engagement",
+) -> TodayTopResp:
+    """本月最热帖（最新数据月份内），热门榜「本月最热」栏用。
+
+    sort: engagement=点赞+回复综合（默认）/ likes=点赞 / replies=回复 / hot=时间衰减热度。
+    额外返回 daily（每日互动量，供卡头 sparkline）与 is_new（新入榜，对比快照）。
+    """
+    order = _BOARD_SORTS.get(sort, _BOARD_SORTS["engagement"])
 
     def _calc():
         conn = db.open_conn()
@@ -547,8 +626,7 @@ def stats_month_top(limit: Annotated[int, Query(ge=1, le=50)] = 10) -> TodayTopR
                 dict(r)
                 for r in conn.execute(
                     "SELECT fid, title, url, likes, replies, date FROM posts" +
-                    " WHERE substr(date, 1, 7) = ? ORDER BY" +
-                    " (CAST(likes AS INTEGER) + CAST(replies AS INTEGER)) DESC, created_at DESC LIMIT ?",
+                    " WHERE substr(date, 1, 7) = ? ORDER BY " + order + " LIMIT ?",
                     (month, limit),
                 )
             ]
@@ -558,12 +636,25 @@ def stats_month_top(limit: Annotated[int, Query(ge=1, le=50)] = 10) -> TodayTopR
             days = conn.execute(
                 "SELECT COUNT(DISTINCT date) AS c FROM posts WHERE substr(date, 1, 7) = ?", (month,)
             ).fetchone()["c"]
+            # 每日互动量：卡头 sparkline，用发布日分组（与榜单时间窗同口径）
+            daily = [
+                {"date": r["date"], "value": _as_int(r["v"])}
+                for r in conn.execute(
+                    "SELECT date, SUM(CAST(likes AS INTEGER) + CAST(replies AS INTEGER)) AS v" +
+                    " FROM posts WHERE substr(date, 1, 7) = ? GROUP BY date ORDER BY date",
+                    (month,),
+                )
+            ]
         finally:
             conn.close()
+        urls = [db.normalize_url(r["url"]) for r in rows]
+        today = date_cls.today().isoformat()
+        fresh = _mark_new_and_save("month_top", urls, today)
         return {
             "date": month,
             "total": total,
             "days": days,
+            "daily": daily,
             "items": [
                 {
                     "fid": r["fid"],
@@ -573,12 +664,13 @@ def stats_month_top(limit: Annotated[int, Query(ge=1, le=50)] = 10) -> TodayTopR
                     "likes": _as_int(r["likes"]),
                     "replies": _as_int(r["replies"]),
                     "date": r["date"],
+                    "is_new": db.normalize_url(r["url"]) in fresh,
                 }
                 for r in rows
             ],
         }
 
-    return db.cached("month_top_v2", _calc)
+    return db.cached(f"month_top_v3:{sort}:{limit}", _calc)
 
 
 @router.get("/stats/trend")

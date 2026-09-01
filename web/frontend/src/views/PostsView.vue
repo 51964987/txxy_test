@@ -32,8 +32,8 @@ const queryText = ref('')
 
 // 下钻支持的合法 sort 选项（与模板 el-select 的 value 严格一致）
 const SORT_OPTIONS = new Set([
-  'date_desc', 'date_asc', 'created_at_desc', 'created_at_asc', 'likes_desc', 'replies_desc',
-  'engagement_desc',
+  'date_desc', 'date_asc', 'created_at_desc', 'created_at_asc',   'likes_desc', 'replies_desc',
+  'engagement_desc', 'hot_desc',
 ])
 /** 排序中文名，供「当前条件」摘要条展示（与下方 el-select 的 option label 严格一致） */
 const SORT_LABEL: Record<string, string> = {
@@ -44,6 +44,7 @@ const SORT_LABEL: Record<string, string> = {
   likes_desc: '点赞数倒序',
   replies_desc: '回复数倒序',
   engagement_desc: '互动量倒序',
+  hot_desc: '热度倒序',
 }
 
 async function loadFidMeta() {
@@ -363,6 +364,7 @@ onMounted(() => {
             <el-option label="点赞数倒序" value="likes_desc" />
             <el-option label="回复数倒序" value="replies_desc" />
             <el-option label="互动量倒序" value="engagement_desc" />
+            <el-option label="热度倒序" value="hot_desc" />
           </el-select>
           <el-button
             type="success"

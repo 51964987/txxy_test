@@ -8,9 +8,34 @@
 """
 import sqlite3
 import time
+from datetime import date
 from typing import Any, Callable, Iterator
 
 import config
+
+
+def _hot_score(likes: Any, replies: Any, post_date: Any, ref_date: Any) -> float:
+    """HN 式时间衰减热度：(score - 1) / (age_days + 2) ** 1.8。
+
+    score = 点赞 + 回复；age_days = 参照日 - 发布日（参照日取数据最新日）。
+    用于「本月最热」这类跨多日的榜单，避免月初帖仅凭累计量长期霸榜。
+
+    注册为 SQL 函数（而非在 Python 里重排）是为了让帖子页排序能用同一个公式，
+    保证从榜单下钻后列表顺序与榜单一致——见 api.py 的 _SORTS["hot_desc"]。
+    """
+    try:
+        score = int(likes or 0) + int(replies or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    try:
+        d_ref = date.fromisoformat(str(ref_date or "")[:10])
+        d_post = date.fromisoformat(str(post_date or "")[:10])
+        age = max((d_ref - d_post).days, 0)
+    except ValueError:
+        age = 0
+    if score <= 0:
+        return 0.0
+    return (score - 1) / ((age + 2) ** 1.8)
 
 
 def _dsn() -> str:
@@ -22,6 +47,8 @@ def open_conn() -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA query_only = ON")
     conn.execute("PRAGMA busy_timeout = 15000")
+    # 注册时间衰减热度函数：供榜单与帖子页排序共用同一公式（口径一致）
+    conn.create_function("hot_score", 4, _hot_score)
     return conn
 
 

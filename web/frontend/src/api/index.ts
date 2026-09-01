@@ -179,7 +179,18 @@ export interface TodayTopItem {
   likes: number
   replies: number
   date: string
+  /** 新入榜（仅本月最热计算，最新最热恒为 false） */
+  is_new?: boolean
 }
+
+/** 每日互动量（本月最热卡头 sparkline 用） */
+export interface BoardDaily {
+  date: string
+  value: number
+}
+
+/** 榜单排序维度：综合互动量 / 点赞 / 回复 / 时间衰减热度 */
+export type BoardSort = 'engagement' | 'likes' | 'replies' | 'hot'
 
 export interface TodayTop {
   date: string
@@ -188,6 +199,8 @@ export interface TodayTop {
   total: number
   /** 时间窗内有数据的天数（最新最热恒为 1 / 本月最热=当月已入库天数） */
   days: number
+  /** 每日互动量分布（仅本月最热返回） */
+  daily?: BoardDaily[]
 }
 
 export interface TopAuthor {
@@ -383,11 +396,13 @@ export const api = {
   config: () => get<AppConfig>('/config'),
   overview: () => get<Overview>('/stats/overview'),
   boards: () => get<Boards>('/stats/boards'),
-  todayTop: (limit = 10) => get<TodayTop>('/stats/today_top', { limit }),
+  todayTop: (limit = 10, sort: BoardSort = 'engagement') =>
+    get<TodayTop>('/stats/today_top', { limit, sort }),
   topAuthors: (limit = 10, range = 'all') =>
     get<TopAuthor[]>('/stats/top_authors', { limit, range }),
   topFids: (limit = 10, range = 'all') => get<TopFid[]>('/stats/top_fids', { limit, range }),
-  monthTop: (limit = 10) => get<TodayTop>('/stats/month_top', { limit }),
+  monthTop: (limit = 10, sort: BoardSort = 'engagement') =>
+    get<TodayTop>('/stats/month_top', { limit, sort }),
   trend: (days: number) => get<TrendPoint[]>('/stats/trend', { days }),
   trendByFid: (days: number, top = 8) =>
     get<TrendByFid>('/stats/trend_by_fid', { days, top }),
