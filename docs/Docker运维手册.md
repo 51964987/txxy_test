@@ -81,11 +81,14 @@ docker compose exec web tail -f /app/outputs/$(date +%Y-%m-%d)/run.log
 ### 3.3 进入容器
 
 ```bash
-docker compose exec web bash               # web 容器（appuser，无 sudo）
-docker compose exec cron bash              # cron 容器（root，可装临时工具排查）
+docker compose exec web bash               # web 容器（默认 appuser，非 root）
+docker compose exec -u root web bash       # 临时需要 root 时（见下方提醒）
+docker compose exec cron bash              # cron 容器（本身就是 root）
 ```
 
-> web 容器是非 root 用户，**不能**在容器内 `apt install`。需要临时工具时，用 `docker run --rm -v txxy_db:/d alpine ...` 这类挂载卷的方式处理。
+> web 容器默认以非 root 的 `appuser` 运行，**不能** `apt install`。需要临时工具时，用 `docker run --rm -v txxy_db:/d alpine ...` 这类挂载卷的方式处理。
+>
+> 确实需要 root 时加 `-u root`（实测可执行）。但**不要用它改数据文件**，否则会留下 root 属主的文件，appuser 反而写不了——这正是 entrypoint 报「数据目录不可写」的常见成因。用完及时 `exit`。
 
 ### 3.4 资源占用
 
