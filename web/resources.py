@@ -12,11 +12,13 @@
 - 回收站（软删除）：move_to_trash / list_trash / restore_trash / purge_trash，
   删除的资源移入 outputs/trash/ 保留 TRASH_KEEP_DAYS 天，不写库。
 """
+import hashlib
 import json
 import math
 import os
 import shutil
 import time
+import urllib.parse
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -412,3 +414,186 @@ def purge_trash(item_id: str = "") -> dict[str, Any]:
         _save_trash(remain)
     invalidate_cache()
     return {"ok": True, "count": count}
+
+
+# ================= 类型兼容操作（2026-09-01） =================
+# 此前只有图片（预览）与视频（播放）有操作入口，文本 / 种子 / 其他类型只能复制路径或删除。
+# 这里补齐受控的「查看文本 / 解析种子 / 用系统默认程序打开」三类能力，
+# 路径校验统一复用 resolve_safe()（限定 downloads/ 内）。
+
+# 文本查看上限：超过则只返回前 N 字节并标记截断，避免大日志拖垮接口
+TEXT_VIEW_LIMIT = 512 * 1024
+# 种子文件清单最多返回条数（防超大种子把响应撑爆）
+TORRENT_FILES_LIMIT = 200
+
+
+def read_text(rel: str) -> dict[str, Any] | None:
+    """受控读取文本文件（编码兜底 + 大小限制）。
+
+    UTF-8 优先，GB18030 兜底——中文 Windows 生成的 txt 多为 GBK 系编码，
+    若只按 UTF-8 解码会直接失败或出乱码。返回 { text, encoding, size, truncated }。
+    """
+    target = resolve_safe(rel)
+    if target is None or target.suffix.lower() not in TEXT_EXTS:
+        return None
+    try:
+        size = target.stat().st_size
+        with open(target, "rb") as f:
+            raw = f.read(TEXT_VIEW_LIMIT)
+    except OSError:
+        return None
+    for enc in ("utf-8-sig", "utf-8", "gb18030", "latin-1"):
+        try:
+            return {
+                "text": raw.decode(enc),
+                "encoding": enc,
+                "size": size,
+                "truncated": size > TEXT_VIEW_LIMIT,
+            }
+        except UnicodeDecodeError:
+            continue
+    return None
+
+
+def _bdecode(data: bytes, i: int = 0) -> tuple[Any, int]:
+    """极简 bencode 解码（int / bytes / list / dict），仅够解析 .torrent 元信息。
+
+    项目约束不引第三方依赖，故自建最小实现；解析失败由调用方捕获后降级为 None。
+    """
+    c = data[i:i + 1]
+    if c == b"i":
+        j = data.index(b"e", i)
+        return int(data[i + 1:j]), j + 1
+    if c == b"l":
+        i += 1
+        out: list[Any] = []
+        while data[i:i + 1] != b"e":
+            v, i = _bdecode(data, i)
+            out.append(v)
+        return out, i + 1
+    if c == b"d":
+        i += 1
+        out_d: dict[Any, Any] = {}
+        while data[i:i + 1] != b"e":
+            k, i = _bdecode(data, i)
+            v, i = _bdecode(data, i)
+            out_d[k] = v
+        return out_d, i + 1
+    j = data.index(b":", i)
+    n = int(data[i:j])
+    return data[j + 1:j + 1 + n], j + 1 + n
+
+
+def _bencode(obj: Any) -> bytes:
+    """bencode 编码（int / bytes / str / list / dict），用于重编 info 字典计算 infohash。
+
+    注意：bencode 规范要求字典键按字节序排列，否则算出的 infohash 与客户端不一致。
+    """
+    if isinstance(obj, bool):
+        raise TypeError("bencode 不支持布尔值")
+    if isinstance(obj, int):
+        return b"i" + str(obj).encode() + b"e"
+    if isinstance(obj, (bytes, bytearray)):
+        raw_b = bytes(obj)
+        return str(len(raw_b)).encode() + b":" + raw_b
+    if isinstance(obj, str):
+        raw_s = obj.encode("utf-8")
+        return str(len(raw_s)).encode() + b":" + raw_s
+    if isinstance(obj, list):
+        return b"l" + b"".join(_bencode(x) for x in obj) + b"e"
+    if isinstance(obj, dict):
+        items = sorted(
+            obj.items(),
+            key=lambda kv: kv[0] if isinstance(kv[0], bytes) else str(kv[0]).encode(),
+        )
+        return b"d" + b"".join(_bencode(k) + _bencode(v) for k, v in items) + b"e"
+    raise TypeError(f"不支持的 bencode 类型: {type(obj)}")
+
+
+def _bstr(v: Any) -> str:
+    """bencode 字符串 → str（UTF-8 优先，GB18030 兜底，最后 latin-1 兜底）"""
+    if isinstance(v, bytes):
+        for enc in ("utf-8", "gb18030", "latin-1"):
+            try:
+                return v.decode(enc)
+            except UnicodeDecodeError:
+                continue
+        return ""
+    return str(v or "")
+
+
+def parse_torrent(rel: str) -> dict[str, Any] | None:
+    """解析 .torrent：返回名称、infohash、磁链与文件清单。
+
+    infohash = sha1(bencode(info))，必须重编 info 字典（不能直接用原始字节切片之外的
+    任何改动），否则磁链与其他客户端算出的不一致，等于无效的磁链。
+    """
+    target = resolve_safe(rel)
+    if target is None or target.suffix.lower() not in TORRENT_EXTS:
+        return None
+    try:
+        with open(target, "rb") as f:
+            meta, _ = _bdecode(f.read())
+    except (OSError, ValueError, IndexError):
+        return None
+    if not isinstance(meta, dict):
+        return None
+    info = meta.get(b"info")
+    if not isinstance(info, dict):
+        return None
+
+    try:
+        infohash = hashlib.sha1(_bencode(info)).hexdigest()
+    except TypeError:
+        return None
+
+    name = _bstr(info.get(b"name")) or target.stem
+    files: list[dict[str, Any]] = []
+    flist = info.get(b"files")
+    if isinstance(flist, list):
+        for f in flist:
+            if not isinstance(f, dict):
+                continue
+            parts = f.get(b"path") or []
+            if isinstance(parts, list):
+                p = "/".join(_bstr(x) for x in parts)
+            else:
+                p = _bstr(parts)
+            try:
+                size = int(f.get(b"length") or 0)
+            except (TypeError, ValueError):
+                size = 0
+            files.append({"path": p, "size": size})
+    else:
+        try:
+            size = int(info.get(b"length") or 0)
+        except (TypeError, ValueError):
+            size = 0
+        files.append({"path": name, "size": size})
+
+    dn = urllib.parse.quote(name)
+    return {
+        "name": name,
+        "infohash": infohash,
+        "magnet": f"magnet:?xt=urn:btih:{infohash}&dn={dn}",
+        "total_size": sum(f["size"] for f in files),
+        "file_count": len(files),
+        "files": files[:TORRENT_FILES_LIMIT],
+        "files_truncated": len(files) > TORRENT_FILES_LIMIT,
+    }
+
+
+def open_file(rel: str) -> bool:
+    """用系统默认程序打开 downloads/ 下的文件（仅 Windows 的 os.startfile 可用）。
+
+    与 open_folder 一样属「执行类」操作，路径校验复用 resolve_safe；
+    非 Windows 抛 OSError，由接口层转 501。
+    """
+    target = resolve_safe(rel)
+    if target is None:
+        return False
+    startfile = getattr(os, "startfile", None)
+    if startfile is None:
+        raise OSError("当前系统不支持打开本地文件（仅 Windows 支持）")
+    startfile(str(target))
+    return True

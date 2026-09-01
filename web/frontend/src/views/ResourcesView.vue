@@ -13,6 +13,8 @@ import {
   type ResourceItem,
   type ResourceSource,
   type Resources,
+  type ResourceText,
+  type TorrentInfo,
   type TrashItem,
   type TrashResp,
 } from '../api'
@@ -441,6 +443,67 @@ function closeVideo() {
   videoVisible.value = false
 }
 
+// ===== 类型兼容操作：文本查看 / 种子信息 / 用系统默认程序打开 =====
+// 此前只有图片（预览）与视频（播放）有操作入口，文本 / 种子 / 其他类型只能复制路径或删除。
+const textVisible = ref(false)
+const textLoading = ref(false)
+const textName = ref('')
+const textData = ref<ResourceText | null>(null)
+
+async function viewText(file: ResourceFile) {
+  textName.value = file.name
+  textData.value = null
+  textVisible.value = true
+  textLoading.value = true
+  try {
+    textData.value = await api.resourceText(file.rel_path)
+  } catch (e) {
+    if (isAborted(e)) return
+    ElMessage.error(`读取文本失败: ${(e as Error).message}`)
+    textVisible.value = false
+  } finally {
+    textLoading.value = false
+  }
+}
+
+const torrentVisible = ref(false)
+const torrentLoading = ref(false)
+const torrentData = ref<TorrentInfo | null>(null)
+
+async function showTorrent(file: ResourceFile) {
+  torrentData.value = null
+  torrentVisible.value = true
+  torrentLoading.value = true
+  try {
+    torrentData.value = await api.resourceTorrent(file.rel_path)
+  } catch (e) {
+    if (isAborted(e)) return
+    ElMessage.error(`解析种子失败: ${(e as Error).message}`)
+    torrentVisible.value = false
+  } finally {
+    torrentLoading.value = false
+  }
+}
+
+async function copyMagnet(magnet: string) {
+  try {
+    await navigator.clipboard.writeText(magnet)
+    ElMessage.success('磁链已复制，可粘贴到下载工具')
+  } catch {
+    ElMessage.error('复制失败，请手动复制下方磁链')
+  }
+}
+
+/** 用系统默认程序打开文件（路径校验在后端；非 Windows 返回 501） */
+async function openFileLocal(file: ResourceFile) {
+  try {
+    await api.openResourceFile(file.rel_path)
+  } catch (e) {
+    if (isAborted(e)) return
+    ElMessage.error(`打开失败: ${(e as Error).message}`)
+  }
+}
+
 // ===== 删除（软删除：移入回收站，保留期内可恢复）=====
 async function removeFile(file: ResourceFile) {
   try {
@@ -635,7 +698,7 @@ const columns: Columns<ResourceFile> = [
   {
     key: 'actions',
     title: '操作',
-    width: 210,
+    width: 260,
     cellRenderer: ({ rowData }) => {
       const btns = [
         h(
@@ -665,7 +728,21 @@ const columns: Columns<ResourceFile> = [
             () => '播放',
           ),
         )
+      } else if (rowData.category === 'text') {
+        btns.unshift(
+          h(ElButton, { link: true, type: 'primary', onClick: () => viewText(rowData) }, () => '查看'),
+        )
+      } else if (rowData.category === 'torrent') {
+        btns.unshift(
+          h(
+            ElButton,
+            { link: true, type: 'primary', onClick: () => showTorrent(rowData) },
+            () => '种子信息',
+          ),
+        )
       }
+      // 所有类型都可用系统默认程序打开（压缩包、种子等本地处理更直接）
+      btns.unshift(h(ElButton, { link: true, onClick: () => openFileLocal(rowData) }, () => '打开'))
       return h('div', { class: 'row-actions' }, btns)
     },
   },
@@ -714,7 +791,7 @@ const globalColumns: Columns<ResourceFile> = [
   {
     key: 'actions',
     title: '操作',
-    width: 210,
+    width: 260,
     cellRenderer: ({ rowData }) => {
       const btns = [
         h(
@@ -744,7 +821,20 @@ const globalColumns: Columns<ResourceFile> = [
             () => '播放',
           ),
         )
+      } else if (rowData.category === 'text') {
+        btns.unshift(
+          h(ElButton, { link: true, type: 'primary', onClick: () => viewText(rowData) }, () => '查看'),
+        )
+      } else if (rowData.category === 'torrent') {
+        btns.unshift(
+          h(
+            ElButton,
+            { link: true, type: 'primary', onClick: () => showTorrent(rowData) },
+            () => '种子信息',
+          ),
+        )
       }
+      btns.unshift(h(ElButton, { link: true, onClick: () => openFileLocal(rowData) }, () => '打开'))
       return h('div', { class: 'row-actions' }, btns)
     },
   },
@@ -804,16 +894,20 @@ onBeforeUnmount(() => {
           <div class="stat-value">{{ totalSizeText }}</div>
         </div>
       </div>
-      <div class="stat-card stat-card-toolbar">
-        <el-button
-          :icon="'Refresh'"
-          :loading="loading"
-          type="primary"
-          plain
-          @click="load"
-        >
-          刷新
-        </el-button>
+      <!-- 第 4 格原为「刷新」按钮（占一整格却只有一个动作）；改为回收站指标，
+           既补上「待清理/可恢复」的信息，又可直接点开回收站；刷新移入工具栏 -->
+      <div class="stat-card stat-card-action" title="点击查看回收站" @click="openTrash">
+        <div class="stat-icon" style="background: #909399">
+          <el-icon><Delete /></el-icon>
+        </div>
+        <div>
+          <div class="stat-label">回收站</div>
+          <div class="stat-value">
+            {{ trash.items.length }} 项<template v-if="trash.items.length">
+              · {{ formatSize(trash.total_size) }}</template
+            >
+          </div>
+        </div>
       </div>
     </div>
 
@@ -900,10 +994,14 @@ onBeforeUnmount(() => {
             <el-option label="目录：按时间排序" value="time" />
             <el-option label="目录：按名称排序" value="name" />
           </el-select>
-          <el-button class="copy-all" @click="copyAllPaths">复制全部路径</el-button>
-          <el-button type="warning" plain @click="openTrash">
-            回收站<template v-if="trash.items.length">（{{ trash.items.length }}）</template>
-          </el-button>
+          <!-- 动作组统一靠右（互联网文件/网盘列表的常见布局：筛选在左、动作在右） -->
+          <div class="toolbar-right">
+            <el-button class="copy-all" @click="copyAllPaths">复制全部路径</el-button>
+            <el-button type="warning" plain @click="openTrash">
+              回收站<template v-if="trash.items.length">（{{ trash.items.length }}）</template>
+            </el-button>
+            <el-button :icon="'Refresh'" :loading="loading" @click="load">刷新</el-button>
+          </div>
         </div>
 
         <!-- B2 全局结果模式：命中目录 + 跨目录文件清单 -->
@@ -970,19 +1068,6 @@ onBeforeUnmount(() => {
                       <span>{{ m.label }} {{ m.count }}</span>
                     </template>
                   </span>
-                  <!-- B1 来源帖回溯 -->
-                  <template v-if="sourceOf(item.name)?.matched">
-                    <span class="folder-source">
-                      来源：{{ sourceOf(item.name)?.author || '未知作者'
-                      }}<template v-if="sourceOf(item.name)?.date"> · {{ sourceOf(item.name)?.date }}</template>
-                    </span>
-                    <el-button link type="primary" class="src-btn" @click.stop="openSourceUrl(item.name)">
-                      原帖
-                    </el-button>
-                    <el-button link type="primary" class="src-btn" @click.stop="goSourcePosts(item.name)">
-                      看帖子
-                    </el-button>
-                  </template>
                   <!-- B7 下载任务关联 -->
                   <el-tag
                     v-if="taskOf(item.name)"
@@ -994,6 +1079,19 @@ onBeforeUnmount(() => {
                   >
                     下载任务
                   </el-tag>
+                </div>
+                <!-- B1 来源回溯独立一行：与基础属性分行，避免目录头信息密度过高难以扫读 -->
+                <div v-if="sourceOf(item.name)?.matched" class="folder-line3">
+                  <span class="folder-source">
+                    来源：{{ sourceOf(item.name)?.author || '未知作者'
+                    }}<template v-if="sourceOf(item.name)?.date"> · {{ sourceOf(item.name)?.date }}</template>
+                  </span>
+                  <el-button link type="primary" class="src-btn" @click.stop="openSourceUrl(item.name)">
+                    原帖
+                  </el-button>
+                  <el-button link type="primary" class="src-btn" @click.stop="goSourcePosts(item.name)">
+                    看帖子
+                  </el-button>
                 </div>
               </div>
               <el-button link type="primary" class="copy-btn" @click.stop="copyPath(item.name)">
@@ -1081,6 +1179,49 @@ onBeforeUnmount(() => {
       </template>
     </el-dialog>
 
+    <!-- 文本查看：受控读取 .txt/.md/.log，编码兜底，超大文件截断 -->
+    <el-dialog v-model="textVisible" :title="`查看文本 · ${textName}`" width="60%" top="8vh">
+      <el-skeleton v-if="textLoading" :rows="6" animated />
+      <template v-else-if="textData">
+        <div class="text-meta text-muted">
+          {{ formatSize(textData.size) }} · 编码 {{ textData.encoding }}
+          <template v-if="textData.truncated"> · 文件较大，仅显示前 512 KB</template>
+        </div>
+        <pre class="text-body">{{ textData.text }}</pre>
+      </template>
+      <el-empty v-else :image-size="64" description="无内容" />
+    </el-dialog>
+
+    <!-- 种子信息：解析 .torrent，给出文件清单与磁链（本地打开/下载用） -->
+    <el-dialog v-model="torrentVisible" title="种子信息" width="60%" top="8vh">
+      <el-skeleton v-if="torrentLoading" :rows="6" animated />
+      <template v-else-if="torrentData">
+        <div class="torrent-head">
+          <div class="torrent-name" :title="torrentData.name">{{ torrentData.name }}</div>
+          <div class="text-muted">
+            {{ torrentData.file_count }} 个文件 · {{ formatSize(torrentData.total_size) }}
+          </div>
+        </div>
+        <div class="magnet-row">
+          <el-input :model-value="torrentData.magnet" readonly size="small" class="magnet-input" />
+          <el-button type="primary" size="small" @click="copyMagnet(torrentData.magnet)">
+            复制磁链
+          </el-button>
+        </div>
+        <div class="torrent-hash text-muted">infohash：{{ torrentData.infohash }}</div>
+        <div class="torrent-files">
+          <div v-for="(f, i) in torrentData.files" :key="i" class="torrent-file">
+            <span class="tf-path" :title="f.path">{{ f.path }}</span>
+            <span class="text-muted">{{ formatSize(f.size) }}</span>
+          </div>
+          <div v-if="torrentData.files_truncated" class="text-muted">
+            文件较多，仅显示前 {{ torrentData.files.length }} 个
+          </div>
+        </div>
+      </template>
+      <el-empty v-else :image-size="64" description="无法解析该种子" />
+    </el-dialog>
+
     <!-- 回收站：软删除项，保留期内可恢复，也可彻底删除 -->
     <el-drawer v-model="trashVisible" title="回收站" size="520px">
       <div class="trash-head">
@@ -1124,11 +1265,16 @@ onBeforeUnmount(() => {
 
 <style scoped>
 /* P0-4 刷新按钮所在卡片：作为第 4 格，内容居中放置按钮 */
-.stat-card-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 72px;
+/* 第 4 格改为「回收站」指标卡（可点击打开抽屉）。
+   原先这整格只放一个「刷新」按钮，占满一格却只有一个动作，性价比低 */
+.stat-card-action {
+  cursor: pointer;
+  transition: box-shadow 0.15s ease, transform 0.15s ease;
+}
+
+.stat-card-action:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+  transform: translateY(-1px);
 }
 
 /* P0-1/P0-2 工具栏 */
@@ -1149,8 +1295,102 @@ onBeforeUnmount(() => {
   width: 170px;
 }
 
-.copy-all {
+/* 动作组统一靠右（复制全部 / 回收站 / 刷新），窄屏随 toolbar 的 wrap 整体换行 */
+.toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   margin-left: auto;
+}
+
+.copy-all {
+  margin-left: 0;
+}
+
+/* 目录头第三行：来源回溯独立成行，降低单行信息密度 */
+.folder-line3 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  margin-top: 2px;
+}
+
+/* 文本查看弹窗：等宽字体 + 独立滚动，长文本不撑破弹窗 */
+.text-meta {
+  font-size: 12px;
+  margin-bottom: 8px;
+}
+
+.text-body {
+  margin: 0;
+  padding: 12px;
+  max-height: 55vh;
+  overflow: auto;
+  background: #f7f8fa;
+  border-radius: 6px;
+  font-family: Consolas, Monaco, 'Courier New', monospace;
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* 种子信息弹窗 */
+.torrent-head {
+  margin-bottom: 10px;
+}
+
+.torrent-name {
+  font-weight: 600;
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.magnet-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.magnet-input {
+  flex: 1;
+  min-width: 0;
+  font-family: Consolas, Monaco, 'Courier New', monospace;
+  font-size: 12px;
+}
+
+.torrent-hash {
+  font-size: 12px;
+  margin-top: 6px;
+  word-break: break-all;
+}
+
+.torrent-files {
+  margin-top: 10px;
+  max-height: 40vh;
+  overflow: auto;
+  border-top: 1px solid #ebeef5;
+}
+
+.torrent-file {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 0;
+  font-size: 12px;
+  border-bottom: 1px solid #f5f7fa;
+}
+
+.tf-path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* B6 容量洞察卡 */

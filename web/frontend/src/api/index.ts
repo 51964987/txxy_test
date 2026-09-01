@@ -352,6 +352,25 @@ export interface ResourceSource {
   url?: string
 }
 
+/** 文本查看结果（受控接口：.txt/.md/.log，编码兜底，超长截断） */
+export interface ResourceText {
+  text: string
+  encoding: string
+  size: number
+  truncated: boolean
+}
+
+/** 种子解析结果（bencode 解码：infohash / 磁链 / 文件清单） */
+export interface TorrentInfo {
+  name: string
+  infohash: string
+  magnet: string
+  total_size: number
+  file_count: number
+  files: { path: string; size: number }[]
+  files_truncated: boolean
+}
+
 /**
  * 重复检测结果（D2 增强）：判据与实际行为保持一致——
  * 是否跳过由磁盘决定，历史记录只用于提示，故按「文件是否还在」拆成三类。
@@ -439,6 +458,10 @@ export const api = {
   resourceSource: (name: string) => get<ResourceSource>('/resources/source', { name }),
   openResourceFolder: (relPath: string) =>
     post<{ ok: boolean }>('/resources/open', { rel_path: relPath }),
+  openResourceFile: (relPath: string) =>
+    post<{ ok: boolean }>('/resources/open-file', { rel_path: relPath }),
+  resourceText: (path: string) => get<ResourceText>('/resources/text', { path }),
+  resourceTorrent: (path: string) => get<TorrentInfo>('/resources/torrent', { path }),
   deleteResource: (path: string, isDir: boolean) =>
     post<{ ok: boolean; id: string; rel: string; size: number }>('/resources/delete', {
       path,

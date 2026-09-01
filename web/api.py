@@ -965,6 +965,39 @@ def resources_open(_: OpenRateLimit, req: ResourceOpenReq) -> dict[str, Any]:
     return {"ok": True}
 
 
+@router.get("/resources/text")
+def resources_text(_: FileRateLimit, path: str) -> dict[str, Any]:
+    """受控文本查看：仅 .txt/.md/.log，编码 UTF-8 优先、GB18030 兜底，超 512KB 截断。"""
+    r = resources.read_text(path)
+    if r is None:
+        raise HTTPException(404, "文件不存在、路径越界或非文本类型")
+    return r
+
+
+@router.get("/resources/torrent")
+def resources_torrent(_: FileRateLimit, path: str) -> dict[str, Any]:
+    """解析 .torrent：返回名称、infohash、磁链与文件清单（纯标准库 bencode 实现）。"""
+    r = resources.parse_torrent(path)
+    if r is None:
+        raise HTTPException(400, "文件不存在、路径越界或不是合法的种子文件")
+    return r
+
+
+@router.post("/resources/open-file")
+def resources_open_file(_: OpenRateLimit, req: ResourceOpenReq) -> dict[str, Any]:
+    """用系统默认程序打开 downloads/ 下的文件（仅 Windows 生效）。
+
+    复用 ResourceOpenReq（rel_path 语义相同）与 OpenRateLimit（执行类操作 10 次/分）。
+    """
+    try:
+        ok = resources.open_file(req.rel_path)
+    except OSError as e:
+        raise HTTPException(501, str(e))
+    if not ok:
+        raise HTTPException(404, "文件不存在或路径越界")
+    return {"ok": True}
+
+
 @router.get("/resources/video")
 def resources_video(_: VideoRateLimit, path: str) -> FileResponse:
     """受控视频播放：仅允许 downloads/ 内、扩展名在视频白名单内的文件。
