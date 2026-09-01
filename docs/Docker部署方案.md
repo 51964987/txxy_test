@@ -2,7 +2,11 @@
 
 > 状态：**已实施**。交付物已创建（第 4 节）、最小代码改动已完成（第 5 节）、一键部署脚本已提供（第 6 节）。
 > 变更历史：2026-08 追加三环境一键部署脚本；**2026-08-31 完成第 13 节优化**——数据默认改为命名卷隔离（共用宿主机 DB 保留为 overlay）、cron 改为 profile 默认不启用、web 非 root、补齐健康检查/日志轮转/资源限制、新增离线（air-gapped）镜像 tar 交付与 `deploy/deploy_offline.sh`。
-> 注：本页为独立部署文档，不与「数据总览大屏」文档合并；大屏相关汇总见 `数据总览大屏设计与优化总览.md`。
+> 注：本页为**设计与决策**文档（为什么这么做），不与「数据总览大屏」文档合并；大屏相关汇总见 `数据总览大屏设计与优化总览.md`。
+
+> **配套操作文档**（具体怎么做，命令可直接复制执行）：
+> - [Docker部署使用手册.md](./Docker部署使用手册.md) —— 四环境从零部署到可访问
+> - [Docker运维手册.md](./Docker运维手册.md) —— 部署后的日常维护、数据备份恢复、升级回滚、故障排查
 
 ## 1. 背景与目标
 
@@ -199,9 +203,13 @@ services:
     logging: *default-logging
 
 volumes:
+  # 固定卷名（不加项目名前缀），保证 scripts/backup.sh 与文档中的裸名引用有效
   txxy_db:
+    name: txxy_db
   txxy_outputs:
+    name: txxy_outputs
   txxy_downloads:
+    name: txxy_downloads
 ```
 
 **overlay 一：`deploy/docker-compose.host-db.yml`（共用宿主机数据目录）**
@@ -673,9 +681,13 @@ services:
     logging: *default-logging
 
 volumes:
+  # 固定卷名（不加项目名前缀），保证 scripts/backup.sh 与文档中的裸名引用有效
   txxy_db:
+    name: txxy_db
   txxy_outputs:
+    name: txxy_outputs
   txxy_downloads:
+    name: txxy_downloads
 ```
 
 > `profiles: ["cron"]` 的收益：离线环境（无法抓取）与只想跑数据展示的场景，直接 `up -d` 不会起 cron 容器，省一个常驻进程，也避免定时任务持续失败刷日志。
@@ -716,16 +728,27 @@ docker compose restart web
 备份/导出（命名卷）：
 
 ```bash
-# 备份 DB
-docker run --rm -v txxy_db:/data -v %cd%:/backup alpine \
+# 备份 DB（Linux / WSL）
+docker run --rm -v txxy_db:/data -v "$(pwd):/backup" alpine \
   tar czf /backup/txxy-db-$(date +%Y%m%d).tar.gz -C /data .
+```
 
+```powershell
+# 备份 DB（Windows PowerShell；%cd% 是 cmd 写法，PowerShell 需用 ${PWD}）
+docker run --rm -v txxy_db:/data -v "${PWD}:/backup" alpine `
+  tar czf /backup/txxy-db-$(Get-Date -Format yyyyMMdd).tar.gz -C /data .
+```
+
+```bash
 # 恢复
-docker run --rm -v txxy_db:/data -v %cd%:/backup alpine \
+docker run --rm -v txxy_db:/data -v "$(pwd):/backup" alpine \
   tar xzf /backup/txxy-db-20260831.tar.gz -C /data
 ```
 
-> 建议把这两段固化成 `scripts/backup.sh` 与 `scripts/restore.sh`，避免现场手写出错。
+> 备份已固化为 `scripts/backup.sh`（三个卷一次性打包，见 [Docker运维手册.md](./Docker运维手册.md)）。
+> 恢复仍建议按上面命令手工执行（覆盖式操作，需人工确认目标文件名）。
+>
+> **卷名说明**：compose 中已用 `name:` 固定卷名为 `txxy_db`，不加项目名前缀，因此脚本与文档中的裸名引用有效。
 
 #### 13.2.5 影响与注意
 
@@ -923,3 +946,37 @@ curl http://127.0.0.1:18088/api/health
 2. **非 root 的前提**：命名卷首次创建时会继承镜像内目录权限（appuser），所以新卷没问题；若沿用旧卷（属主 root），web 会明确报错并打印修复命令，不会静默失败。
 3. **cron 默认不启动**：需要定时抓取时必须显式 `--profile cron`，部署脚本末尾已打印该命令。
 4. **离线环境不要启用 cron**：源站不可达，启用后任务会持续失败并留下现场日志。
+
+### 13.9 卷名与备份修复（2026-09-01）
+
+编写运维手册时实测发现：`docker volume inspect txxy_db` 报 **no such volume**。原因是 Compose 默认给卷名加项目名前缀，实际卷名是 `txxy_test_txxy_db`。连带影响：
+
+| 受影响项 | 现象 |
+|---|---|
+| `scripts/backup.sh` | `docker volume inspect txxy_db` 全部落空 → 三个卷都打印「跳过」，**备份实际没产生任何文件** |
+| `docker/entrypoint.sh` 的修复提示 | `-v txxy_db:/d` 会新建一个空卷，修不到真正的数据卷 |
+| 文档中的备份/恢复命令 | 同上，指向不存在的卷 |
+
+**修复**：compose 的 `volumes` 段显式指定 `name:`，固定为 `txxy_db` / `txxy_outputs` / `txxy_downloads`：
+
+```yaml
+volumes:
+  txxy_db:
+    name: txxy_db
+```
+
+好处是卷名可预期，脚本与文档**零改动**，跨机器迁移时卷名也一致。
+
+> **已部署环境升级注意**：旧卷（`txxy_test_txxy_*`）已不在配置中，`down -v` 不会清理它，会变成孤儿卷。需手工删除，**删前先备份**：
+> ```bash
+> docker volume rm txxy_test_txxy_db txxy_test_txxy_downloads txxy_test_txxy_outputs
+> ```
+
+**附带修复：离线环境的备份依赖**
+
+`scripts/backup.sh` 借助 alpine 容器读写命名卷，离线机无法 `docker pull alpine`。已让 `docker/build-offline.sh` 把 `alpine:latest` 一并打进镜像 tar（约 5MB）。
+
+**新增配套操作文档**
+
+- `docs/Docker部署使用手册.md` —— 四环境从零部署到可访问
+- `docs/Docker运维手册.md` —— 部署后的日常维护与故障排查

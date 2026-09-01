@@ -26,7 +26,12 @@ docker tag "${IMAGE}" txxy:latest
 echo "==> [2/3] 导出镜像"
 mkdir -p "${OUT_DIR}"
 TAR="${OUT_DIR}/txxy-${VERSION}-${HASH10}.tar"
-docker save -o "${TAR}" "${IMAGE}" txxy:latest
+
+# alpine 一并打包：scripts/backup.sh 与卷维护命令通过 alpine 容器读写命名卷，
+# 离线机无法现场拉取，缺了它备份功能会失效（体积仅约 5MB）。
+docker pull alpine:latest >/dev/null 2>&1 || echo "[警告] alpine 拉取失败，离线机的备份功能将不可用"
+
+docker save -o "${TAR}" "${IMAGE}" txxy:latest alpine:latest
 
 echo "==> [3/3] 完成"
 ls -lh "${TAR}"

@@ -70,6 +70,12 @@ services:
     logging: *default-logging
 
 volumes:
+  # 固定卷名：compose 默认会加项目名前缀（txxy_test_txxy_db），导致
+  # scripts/backup.sh 与文档中的裸名引用（txxy_db）全部落空。
+  # 显式指定 name 后卷名可预期，跨机器迁移也一致。
   txxy_db:
+    name: txxy_db
   txxy_outputs:
+    name: txxy_outputs
   txxy_downloads:
+    name: txxy_downloads
