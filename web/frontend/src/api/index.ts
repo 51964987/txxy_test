@@ -352,6 +352,19 @@ export interface ResourceSource {
   url?: string
 }
 
+/**
+ * 重复检测结果（D2 增强）：判据与实际行为保持一致——
+ * 是否跳过由磁盘决定，历史记录只用于提示，故按「文件是否还在」拆成三类。
+ */
+export interface DownloadDupResult {
+  /** 历史曾成功且文件仍在 → 提交后会被跳过 */
+  still_exists: string[]
+  /** 历史曾成功但文件已不在 → 提交后会重新下载 */
+  gone: string[]
+  /** 正在排队/下载中 → 重复提交存在并发写同一文件的风险 */
+  running: string[]
+}
+
 export type DownloadItemStatus = 'pending' | 'ok' | 'skip' | 'fail' | 'cancelled'
 export type DownloadTaskStatus = 'pending' | 'running' | 'done' | 'failed' | 'cancelled'
 
@@ -437,7 +450,8 @@ export const api = {
   submitDownload: (urls: string[]) => post<{ id: string; count: number }>('/downloads', { urls }),
   downloadTasks: () => get<{ tasks: DownloadTaskSummary[] }>('/downloads'),
   downloadTask: (id: string) => get<DownloadTaskDetail>(`/downloads/${id}`),
-  checkDownloadDup: (urls: string[]) => post<{ duplicated: string[] }>('/downloads/check-dup'),
+  checkDownloadDup: (urls: string[]) =>
+    post<DownloadDupResult>('/downloads/check-dup', { urls }),
   cancelDownload: (id: string) => post<{ id: string }>(`/downloads/${id}/cancel`),
   retryDownload: (id: string) => post<{ id: string; retried: number }>(`/downloads/${id}/retry`),
   prioritizeDownload: (id: string) => post<{ id: string }>(`/downloads/${id}/prioritize`),

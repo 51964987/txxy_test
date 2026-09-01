@@ -70,26 +70,80 @@ const filteredTasks = computed<DownloadTaskSummary[]>(() => {
   return tasks.value.filter((t) => t.status === filterStatus.value)
 })
 
-// ---- D2 重复提交提醒：与历史已成功/跳过的 URL 比对 ----
+// ---- D2 重复提交提醒：区分「文件仍在 / 已不在 / 正在下载」三类 ----
+
+/** HTML 转义：URL 来自用户输入，拼进 MessageBox 的 HTML 内容前必须转义 */
+function escapeHtml(s: string) {
+  return s.replace(/[&<>"']/g, (c) => {
+    const map: Record<string, string> = {
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    }
+    return map[c] as string
+  })
+}
+
+/** 弹窗内只列出前 n 个链接，长列表截断以免撑爆弹窗 */
+function briefList(urls: string[], n = 3) {
+  const head = urls.slice(0, n).map(escapeHtml)
+  const rest = urls.length - head.length
+  return rest > 0 ? `${head.join('<br>')}<br>…等共 ${urls.length} 个` : head.join('<br>')
+}
+
 async function submitUrls() {
   const urls = parsedUrls.value
   if (!urls.length) {
     ElMessage.warning('请输入至少一个有效 URL（http/https 开头）')
     return
   }
-  const dup = (await api.checkDownloadDup(urls)).duplicated
-  if (dup.length > 0) {
-    const go = await ElMessageBox.confirm(
-      `有 ${dup.length} 个链接此前已成功下载过，重复提交会自动跳过已存在文件。仍要提交吗？`,
-      '重复提交提醒',
-      { type: 'warning', confirmButtonText: '仍要提交', cancelButtonText: '取消' },
-    )
-      .then(() => true)
-      .catch(() => false)
-    if (!go) return
-  }
+
+  let pending = urls
   try {
-    const r = await api.submitDownload(urls)
+    const dup = await api.checkDownloadDup(urls)
+
+    // 1) 正在下载中的链接直接剔除，避免两个任务并发写同一文件
+    const drop = new Set(dup.running)
+    if (drop.size) {
+      pending = pending.filter((u) => !drop.has(u))
+      ElMessage.warning(`已移除 ${drop.size} 个正在下载中的链接，避免同一文件被并发写入`)
+      if (!pending.length) {
+        ElMessage.warning('所选链接均已在下载中，未重复提交')
+        return
+      }
+    }
+
+    // 2) 历史下载过的链接：文件「仍在」与「已不在」后果完全不同，必须分开说清楚
+    const alive = dup.still_exists.filter((u) => !drop.has(u))
+    const gone = dup.gone.filter((u) => !drop.has(u))
+    if (alive.length || gone.length) {
+      const lines: string[] = []
+      if (alive.length) {
+        lines.push(
+          `<b>${alive.length} 个链接文件仍在</b>，提交后会跳过（不重复下载）：<br>${briefList(alive)}`,
+        )
+      }
+      if (gone.length) {
+        lines.push(
+          `<b>${gone.length} 个链接曾下载过但文件已不在</b>，提交后会重新下载：<br>${briefList(gone)}`,
+        )
+      }
+      const go = await ElMessageBox.confirm(lines.join('<br><br>'), '重复提交提醒', {
+        type: 'warning',
+        dangerouslyUseHTMLString: true,
+        confirmButtonText: '仍要提交',
+        cancelButtonText: '取消',
+      })
+        .then(() => true)
+        .catch(() => false)
+      if (!go) return
+    }
+  } catch (e) {
+    if (isAborted(e)) return
+    ElMessage.error(`提交前检查失败: ${(e as Error).message}`)
+    return
+  }
+
+  try {
+    const r = await api.submitDownload(pending)
     ElMessage.success(`任务已提交（${r.count} 个链接），可在下方查看进度`)
     inputText.value = ''
     await loadTasks()

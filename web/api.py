@@ -1070,10 +1070,21 @@ class DownloadCheckReq(BaseModel):
     urls: list[str]
 
 
+class DownloadCheckResp(BaseModel):
+    """提交前重复检测结果（D2 增强）。"""
+
+    # 历史曾成功且文件仍在 → 提交后会被跳过
+    still_exists: list[str] = []
+    # 历史曾成功但文件已不在 → 提交后会重新下载
+    gone: list[str] = []
+    # 正在排队/下载中 → 重复提交存在并发写同一文件的风险
+    running: list[str] = []
+
+
 @router.post("/downloads/check-dup")
-def downloads_check_dup(req: DownloadCheckReq) -> dict[str, Any]:
-    """提交前重复检测（D2）：返回 urls 中历史上曾成功（ok/skip）过的子集。"""
-    return {"duplicated": download_tasks.manager.dup_check(req.urls)}
+def downloads_check_dup(req: DownloadCheckReq) -> DownloadCheckResp:
+    """提交前重复检测（D2）：按「文件仍在 / 已不在 / 正在下载」三类返回。"""
+    return download_tasks.manager.dup_check(req.urls)
 
 
 @router.get("/downloads/events")

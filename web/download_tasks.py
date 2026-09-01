@@ -175,15 +175,55 @@ class DownloadTaskManager:
             t = self._tasks.get(tid)
             return self._public(t) if t else None
 
-    def dup_check(self, urls: list[str]) -> list[str]:
-        """提交前重复检测（D2）：返回 urls 中历史上曾成功（ok/skip）过的子集。"""
-        done: set[str] = set()
+    @staticmethod
+    def _saved_dir_exists(rel: str | None) -> bool:
+        """保存目录是否仍存在且有内容——判「会不会被跳过」的权威依据。
+
+        saved_dir 是相对 downloads/ 的路径。缺失（如早期历史记录）时保守按「不在」处理：
+        宁可提示会重新下载，也不要让用户误以为文件还在而放弃提交。
+        """
+        if not rel:
+            return False
+        p = config.DOWNLOADS_DIR / rel
+        try:
+            return p.is_dir() and any(p.iterdir())
+        except OSError:
+            return False
+
+    def dup_check(self, urls: list[str]) -> dict[str, list[str]]:
+        """提交前重复检测（D2 增强）：按「文件是否还在 / 是否正在下载」分三类返回。
+
+        - `still_exists`：历史曾成功（ok/skip）且保存目录仍在磁盘 → 提交后会被跳过；
+        - `gone`：历史曾成功但保存目录已不在磁盘 → 提交后会**重新下载**。
+          必须与上一类区分开：若一律提示「已下载过、将跳过」，用户清理过 downloads/
+          后会误以为拿不到文件而取消提交，导致该文件再也下不回来；
+        - `running`：正在排队/下载中（pending/running）→ 重复提交存在并发写同一文件的风险。
+
+        判重依据与实际行为保持一致：是否跳过由 download_files 依据磁盘决定，
+        历史记录只能用于提示，故此处额外校验保存目录是否真的还在。
+        """
+        alive: set[str] = set()
+        gone: set[str] = set()
+        running: set[str] = set()
         with self._lock:
             for t in self._tasks.values():
                 for it in t["items"]:
-                    if it.get("status") in ("ok", "skip"):
-                        done.add(it["url"])
-        return [u for u in urls if u in done]
+                    url = it.get("url")
+                    if not url:
+                        continue
+                    st = it.get("status")
+                    if st in ("pending", "running"):
+                        running.add(url)
+                    elif st in ("ok", "skip"):
+                        if self._saved_dir_exists(it.get("saved_dir")):
+                            alive.add(url)
+                        else:
+                            gone.add(url)
+        return {
+            "still_exists": [u for u in urls if u in alive],
+            "gone": [u for u in urls if u in gone],
+            "running": [u for u in urls if u in running],
+        }
 
     def cancel(self, tid: str) -> bool:
         """取消未完成任务（pending/running）：标记取消标志，worker 会在下一个 URL 前收手。"""
