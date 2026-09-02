@@ -55,6 +55,12 @@ async function loadFidMeta() {
   }
 }
 
+/** 版块 fid → 中文名；未命中（版块元数据未加载或已下线）时退回 fid，避免出现空白列 */
+function fidName(fid: string | number | null | undefined) {
+  if (fid === null || fid === undefined || fid === '') return '-'
+  return fidMeta.value.find((m) => String(m.fid) === String(fid))?.name ?? String(fid)
+}
+
 async function load() {
   loading.value = true
   try {
@@ -391,33 +397,33 @@ onMounted(() => {
         @selection-change="onSelectionChange"
       >
         <el-table-column type="selection" width="45" />
-        <el-table-column prop="title" label="标题" min-width="280" show-overflow-tooltip>
+        <el-table-column prop="title" label="标题" min-width="420" show-overflow-tooltip>
           <template #default="{ row }">
             <a class="title-link" @click.prevent="openPost(row.url)">{{ row.title }}</a>
           </template>
         </el-table-column>
-        <el-table-column prop="fid" label="版块" min-width="70">
+        <el-table-column prop="fid" label="版块" min-width="100">
           <template #default="{ row }">
-            <el-tag size="small" type="info">{{ row.fid }}</el-tag>
+            <el-tag size="small" type="info">{{ fidName(row.fid) }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="likes" label="点赞" min-width="64" align="center">
+        <el-table-column prop="likes" label="点赞" min-width="54" align="center">
           <template #default="{ row }">{{ row.likes || '-' }}</template>
         </el-table-column>
-        <el-table-column prop="author" label="作者" min-width="90" show-overflow-tooltip>
+        <el-table-column prop="author" label="作者" min-width="76" show-overflow-tooltip>
           <template #default="{ row }">{{ row.author || '-' }}</template>
         </el-table-column>
-        <el-table-column prop="replies" label="回复" min-width="64" align="center">
+        <el-table-column prop="replies" label="回复" min-width="54" align="center">
           <template #default="{ row }">{{ row.replies || '-' }}</template>
         </el-table-column>
-        <el-table-column label="发布时间" width="110">
+        <el-table-column label="发布时间" width="96">
           <template #default="{ row }">
             <el-tooltip :content="formatFullTime(row.created_at)" placement="top">
               <span class="text-muted">{{ formatRelativeTime(row.created_at) }}</span>
             </el-tooltip>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="132" align="center" class-name="op-col">
+        <el-table-column label="操作" width="124" align="center" class-name="op-col">
           <template #default="{ row }">
             <div class="op-btns">
               <el-tooltip content="打开" placement="top">

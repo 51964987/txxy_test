@@ -18,8 +18,12 @@ import {
   type TrashItem,
   type TrashResp,
 } from '../api'
+import { useAppStore } from '../stores/app'
 
 const router = useRouter()
+// 移动端形态沿用布局层的统一断点（<768px），页面不自建第二套判定
+const app = useAppStore()
+const isMobile = computed(() => app.isMobile)
 
 const data = ref<Resources | null>(null)
 const loading = ref(false)
@@ -144,6 +148,16 @@ function goSourcePosts(name: string) {
   void router.push({ path: '/posts', query: { q: title } })
 }
 
+/** Top10 大文件的「原帖」：rel_path 首段即目录名（= 帖子标题），据此回溯来源帖 */
+function openFileSource(file: ResourceFile) {
+  openSourceUrl(String(file.rel_path).split('/')[0])
+}
+
+/** Top10 大文件的所属目录名（用于判断是否已匹配到来源帖） */
+function fileDir(file: ResourceFile): string {
+  return String(file.rel_path).split('/')[0]
+}
+
 // B7 跳转下载中心查看产生该目录的任务
 function goDownloads() {
   void router.push('/downloads')
@@ -153,17 +167,7 @@ function taskOf(name: string) {
   return taskMap.value[name]
 }
 
-// B8 打开所在目录：调起系统文件管理器（仅本机 Windows 生效）
-async function openFolder(item: ResourceItem) {
-  try {
-    await api.openResourceFolder(item.name)
-    ElMessage.success('已在资源管理器中打开')
-  } catch (e) {
-    if (isAborted(e)) return
-    ElMessage.error(`打开目录失败: ${(e as Error).message}`)
-  }
-}
-
+/** 复制文本到剪贴板（带 execCommand 降级）；当前仅用于复制种子磁链 */
 function copyText(text: string, successMsg: string) {
   // 兼容非 HTTPS / 非 localhost 下 clipboard API 不可用，降级用 execCommand
   const fallback = () => {
@@ -189,20 +193,6 @@ function copyText(text: string, successMsg: string) {
   } else {
     fallback()
   }
-}
-
-function copyPath(p: string) {
-  copyText(p, '路径已复制')
-}
-
-// B11 批量复制路径：全局结果模式复制全部命中文件，目录模式复制当前展开文件夹的筛选结果
-function copyAllPaths() {
-  const list = globalMode.value ? globalFiles.value : filteredFiles.value
-  if (!list.length) {
-    ElMessage.info(globalMode.value ? '当前筛选范围内没有文件' : '请先展开文件夹（或使用全局搜索）')
-    return
-  }
-  copyText(list.map((f) => f.rel_path).join('\n'), `已复制 ${list.length} 条路径`)
 }
 
 function fmtTime(ts: number): string {
@@ -311,6 +301,29 @@ function highlight(text: string): string {
 function onColumnSort(params: { key: string; order: 'asc' | 'desc' | null }) {
   sortState.value = params
 }
+
+/** 类型枚举 → 中文标签（复用筛选选项，避免第二处硬编码） */
+function categoryLabel(c: string): string {
+  return categoryOptions.find((o) => o.value === c)?.label ?? c
+}
+
+// ---- 移动端排序：小屏没有表头可点，用「字段下拉 + 升降序」代替，复用同一套 sortState ----
+const mobileSortKey = ref('name')
+const mobileSortOrder = ref<'asc' | 'desc'>('asc')
+
+watch([mobileSortKey, mobileSortOrder], ([k, o]) => {
+  onColumnSort({ key: k, order: o })
+})
+
+// 桌面端点击表头排序后反向同步下拉显示，避免两处状态不一致
+watch(
+  sortState,
+  (s) => {
+    if (s.key) mobileSortKey.value = s.key
+    if (s.order) mobileSortOrder.value = s.order
+  },
+  { deep: true },
+)
 
 // 表格高度按行数自适应，上限 420px（含表头），文件少时贴合内容、多时固定高度滚动
 function fitHeight(rows: number): number {
@@ -485,13 +498,8 @@ async function showTorrent(file: ResourceFile) {
   }
 }
 
-async function copyMagnet(magnet: string) {
-  try {
-    await navigator.clipboard.writeText(magnet)
-    ElMessage.success('磁链已复制，可粘贴到下载工具')
-  } catch {
-    ElMessage.error('复制失败，请手动复制下方磁链')
-  }
+function copyMagnet(magnet: string) {
+  copyText(magnet, '磁链已复制，可粘贴到下载工具')
 }
 
 /** 用系统默认程序打开文件（路径校验在后端；非 Windows 返回 501） */
@@ -619,10 +627,36 @@ async function purgeAll() {
 }
 
 // B2 全局结果中点击命中目录：清空筛选并回到目录模式展开该目录
-function clearFiltersAndExpand(name: string) {
+async function clearFiltersAndExpand(name: string) {
   keyword.value = ''
   typeFilter.value = 'all'
   active.value = name
+  await scrollToFolder(name)
+}
+
+/** 目录行元素表（供「最大目录 / 命中目录」点击后滚动定位） */
+const folderRefs = new Map<string, HTMLElement>()
+
+function setFolderRef(el: unknown, name: string) {
+  if (el) folderRefs.set(name, el as HTMLElement)
+  else folderRefs.delete(name)
+}
+
+/**
+ * 滚动到指定目录行。
+ * 展开走的是折叠过渡动画，必须等高度稳定后再定位，否则目标位置会偏；
+ * 系统开启「减少动态效果」时改为瞬时跳转，避免平滑滚动引起不适。
+ */
+async function scrollToFolder(name: string) {
+  await nextTick()
+  await new Promise((resolve) => setTimeout(resolve, 320))
+  const el = folderRefs.get(name)
+  if (!el) return
+  const reduce =
+    typeof window !== 'undefined' &&
+    typeof window.matchMedia === 'function' &&
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  el.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'center' })
 }
 
 // B6 容量洞察：类型分布（按大小）、最大目录、Top 大文件
@@ -656,13 +690,17 @@ const topFiles = computed<ResourceFile[]>(() =>
 )
 
 // ---- 列定义 ----
-// 目录模式：文件名列 / 类型 / 大小 / 相对路径 / 操作（图片行加「预览」，共用「复制路径」）
+// 目录模式：文件名 / 类型 / 大小 / 操作。
+// 文件名列曾在 2026-09-02 移除，随即发现同目录下它是区分条目的唯一依据——
+// 只剩「类型 / 大小 / 操作」时满屏同类条目无从分辨，故已恢复。
+// 宽度收敛到 320，并用 flexGrow 吸收剩余空间，兼顾可读性与铺满。
 const columns: Columns<ResourceFile> = [
   {
     key: 'name',
     dataKey: 'name',
     title: '文件名',
     width: 320,
+    flexGrow: 1,
     ellipsis: true,
     sortable: true,
     cellRenderer: ({ rowData }) =>
@@ -688,24 +726,11 @@ const columns: Columns<ResourceFile> = [
     cellRenderer: ({ cellData }) => h('span', formatSize(Number(cellData))),
   },
   {
-    key: 'rel_path',
-    dataKey: 'rel_path',
-    title: '相对路径',
-    width: 250,
-    ellipsis: true,
-    cellRenderer: ({ rowData }) => h('span', { class: 'text-muted' }, `downloads/${rowData.rel_path}`),
-  },
-  {
     key: 'actions',
     title: '操作',
-    width: 260,
+    width: 170,
     cellRenderer: ({ rowData }) => {
       const btns = [
-        h(
-          ElButton,
-          { link: true, onClick: () => copyPath(rowData.rel_path) },
-          () => '复制路径',
-        ),
         h(
           ElButton,
           { link: true, type: 'danger', onClick: () => removeFile(rowData) },
@@ -754,7 +779,7 @@ const globalColumns: Columns<ResourceFile> = [
     key: 'name',
     dataKey: 'name',
     title: '文件名',
-    width: 300,
+    width: 320,
     ellipsis: true,
     sortable: true,
     cellRenderer: ({ rowData }) =>
@@ -794,11 +819,6 @@ const globalColumns: Columns<ResourceFile> = [
     width: 260,
     cellRenderer: ({ rowData }) => {
       const btns = [
-        h(
-          ElButton,
-          { link: true, onClick: () => copyPath(rowData.rel_path) },
-          () => '复制路径',
-        ),
         h(
           ElButton,
           { link: true, type: 'danger', onClick: () => removeFile(rowData) },
@@ -944,16 +964,62 @@ onBeforeUnmount(() => {
         </div>
       </div>
       <div class="insight-block">
-        <div class="insight-title">Top10 大文件（点击复制路径）</div>
-        <div
-          v-for="f in topFiles"
-          :key="f.rel_path"
-          class="insight-line"
-          :title="f.rel_path"
-          @click="copyPath(f.rel_path)"
-        >
-          <span class="insight-name">{{ f.name }}</span>
+        <div class="insight-title">Top10 大文件</div>
+        <div v-for="f in topFiles" :key="f.rel_path" class="insight-line insight-file">
+          <span class="insight-name" :title="f.name">{{ f.name }}</span>
+          <!-- Top10 跨目录聚合，单看文件名不知道属于哪个帖子，故补上所属目录名 -->
+          <span class="insight-dir text-muted" :title="fileDir(f)">{{ fileDir(f) }}</span>
           <span class="text-muted">{{ formatSize(Number(f.size)) }}</span>
+          <span class="insight-ops">
+            <el-button
+              v-if="f.category === 'image'"
+              link
+              type="primary"
+              size="small"
+              @click.stop="previewImage(f, topFiles)"
+            >
+              预览
+            </el-button>
+            <el-button
+              v-else-if="f.category === 'video'"
+              link
+              type="primary"
+              size="small"
+              @click.stop="playVideo(f, topFiles)"
+            >
+              播放
+            </el-button>
+            <el-button
+              v-else-if="f.category === 'text'"
+              link
+              type="primary"
+              size="small"
+              @click.stop="viewText(f)"
+            >
+              查看
+            </el-button>
+            <el-button
+              v-else-if="f.category === 'torrent'"
+              link
+              type="primary"
+              size="small"
+              @click.stop="showTorrent(f)"
+            >
+              种子信息
+            </el-button>
+            <el-button
+              v-if="sourceOf(fileDir(f))?.matched"
+              link
+              type="primary"
+              size="small"
+              @click.stop="openFileSource(f)"
+            >
+              原帖
+            </el-button>
+            <el-button link type="danger" size="small" @click.stop="removeFile(f)">
+              删除
+            </el-button>
+          </span>
         </div>
       </div>
     </div>
@@ -994,9 +1060,22 @@ onBeforeUnmount(() => {
             <el-option label="目录：按时间排序" value="time" />
             <el-option label="目录：按名称排序" value="name" />
           </el-select>
+          <!-- 移动端没有表头可点，排序改用下拉 + 升降序切换（复用同一套 sortState） -->
+          <div v-if="isMobile" class="mobile-sort">
+            <el-select v-model="mobileSortKey" size="default" class="ms-key">
+              <el-option label="按名称" value="name" />
+              <el-option label="按类型" value="category" />
+              <el-option label="按大小" value="size" />
+            </el-select>
+            <el-button
+              size="default"
+              @click="mobileSortOrder = mobileSortOrder === 'asc' ? 'desc' : 'asc'"
+            >
+              {{ mobileSortOrder === 'asc' ? '升序' : '降序' }}
+            </el-button>
+          </div>
           <!-- 动作组统一靠右（互联网文件/网盘列表的常见布局：筛选在左、动作在右） -->
           <div class="toolbar-right">
-            <el-button class="copy-all" @click="copyAllPaths">复制全部路径</el-button>
             <el-button type="warning" plain @click="openTrash">
               回收站<template v-if="trash.items.length">（{{ trash.items.length }}）</template>
             </el-button>
@@ -1024,7 +1103,7 @@ onBeforeUnmount(() => {
           </div>
           <div ref="globalWrap">
             <el-table-v2
-              v-if="globalFiles.length > 0"
+              v-if="!isMobile && globalFiles.length > 0"
               class="global-table"
               :columns="globalColumns"
               :data="globalFiles"
@@ -1035,6 +1114,72 @@ onBeforeUnmount(() => {
               :sort-state="sortState"
               @column-sort="onColumnSort"
             />
+            <!-- 移动端卡片：结构与目录模式一致（改一处需同步另一处），
+                 副信息里的完整路径天然充当「所属目录」 -->
+            <div v-else-if="isMobile && globalFiles.length > 0" class="file-cards">
+              <div v-for="f in globalFiles" :key="f.rel_path" class="file-card">
+                <div class="fc-main">
+                  <div class="fc-name" :title="f.name">
+                    <i
+                      class="fc-dot"
+                      :style="{ background: categoryColors[f.category] ?? '#c0c4cc' }"
+                    ></i>
+                    {{ f.name }}
+                  </div>
+                  <div class="fc-meta text-muted">
+                    <span>{{ categoryLabel(f.category) }}</span>
+                    <span>{{ formatSize(Number(f.size)) }}</span>
+                  </div>
+                </div>
+                <div class="fc-ops">
+                  <el-button
+                    v-if="f.category === 'image'"
+                    size="small"
+                    type="primary"
+                    link
+                    @click="previewImage(f, globalFiles)"
+                  >
+                    预览
+                  </el-button>
+                  <el-button
+                    v-else-if="f.category === 'video'"
+                    size="small"
+                    type="primary"
+                    link
+                    @click="playVideo(f, globalFiles)"
+                  >
+                    播放
+                  </el-button>
+                  <el-button
+                    v-else-if="f.category === 'text'"
+                    size="small"
+                    type="primary"
+                    link
+                    @click="viewText(f)"
+                  >
+                    查看
+                  </el-button>
+                  <el-button
+                    v-else-if="f.category === 'torrent'"
+                    size="small"
+                    type="primary"
+                    link
+                    @click="showTorrent(f)"
+                  >
+                    种子信息
+                  </el-button>
+                  <el-dropdown trigger="click">
+                    <el-button size="small" link>更多</el-button>
+                    <template #dropdown>
+                      <el-dropdown-menu>
+                        <el-dropdown-item @click="openFileLocal(f)">打开</el-dropdown-item>
+                        <el-dropdown-item @click="removeFile(f)">删除</el-dropdown-item>
+                      </el-dropdown-menu>
+                    </template>
+                  </el-dropdown>
+                </div>
+              </div>
+            </div>
             <el-empty v-else :image-size="64" description="无匹配文件" />
           </div>
         </template>
@@ -1045,6 +1190,7 @@ onBeforeUnmount(() => {
             v-for="item in sortedFolders"
             :key="item.name"
             class="folder"
+            :ref="(el) => setFolderRef(el, item.name)"
           >
             <div class="folder-head" @click="toggle(item.name)">
               <el-icon class="folder-arrow" :class="{ open: active === item.name }">
@@ -1094,23 +1240,30 @@ onBeforeUnmount(() => {
                   </el-button>
                 </div>
               </div>
-              <el-button link type="primary" class="copy-btn" @click.stop="copyPath(item.name)">
-                复制目录名
-              </el-button>
-              <!-- B8 打开所在目录 -->
-              <el-button link type="primary" class="open-btn" @click.stop="openFolder(item)">
-                打开
-              </el-button>
-              <el-button link type="danger" class="del-btn" @click.stop="removeFolder(item)">
-                删除目录
-              </el-button>
+              <!-- 桌面端：操作平铺（横向空间充足） -->
+              <template v-if="!isMobile">
+                <el-button link type="danger" class="del-btn" @click.stop="removeFolder(item)">
+                  删除目录
+                </el-button>
+              </template>
+              <!-- 移动端：三个按钮平铺会占掉约 200px，把目录名挤成十来个字；
+                   收进「更多」菜单（网盘移动端通行做法），把宽度让给标题 -->
+              <el-dropdown v-else trigger="click">
+                <el-button link class="folder-more" @click.stop>更多</el-button>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item @click="removeFolder(item)">删除目录</el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
             </div>
 
             <el-collapse-transition>
               <div v-show="active === item.name" class="folder-body">
                 <div :ref="(el) => setTableWrapRef(el, item.name)">
+                  <!-- 桌面端：虚拟滚动表格（列宽固定，窄屏必然横向溢出，故小屏换形态） -->
                   <el-table-v2
-                    v-if="active === item.name && filteredFiles.length > 0"
+                    v-if="!isMobile && active === item.name && filteredFiles.length > 0"
                     :columns="columns"
                     :data="filteredFiles"
                     :width="tableWidth"
@@ -1120,6 +1273,78 @@ onBeforeUnmount(() => {
                     :sort-state="sortState"
                     @column-sort="onColumnSort"
                   />
+                  <!-- 移动端：单列卡片列表（网盘移动端的通行做法：主信息 + 副信息 + 操作） -->
+                  <div
+                    v-else-if="isMobile && active === item.name && filteredFiles.length > 0"
+                    class="file-cards"
+                  >
+                    <div v-for="f in filteredFiles" :key="f.rel_path" class="file-card">
+                      <div class="fc-main">
+                        <div class="fc-name" :title="f.name">
+                          <i
+                            class="fc-dot"
+                            :style="{ background: categoryColors[f.category] ?? '#c0c4cc' }"
+                          ></i>
+                          {{ f.name }}
+                        </div>
+                        <div class="fc-meta text-muted">
+                          <span>{{ categoryLabel(f.category) }}</span>
+                          <span>{{ formatSize(Number(f.size)) }}</span>
+                          <!-- 全局模式下只显示所属目录名，与桌面端「所属目录」列一致 -->
+                          <span>{{ f.rel_path.split('/')[0] }}</span>
+                        </div>
+                      </div>
+                      <div class="fc-ops">
+                        <el-button
+                          v-if="f.category === 'image'"
+                          size="small"
+                          type="primary"
+                          link
+                          @click="previewImage(f, activeFiles)"
+                        >
+                          预览
+                        </el-button>
+                        <el-button
+                          v-else-if="f.category === 'video'"
+                          size="small"
+                          type="primary"
+                          link
+                          @click="playVideo(f, activeFiles)"
+                        >
+                          播放
+                        </el-button>
+                        <el-button
+                          v-else-if="f.category === 'text'"
+                          size="small"
+                          type="primary"
+                          link
+                          @click="viewText(f)"
+                        >
+                          查看
+                        </el-button>
+                        <el-button
+                          v-else-if="f.category === 'torrent'"
+                          size="small"
+                          type="primary"
+                          link
+                          @click="showTorrent(f)"
+                        >
+                          种子信息
+                        </el-button>
+                        <el-dropdown trigger="click">
+                          <el-button size="small" link>更多</el-button>
+                          <template #dropdown>
+                            <el-dropdown-menu>
+                              <el-dropdown-item @click="openFileLocal(f)">打开</el-dropdown-item>
+                              <el-dropdown-item divided @click="removeFile(f)">
+                                删除
+                              </el-dropdown-item>
+                            </el-dropdown-menu>
+                          </template>
+                        </el-dropdown>
+                      </div>
+                    </div>
+                  </div>
                   <el-empty
                     v-else-if="active === item.name && activeFiles.length > 0"
                     :image-size="48"
@@ -1303,10 +1528,6 @@ onBeforeUnmount(() => {
   margin-left: auto;
 }
 
-.copy-all {
-  margin-left: 0;
-}
-
 /* 目录头第三行：来源回溯独立成行，降低单行信息密度 */
 .folder-line3 {
   display: flex;
@@ -1393,17 +1614,125 @@ onBeforeUnmount(() => {
   white-space: nowrap;
 }
 
-/* B6 容量洞察卡 */
-.insight-card {
+/* ================= 移动端适配 =================
+   断点与布局层 isMobile 一致（<768px）。表格列宽固定，窄屏必然横向溢出，
+   故小屏改为单列卡片列表（网盘移动端的通行做法：主信息 + 副信息 + 操作）。 */
+.file-cards {
   display: flex;
-  gap: 24px;
-  margin-bottom: 12px;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.file-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  /* 触控友好：最小高度 56px（移动端可点区域建议 ≥44px） */
+  min-height: 56px;
+  padding: 8px 10px;
+  background: #fafcff;
+  border: 1px solid #ebeef5;
+  border-radius: 8px;
+}
+
+.fc-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.fc-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fc-dot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.fc-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   flex-wrap: wrap;
+  font-size: 12px;
+  margin-top: 2px;
+}
+
+.fc-ops {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.mobile-sort {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ms-key {
+  width: 120px;
+}
+
+@media (max-width: 767px) {
+  /* 搜索框独占一行，动作组换行铺满（避免与筛选控件挤在一行） */
+  .toolbar-search {
+    width: 100%;
+  }
+
+  .toolbar-right {
+    width: 100%;
+    margin-left: 0;
+    flex-wrap: wrap;
+  }
+
+  .insight-card {
+    gap: 16px;
+  }
+
+  /* 目录头相关规则见「样式表末尾」的移动端块：它们需要覆盖 .folder-name / .folder-head
+     等基础样式，同特异性下必须写在基础规则之后才会生效。 */
+}
+
+/* B6 容量洞察卡 */
+/* 洞察卡布局（2026-09-02）：改为 2 列网格。
+   业界仪表盘（Grafana / GA / BI 看板）的通行分法——
+   「整体构成」这类全局概览给整行（视觉权重最高），
+   两个同级的明细列表并排各占 1/2（信息密度相当，不该一大一小）。 */
+.insight-card {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px 24px;
+  margin-bottom: 12px;
+}
+
+/* 类型分布是全局构成，独占整行 */
+.insight-block:first-child {
+  grid-column: 1 / -1;
 }
 
 .insight-block {
-  flex: 1 1 260px;
   min-width: 0;
+}
+
+/* Top10 行的所属目录名：限宽 + 省略，避免把文件名挤没 */
+.insight-dir {
+  flex: 0 1 auto;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .insight-title {
@@ -1468,6 +1797,25 @@ onBeforeUnmount(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Top10 大文件：名称（省略）+ 大小 + 类型化操作。
+   不再整行可点复制路径，故覆盖 .insight-line 的可点光标与 hover 反馈。 */
+.insight-file {
+  cursor: default;
+}
+
+.insight-file:hover {
+  background: transparent;
+}
+
+.insight-file .insight-name {
+  flex: 1;
+  min-width: 0;
+}
+
+.insight-ops {
+  flex-shrink: 0;
 }
 
 /* B2 全局结果模式 */
@@ -1596,15 +1944,6 @@ onBeforeUnmount(() => {
   cursor: pointer;
 }
 
-.copy-btn {
-  flex-shrink: 0;
-}
-
-.open-btn {
-  flex-shrink: 0;
-  margin-left: 0;
-}
-
 .del-btn {
   flex-shrink: 0;
   margin-left: 0;
@@ -1690,5 +2029,40 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 2px;
+}
+
+/* ================= 移动端目录头（必须放在样式表末尾） =================
+   本块覆盖上方的 .folder-head / .folder-line1 / .folder-name 基础规则。
+   CSS 同特异性下「后定义者胜」，写在前面会被基础样式整块覆盖而静默失效
+   （曾放在样式表中部导致两行截断完全没生效），故固定在末尾并注明原因。 */
+@media (max-width: 767px) {
+  .folder-head {
+    flex-wrap: wrap;
+    align-items: flex-start;
+    padding: 12px;
+  }
+
+  /* 标题旁的「未下载到媒体」等 Tag 允许换行，不与标题争抢横向空间 */
+  .folder-line1 {
+    flex-wrap: wrap;
+  }
+
+  /* 目录名即帖子标题，普遍很长：单行省略只能看到十来个字。
+     改为两行截断（Material / iOS 文件列表的通行做法）。 */
+  .folder-name {
+    white-space: normal;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    line-height: 1.4;
+  }
+
+  /* 「更多」按钮：保持 44px 触控高度，同时尽量窄，把宽度让给目录名 */
+  .folder-more {
+    min-height: 44px;
+    min-width: 40px;
+    padding: 0 4px;
+  }
 }
 </style>
