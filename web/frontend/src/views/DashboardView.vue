@@ -17,6 +17,7 @@ import { api, isAborted, type BoardDaily, type Boards, type BoardSort, type FidD
 import { useDashboardStore } from '../stores/dashboard'
 import { useAppStore } from '../stores/app'
 import { formatShortTime } from '../utils/time'
+import { colorForFid } from '../utils/fidColor'
 import RollingNumber from '../components/RollingNumber.vue'
 
 use([
@@ -156,17 +157,6 @@ const fidColorByName = ref<Record<string, string>>({})
 const linkedDay = ref<string | null>(null)
 
 
-
-// 确定性色板：同一版块在环形图 / 排行榜中使用一致颜色
-const FID_PALETTE = [
-  '#2f6fed', '#10b981', '#f59e0b', '#8b5cf6', '#ef4444',
-  '#06b6d4', '#ec4899', '#f97316', '#84cc16', '#14b8a6',
-  '#6366f1', '#eab308', '#0ea5e9',
-]
-function colorForFid(fid: string): string {
-  const n = parseInt(fid, 10) || 0
-  return FID_PALETTE[n % FID_PALETTE.length]
-}
 
 // 自动刷新：开关状态存于 dashboard store（header 控件共享），每 30 秒静默刷新一次
 // 仅刷新已加载的区块，未进入视口的懒加载区块保持不动
@@ -1294,9 +1284,10 @@ function renderFidTrendChart() {
   if (fidKey === lastFidTrendKey) return
   lastFidTrendKey = fidKey
 
-  const palette = FID_PALETTE
+  // 按 fid 取色，与活跃版块榜 / 帖子浏览的版块标签保持同一映射
+  // （原先按排名索引取色，榜单顺序一变颜色就跟着变，跨图对不上）
   const colorByName: Record<string, string> = {}
-  series.forEach((s, i) => (colorByName[s.name] = palette[i % palette.length]))
+  series.forEach((s) => (colorByName[s.name] = colorForFid(s.fid)))
   fidColorByName.value = colorByName
 
   if (!fidTrendChart.value) {
@@ -1334,7 +1325,7 @@ function renderFidTrendChart() {
   }
 
   const lineSeries: any[] = series.map((s, i) => {
-    const color = palette[i % palette.length]
+    const color = colorForFid(s.fid)
     return {
       name: s.name,
       type: 'line',

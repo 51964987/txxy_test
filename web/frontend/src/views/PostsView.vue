@@ -5,6 +5,7 @@ import { ElMessage } from 'element-plus'
 import { CopyDocument, Download, Search, View } from '@element-plus/icons-vue'
 import { api, exportCsvUrl, isAborted, type FidMeta, type Post, type PostsPage } from '../api'
 import { formatRelativeTime, formatFullTime } from '../utils/time'
+import { colorForFid } from '../utils/fidColor'
 
 const route = useRoute()
 
@@ -545,7 +546,11 @@ onMounted(() => {
         <el-table-column prop="title" label="标题" min-width="520" sortable="custom">
           <template #default="{ row }">
             <div class="title-cell">
-              <span class="fid-chip" :title="fidName(row.fid)">{{ fidName(row.fid) }}</span>
+              <span
+                class="fid-chip"
+                :style="{ '--fid-color': colorForFid(row.fid) }"
+                :title="fidName(row.fid)"
+              >{{ fidName(row.fid) }}</span>
               <a class="title-link" :title="rowTip(row)" @click.prevent="openPost(row.url)">{{ row.title }}</a>
             </div>
           </template>
@@ -712,7 +717,10 @@ onMounted(() => {
   overflow: hidden;
 }
 
-/* 版块标签：高亮色 chip，比原先的灰色 tag 更醒目，作为标题的前缀标识 */
+/* 版块标签：用与「数据总览 - 活跃版块」柱形图相同的版块色（--fid-color 由行内传入）。
+   底色 / 边框 / 文字都由该色用 color-mix 派生：
+   - 文字混入深色，保证色板里偏亮的颜色（如 #eab308 黄）在浅底上仍满足对比度
+   - 这是 GitHub Labels 的做法：一个品牌色派生出整套标签配色，而不是为每个色手写三套值 */
 .fid-chip {
   flex-shrink: 0;
   max-width: 104px;
@@ -723,9 +731,11 @@ onMounted(() => {
   border-radius: 10px;
   font-size: 12px;
   line-height: 18px;
-  color: var(--el-color-primary);
-  background: var(--el-color-primary-light-9);
-  border: 1px solid var(--el-color-primary-light-7);
+  /* 混入比例按色板里最亮的 #84cc16 校准：文字混 50% 深色、底色只用 10%，
+     才能让最亮的版块也满足 WCAG AA 小字对比度 4.5:1（实测 4.56） */
+  color: color-mix(in srgb, var(--fid-color, var(--el-color-primary)) 50%, #1f2937);
+  background: color-mix(in srgb, var(--fid-color, var(--el-color-primary)) 10%, white);
+  border: 1px solid color-mix(in srgb, var(--fid-color, var(--el-color-primary)) 30%, white);
 }
 
 .title-cell .title-link {
