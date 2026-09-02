@@ -198,6 +198,44 @@ _SORTS = {
     "hot_desc": "hot_score(likes, replies, date, (SELECT MAX(date) FROM posts)) DESC, date DESC",
 }
 
+# 列排序（表头三态：升序 → 降序 → 取消）：按「字段 + 方向」拼 ORDER BY，
+# 与 _SORTS 的预置组合并存。字段名与前端表格列的 prop 一一对应。
+# 注意分页列表必须走服务端排序——只排当前页等于没排序。
+_SORT_FIELDS: dict[str, dict[str, str]] = {
+    "date": {"asc": "date ASC, created_at ASC", "desc": "date DESC, created_at DESC"},
+    "created_at": {"asc": "created_at ASC", "desc": "created_at DESC"},
+    # NOCASE 只作用于 ASCII，对中文无效，但能让英文标题的大小写不敏感排序更符合直觉
+    "title": {"asc": "title COLLATE NOCASE ASC", "desc": "title COLLATE NOCASE DESC"},
+    "author": {"asc": "author COLLATE NOCASE ASC", "desc": "author COLLATE NOCASE DESC"},
+    # fid 存为字符串，必须按数字序排，否则 '16' 会排在 '2' 前面
+    "fid": {
+        "asc": "CAST(fid AS INTEGER) ASC, date DESC",
+        "desc": "CAST(fid AS INTEGER) DESC, date DESC",
+    },
+    "likes": {"asc": "CAST(likes AS INTEGER) ASC, date DESC", "desc": "CAST(likes AS INTEGER) DESC, date DESC"},
+    "replies": {"asc": "CAST(replies AS INTEGER) ASC, date DESC", "desc": "CAST(replies AS INTEGER) DESC, date DESC"},
+    "engagement": {
+        "asc": "(CAST(likes AS INTEGER) + CAST(replies AS INTEGER)) ASC, date DESC",
+        "desc": "(CAST(likes AS INTEGER) + CAST(replies AS INTEGER)) DESC, date DESC",
+    },
+    "hot": {
+        "asc": "hot_score(likes, replies, date, (SELECT MAX(date) FROM posts)) ASC, date DESC",
+        "desc": "hot_score(likes, replies, date, (SELECT MAX(date) FROM posts)) DESC, date DESC",
+    },
+}
+
+
+def _resolve_order(sort: str, sort_by: str | None, sort_order: str | None) -> str:
+    """解析排序：列排序（sort_by + sort_order）优先，否则用预置组合 sort。
+
+    保留 sort 参数是为了兼容既有入口（数据总览下钻链接形如 /posts?sort=engagement_desc）。
+    """
+    if sort_by and sort_order:
+        field = _SORT_FIELDS.get(sort_by)
+        if field:
+            return field[sort_order]
+    return _SORTS.get(sort, _SORTS["date_desc"])
+
 # 热门榜「最新最热 / 本月最热」的排序维度切换。
 # 注意 hot 用子查询取参照日而非传参，使 ORDER BY 片段保持无参数，SQL 参数位序才不会错乱。
 _BOARD_SORTS = {
@@ -816,8 +854,10 @@ def posts_list(
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=200)] = 50,
     sort: Annotated[str, Query()] = "date_desc",
+    sort_by: Annotated[str | None, Query()] = None,
+    sort_order: Annotated[str | None, Query(pattern="^(asc|desc)$")] = None,
 ) -> dict[str, Any]:
-    order = _SORTS.get(sort, _SORTS["date_desc"])
+    order = _resolve_order(sort, sort_by, sort_order)
     clause, params = _build_filters(fid, date_from, date_to, q, author)
     offset = (page - 1) * page_size
     # COUNT 与列表在单连接内完成，省一次连接开/关
@@ -849,8 +889,10 @@ def posts_export(
     date_to: str | None = None,
     q: str | None = None,
     sort: Annotated[str, Query()] = "date_desc",
+    sort_by: Annotated[str | None, Query()] = None,
+    sort_order: Annotated[str | None, Query(pattern="^(asc|desc)$")] = None,
 ) -> StreamingResponse:
-    order = _SORTS.get(sort, _SORTS["date_desc"])
+    order = _resolve_order(sort, sort_by, sort_order)
     clause, params = _build_filters(fid, date_from, date_to, q)
     sql = (
         f"SELECT title, fid, date, url, likes, author, replies, created_at, update_at, update_date FROM posts WHERE {clause}" +

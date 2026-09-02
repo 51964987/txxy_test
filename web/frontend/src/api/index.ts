@@ -449,7 +449,12 @@ export const api = {
     author?: string
     page?: number
     page_size?: number
+    /** 预置排序组合（兼容大屏下钻链接，如 engagement_desc） */
     sort?: string
+    /** 列排序字段（表头三态），与 sort_order 成对出现，优先于 sort */
+    sort_by?: string
+    /** 列排序方向：asc / desc；为空表示不按列排序 */
+    sort_order?: string
   }) => get<PostsPage>('/posts', p as Record<string, string | number | undefined>),
   runs: () => get<{ dates: RunSummary[] }>('/runs'),
   runDetail: (dir: string) => get<RunDetail>(`/runs/${dir}`),
