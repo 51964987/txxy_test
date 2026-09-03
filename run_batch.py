@@ -17,6 +17,7 @@ from datetime import datetime
 
 import file_logger
 import run_recorder
+import txxy_env
 from run_recorder import SectionInfo
 
 # ============ 配置区域 ============
@@ -48,16 +49,13 @@ STAGGER_DELAY = 5
 # scraper.py 路径
 SCRAPER_SCRIPT = os.path.join(os.path.dirname(__file__), "scraper.py")
 
-# ---- 访问根地址开关 ----
-# USE_LOCAL_PROXY: 是否使用本地 1024 端口代理（web.exe），默认开启。
-# 当 1024 端口启不起来（web.exe 无法启动/端口异常）时，将本开关手工改为 False
-# （不再监控/启停 1024 端口），并在 REMOTE_ROOT_URL 配置实际可访问的域名根地址，
-# 抓取将直接访问该域名（scraper.py 通过命令行参数接收根地址）。
-# REMOTE_ROOT_URL 还作为 "公开域名" 始终以 --public 传给 scraper.py：
-# 无论本地代理开关如何，写入数据库/CSV 的链接都拼接该真实域名，而不是本机
-# 才能访问的 127.0.0.1:1024。
-USE_LOCAL_PROXY = True
-REMOTE_ROOT_URL = os.environ.get("REMOTE_ROOT_URL", "http://127.0.0.1:1024")  # 实际可访问的域名（根地址），也是入库链接使用的公开域名，按需修改；支持环境变量覆盖（Docker 部署经 .env 统一管理）
+# ---- 域名与代理：唯一配置源在项目根 txxy_env.py，此处只读不定义 ----
+# USE_LOCAL_PROXY：是否使用本地 1024 端口代理（web.exe）抓取。
+#   默认由 txxy_env 按环境决定（仅本地 Windows 开启，Docker / Linux 直连）；
+#   命令行可覆盖：python run_batch.py [true|false]。
+# 业务域名统一为 txxy_env.PUBLIC_DOMAIN —— 抓取与入库同源，本地代理仅是传输层
+# （scraper 子进程发起请求时经 txxy_env.to_fetch_url 自行处理，无需父进程透传）。
+USE_LOCAL_PROXY = txxy_env.USE_LOCAL_PROXY
 
 # 是否忽略断点进度强制重跑（--restart）：True 时所有版块从第 1 页重新抓取，
 # 当天该版块已生成的 CSV/进度文件会被删除重新生成（透传给各 scraper.py 子进程，见 scraper.py）
@@ -81,8 +79,8 @@ def log(msg: str) -> None:
 
 
 def effective_root_url() -> str:
-    """本次抓取使用的根地址：本地代理开启时为 127.0.0.1:1024，关闭时用 REMOTE_ROOT_URL 实际域名"""
-    return f"http://{WEB_HOST}:{WEB_PORT}" if USE_LOCAL_PROXY else REMOTE_ROOT_URL
+    """本次实际访问的根地址：本地代理开启 → 代理地址；关闭 → 唯一业务域名"""
+    return txxy_env.LOCAL_PROXY if USE_LOCAL_PROXY else txxy_env.PUBLIC_DOMAIN
 
 
 def _parse_bool(value: str) -> bool | None:
@@ -307,20 +305,19 @@ def run_scraper(fid: str, name: str, run_id: int = 0) -> tuple[str, str, bool, i
     db_rows = 0
     try:
         cmd = [sys.executable, "-u", SCRAPER_SCRIPT, fid]
-        # 始终把真实域名通过 --public 传给 scraper：入库链接拼接使用公开域名，
-        # 而不是本机才能访问的本地代理地址 127.0.0.1:1024
-        cmd.append("--public")
-        cmd.append(REMOTE_ROOT_URL)
-        if not USE_LOCAL_PROXY:
-            # 本地代理关闭时，再向 scraper.py 传递实际域名根地址（http(s) 开头，位置不限），
-            # 使其直接访问该域名抓取
-            cmd.append(REMOTE_ROOT_URL)
         if FORCE_RESTART:
             # --restart：忽略断点进度，强制重跑该版块（scraper.py 会删除当天 CSV/进度文件后从头抓取）
             cmd.append("--restart")
+        # 域名不再透传：子进程与父进程同一项目根，scraper 导入 txxy_env 时按环境与
+        # .env 自行取值。这里仅把本进程生效的代理开关显式传给子进程，
+        # 避免命令行覆盖（python run_batch.py false）在子进程里丢失。
         # 批量运行时由本脚本统一汇总写运行记录，关闭子进程各自的落库，避免重复记录；
         # 同时把 run_id 传给子进程，子进程实时更新自己版块的进度明细
-        env = {**os.environ, "SCRAPER_RECORD_RUN": "0"}
+        env = {
+            **os.environ,
+            "SCRAPER_RECORD_RUN": "0",
+            "TXXY_USE_LOCAL_PROXY": "1" if USE_LOCAL_PROXY else "0",
+        }
         if run_id:
             env["SCRAPER_RUN_ID"] = str(run_id)
         proc = subprocess.Popen(
@@ -378,12 +375,17 @@ def main() -> None:
     _ = file_logger.setup("run_batch")
     # 可选入参 USE_LOCAL_PROXY（不传则用配置区默认值），须在端口监控前生效
     _apply_cli_args()
+    # 打印运行环境与生效配置：自动判定的，显式化出来便于排查
+    log(
+        "[配置] 运行环境: %s，业务域名: %s，本地代理: %s"
+        % (txxy_env.RUN_ENV, txxy_env.PUBLIC_DOMAIN, "开" if USE_LOCAL_PROXY else "关")
+    )
     if not SECTIONS:
         print("未配置版块，请在 SECTIONS 字典中添加版块ID和名称")
         sys.exit(1)
 
     # --- 确保 web 服务（端口 1024）可用 ---
-    # USE_LOCAL_PROXY=False 时跳过端口监控/启停，直接使用 REMOTE_ROOT_URL 实际域名访问
+    # USE_LOCAL_PROXY=False 时跳过端口监控/启停，直连唯一业务域名
     web_proc: subprocess.Popen[bytes] | None = None
     if USE_LOCAL_PROXY:
         try:
@@ -392,13 +394,12 @@ def main() -> None:
             print(f"[1024服务] web 服务启动失败，终止本次抓取: {e}", file=sys.stderr)
             print(
                 "[提示] 1024 端口启不起来时，可执行 python run_batch.py false"
-                + "（或把 run_batch.py 顶部 USE_LOCAL_PROXY 改为 False）关闭端口监控，"
-                + "并在 REMOTE_ROOT_URL 配置实际域名（如 https://xx.com）后重试",
+                + "（或设环境变量 TXXY_USE_LOCAL_PROXY=0）关闭本地代理，将直连业务域名重试",
                 file=sys.stderr,
             )
             sys.exit(1)
     else:
-        log(f"[1024服务] 本地代理开关已关闭（USE_LOCAL_PROXY=False），不再监控 1024 端口，直接访问: {REMOTE_ROOT_URL}")
+        log(f"[1024服务] 本地代理开关已关闭（USE_LOCAL_PROXY=False），直连业务域名: {txxy_env.PUBLIC_DOMAIN}")
 
     total = len(SECTIONS)
     print(f"共 {total} 个版块，并发数: {MAX_WORKERS}，启动间隔: {STAGGER_DELAY}s\n")

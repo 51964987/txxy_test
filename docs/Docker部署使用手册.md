@@ -9,17 +9,17 @@
 
 > 所有命令均在**项目根目录**执行。部署脚本会自动切换到项目根，因此 `bash deploy/deploy_wsl.sh` 从任意目录调用都可以；`docker compose` 命令则必须先在根目录。
 
-| 我想…… | 命令 |
-|---|---|
-| 本机 Win11 部署 | `.\deploy\deploy_windows.ps1` |
-| WSL Ubuntu 部署 | `bash deploy/deploy_wsl.sh` |
-| 联网 Linux 部署 | `bash deploy/deploy_linux.sh` |
-| 离线 Linux 部署 | `bash deploy/deploy_offline.sh` |
-| 沿用宿主机现有数据库 | 加参数：`-SharedDB`（Windows）/ `--shared-db`（bash） |
-| 看运行状态 | `docker compose ps` |
-| 看实时日志 | `docker compose logs -f web` |
-| 停止（**保留数据**） | `docker compose down` |
-| 访问地址 | <http://127.0.0.1:18088> |
+| 我想……                   | 命令                                                      |
+| -------------------------- | --------------------------------------------------------- |
+| 本机 Win11 部署            | `.\deploy\deploy_windows.ps1`                           |
+| WSL Ubuntu 部署            | `bash deploy/deploy_wsl.sh`                             |
+| 联网 Linux 部署            | `bash deploy/deploy_linux.sh`                           |
+| 离线 Linux 部署            | `bash deploy/deploy_offline.sh`                         |
+| 沿用宿主机现有数据库       | 加参数：`-SharedDB`（Windows）/ `--shared-db`（bash） |
+| 看运行状态                 | `docker compose ps`                                     |
+| 看实时日志                 | `docker compose logs -f web`                            |
+| 停止（**保留数据**） | `docker compose down`                                   |
+| 访问地址                   | [http://127.0.0.1:18088](http://127.0.0.1:18088)           |
 
 **端口约定**：容器映射宿主机 **18088**，容器内仍是 8088。本机 `start_web.bat`（Python 服务）用 8088，两者错开，**可以同时运行**。
 
@@ -29,11 +29,11 @@
 
 ### 2.1 环境要求
 
-| 环境 | 需要安装 | 验证命令 |
-|---|---|---|
-| A. Win11 | Docker Desktop for Windows（自带 compose 插件） | `docker compose version` |
-| B. WSL Ubuntu | `sudo apt install -y docker.io docker-compose-plugin` | `docker compose version` |
-| C. 联网 Linux | docker + compose 插件 | `docker compose version` |
+| 环境          | 需要安装                                                   | 验证命令                   |
+| ------------- | ---------------------------------------------------------- | -------------------------- |
+| A. Win11      | Docker Desktop for Windows（自带 compose 插件）            | `docker compose version` |
+| B. WSL Ubuntu | `sudo apt install -y docker.io docker-compose-plugin`    | `docker compose version` |
+| C. 联网 Linux | docker + compose 插件                                      | `docker compose version` |
 | D. 离线 Linux | 预装 docker + compose 插件（**离线机无法现场安装**） | `docker compose version` |
 
 ```bash
@@ -64,13 +64,12 @@ ss -lntp | grep 18088
 
 首次部署时脚本会自动从 `.env.example` 生成，无需手动创建。需要提前确认的两项：
 
-| 变量 | 说明 | 默认 |
-|---|---|---|
-| `REMOTE_ROOT_URL` | 抓取直连域名 | `http://127.0.0.1:1024` |
-| `PUBLIC_ROOT` | 展示层 URL 归一化域名（影响帖子外链） | `http://127.0.0.1:1024` |
-| `TXXY_HOST_PORT` | 宿主机映射端口 | `18088`（脚本自动写入） |
-| `TXXY_IMAGE` | 镜像 tag（**离线环境必填**） | `txxy:latest` |
-| `TZ` | 时区，影响抓取目录与定时触发时间 | `Asia/Shanghai` |
+| 变量                | 说明                                  | 默认                      |
+| ------------------- | ------------------------------------- | ------------------------- |
+| `TXXY_PUBLIC_DOMAIN` | 唯一业务域名（抓取/入库/展示共用）    | `https://txxy.com`（无需配置，见 7.3） |
+| `TXXY_HOST_PORT`  | 宿主机映射端口                        | `18088`（脚本自动写入） |
+| `TXXY_IMAGE`      | 镜像 tag（**离线环境必填**）    | `txxy:latest`           |
+| `TZ`              | 时区，影响抓取目录与定时触发时间      | `Asia/Shanghai`         |
 
 > `.env` 是 compose 的 `env_file`，**文件缺失会直接报错**（不是可选文件）。
 
@@ -154,10 +153,10 @@ bash deploy/deploy_offline.sh
 
 部署时二选一，主要区别在于容器是否能看到宿主机已有的 `db/posts.db`。
 
-| 模式 | 参数 | 数据存储位置 | 优点 | 注意 |
-|---|---|---|---|---|
-| **命名卷隔离**（默认，推荐） | 无 | Docker 命名卷 `txxy_db` | 与宿主机解耦、性能好、不会误改本地数据 | 首次为空，需按第 5 节导入一次 |
-| **共用宿主机目录** | `-SharedDB` / `--shared-db` | 宿主机 `./db`、`./outputs`、`./downloads` | 沿用现有数据，无需迁移 | 与宿主机 Python 进程共写同一 SQLite；**同一时刻只应有一方抓取** |
+| 模式                               | 参数                            | 数据存储位置                                   | 优点                                   | 注意                                                                  |
+| ---------------------------------- | ------------------------------- | ---------------------------------------------- | -------------------------------------- | --------------------------------------------------------------------- |
+| **命名卷隔离**（默认，推荐） | 无                              | Docker 命名卷`txxy_db`                       | 与宿主机解耦、性能好、不会误改本地数据 | 首次为空，需按第 5 节导入一次                                         |
+| **共用宿主机目录**           | `-SharedDB` / `--shared-db` | 宿主机`./db`、`./outputs`、`./downloads` | 沿用现有数据，无需迁移                 | 与宿主机 Python 进程共写同一 SQLite；**同一时刻只应有一方抓取** |
 
 共用模式下若容器报「数据目录不可写」，是宿主机目录属主与容器内 `appuser(uid 1000)` 不匹配：
 
@@ -166,6 +165,7 @@ sudo chown -R 1000:1000 db outputs downloads
 ```
 
 > **共用模式必做**：停掉宿主机计划任务 `txxy_daily_batch`，否则宿主机与容器两个批处理同时写库，会互相等锁、拖慢甚至超时：
+>
 > ```powershell
 > schtasks /Delete /TN "txxy_daily_batch" /F
 > ```
@@ -241,11 +241,71 @@ docker compose --profile cron up -d --build
 docker compose --profile cron down
 ```
 
-- 抓取入口为 `run_batch.py false`，直连 `REMOTE_ROOT_URL`，容器内不依赖 `web.exe`；
+- 抓取入口为 `python -u run_batch.py false`（Docker 环境默认不启用本地代理），直连唯一业务域名（`TXXY_PUBLIC_DOMAIN`），容器内不依赖 `web.exe`；
 - cron 容器会等 web 健康检查通过后再启动（避免并发初始化）；
 - **离线环境不要启用**，源站不可达会持续失败。
 
-### 7.3 改配置后生效
+### 7.3 域名与链接——唯一配置源
+
+**只有一个配置**：业务域名 `TXXY_PUBLIC_DOMAIN`（默认 `https://txxy.com`）。
+默认值只在项目根 `txxy_env.py` 一处维护（scraper / run_batch / web 全部只读不定义），
+改域名只改这一处。历史键 `PUBLIC_ROOT` / `REMOTE_ROOT_URL` 若仍被设置会自动当作业务
+域名识别（平滑迁移，旧 `.env` 无需改动即可沿用）。
+
+三层解耦：
+
+各层职责（互不影响）：
+
+| 层 | 说明 |
+|---|---|
+| 存储层 | 数据库 / CSV 只存相对路径（`/htm_data/...`），不含域名 → 换域名零成本 |
+| 业务层 | 抓取目标恒为业务域名 `https://txxy.com` |
+| 传输层 | 本地 1024 代理只在发起请求时生效（`to_fetch_url`），不进入数据 |
+| 展示层 | 页面链接前缀 `display_domain()`：**本地 → `http://127.0.0.1:1024`（本机浏览器/下载可直接用），Docker / Linux → `https://txxy.com`** |
+
+展示层按环境区分是刻意的：本地装了 `web.exe` 代理，链接走它更快且一定能打开；
+Docker / 离线 Linux 没有该程序，只能给公开域名。本地若显式关闭代理
+（`TXXY_USE_LOCAL_PROXY=0`），展示也会自动退回公开域名（避免给出点不开的链接）。
+需要固定成别的值时设 `TXXY_DISPLAY_DOMAIN`（优先级最高）。
+
+本地 Windows 有 1024 端口代理（`web.exe`）加速/绕路抓取，Docker / 离线 Linux 没有该程序
+→ 代理作为**可选的传输层开关**，与业务域名无关：
+
+| 变量 | 说明 | 默认 |
+|---|---|---|
+| `TXXY_PUBLIC_DOMAIN` | 唯一业务域名（抓取/入库/展示共用） | `https://txxy.com` |
+| `TXXY_USE_LOCAL_PROXY` | 是否经本地代理抓取 | 留空=环境自适应（仅 local 开启）；`1`/`0` 强制 |
+| `TXXY_LOCAL_PROXY` | 本地代理地址 | `http://127.0.0.1:1024`（一般不用改） |
+| `TXXY_ENV` | 显式声明运行环境 `local`/`docker`/`linux` | 留空自动探测 |
+
+优先级：**进程显式环境变量 > `.env` > 代码默认**。
+
+**历史数据无需迁移**：旧库里 `http://127.0.0.1:1024/htm_data/...`（或旧域名）的完整链接，
+展示层会自动剥离前缀、拼当前业务域名；外部域名链接原样保留。
+
+确认当前生效值：
+
+```bash
+curl -s http://127.0.0.1:18088/api/health
+# {"ok":true,...,"public_root":"https://txxy.com","env":"docker"}
+```
+
+`scraper.py` 直接运行同样读这一配置源；`http(s)` 与 `--public` 参数保留仅为兼容旧用法，
+效果等价（都覆盖唯一业务域名）：
+
+```bash
+python scraper.py 7                          # 读唯一配置源（本地默认经代理抓取）
+python scraper.py 7 https://xx.com           # 显式覆盖业务域名
+```
+
+> **注意下载中心**：下载用的是页面链接，即展示域名——**本地环境经 1024 代理下载**，
+> Docker / Linux 直连公开域名。若所在机器直连该域名不通，把 `TXXY_DISPLAY_DOMAIN` 设为可访问地址。
+
+本地直启（`python web/app.py`）同样读取项目根 `.env`：`txxy_env.py` / `web/config.py` 均内置
+零依赖 dotenv 加载（未引入 python-dotenv，离线环境友好）。行为同主流 dotenv——
+**不覆盖已存在的环境变量**，因此临时覆盖可直接 `export TXXY_PUBLIC_DOMAIN=...`，无需改文件。
+
+### 7.4 改配置后生效
 
 改 `.env` 属于环境变量变更，重启容器即可：
 
@@ -259,11 +319,11 @@ docker compose up -d          # 仅重建配置变化的容器
 
 ## 8. 停止与卸载
 
-| 目的 | 命令 | 数据 |
-|---|---|---|
-| 临时停止 | `docker compose down` | **保留** |
-| 停止并删除数据卷 | `docker compose down -v` | **删除**（务必先备份） |
-| 连镜像一起删 | `docker compose down --rmi all -v` | 删除 |
+| 目的             | 命令                                 | 数据                         |
+| ---------------- | ------------------------------------ | ---------------------------- |
+| 临时停止         | `docker compose down`              | **保留**               |
+| 停止并删除数据卷 | `docker compose down -v`           | **删除**（务必先备份） |
+| 连镜像一起删     | `docker compose down --rmi all -v` | 删除                         |
 
 > `down` 不会删除命名卷，下次 `up` 数据还在；只有 `-v` 会删卷。
 

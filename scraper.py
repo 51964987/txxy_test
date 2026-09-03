@@ -12,16 +12,16 @@ from typing import TextIO
 
 import file_logger
 import run_recorder
+import txxy_env
 
 # ============ 配置区域 ============
-# 根地址：默认本地代理 127.0.0.1:1024；
-# 也可由命令行 http(s) 参数指定实际域名根地址（如 https://xx.com，位置不限），见 _apply_cli_args()
-ROOT_URL = "http://127.0.0.1:1024"
-# 入库链接使用的公开域名根地址：默认与 ROOT_URL 相同；
-# 本地代理（127.0.0.1:1024）只用于抓取，写入数据库/CSV 的链接应使用真实域名，
-# run_batch 始终以 --public <域名> 传入，见 _apply_cli_args()
-PUBLIC_URL = ROOT_URL
-BASE_URL = ROOT_URL + "/thread0806.php"  # 基础地址
+# 唯一业务域名：抓取与入库/展示共用（默认值只在项目根 txxy_env.py 一处维护，
+# 本文件不再写域名默认值）。本地 1024 代理仅影响「实际请求」这一层，
+# 由 txxy_env.to_fetch_url 处理；业务 URL 与入库数据恒为公开域名/相对路径。
+# 命令行 http(s) / --public 参数可显式覆盖业务域名，见 _apply_cli_args()
+ROOT_URL = txxy_env.PUBLIC_DOMAIN    # 兼容旧变量名：业务抓取域名（= 公开域名）
+PUBLIC_URL = txxy_env.PUBLIC_DOMAIN  # 入库拼接域名（已与抓取合并为同一个）
+BASE_URL = ROOT_URL + "/thread0806.php"  # 基础地址（业务 URL）
 FID = "2"                                # 版块ID
 START_PAGE = 1                           # 起始页码
 END_PAGE = 100                           # 结束页码（可自行修改）
@@ -99,11 +99,13 @@ def fetch_page(page_num: int) -> str | None:
         "search": "",
         "page": page_num,
     }
-    url = BASE_URL
-    print(f"[FID={FID}] 正在请求 版块第 {page_num} 页: {url}?fid={FID}&search=&page={page_num}")
+    # 业务 URL 恒为公开域名；仅在此处按本地代理开关转换实际请求地址（传输层）。
+    # 打印实际请求地址，代理环境可见 http://127.0.0.1:1024，直连环境见公开域名
+    fetch_url = txxy_env.to_fetch_url(BASE_URL)
+    print(f"[FID={FID}] 正在请求 版块第 {page_num} 页: {fetch_url}?fid={FID}&search=&page={page_num}")
     for attempt in range(1, REQUEST_MAX_RETRIES + 1):
         try:
-            resp = requests.get(url, params=params, headers=HEADERS, timeout=15)
+            resp = requests.get(fetch_url, params=params, headers=HEADERS, timeout=15)
             resp.encoding = "utf-8"
             if resp.status_code == 200:
                 if BLOCKED_TEXT in resp.text:
@@ -501,13 +503,14 @@ def main() -> None:
                     links = parse_links(html)
                     print(f"[FID={FID}] 版块 第 {page} 页提取到 {len(links)} 条数据")
 
-                    # 补全 URL 并写入 CSV：链接拼接使用公开域名（PUBLIC_URL），
-                    # 保证入库链接离开本机仍可访问；本地代理 127.0.0.1:1024 仅用于抓取。
+                    # 入库 / 写 CSV 只存相对路径（/htm_data/...，经 to_storage_path 规范化）：
+                    # 数据与域名解耦，换域名/换环境零成本；展示层渲染时再拼公开域名。
                     # pub_ts（发布时间戳）不写 CSV，仅随缓冲区入 SQLite
                     for title, href, likes, author, replies, pub_ts in links:
                         full_url = href if href.startswith("http") else f"{PUBLIC_URL}{href}"
-                        writer.writerow([title, full_url, likes, author, replies])
-                        sqlite_buffer.append((title, full_url, likes, author, replies, pub_ts))
+                        store_url = txxy_env.to_storage_path(full_url)
+                        writer.writerow([title, store_url, likes, author, replies])
+                        sqlite_buffer.append((title, store_url, likes, author, replies, pub_ts))
                         total_rows += 1
 
                     # SQLite 批量写入：积累到阈值时一次性提交
@@ -681,16 +684,19 @@ def _apply_cli_args() -> None:
     if len(page_args) > 2:
         print(f"[警告] 忽略多余的页码参数: {page_args[2:]}", file=sys.stderr)
     if root_url is not None:
-        # 覆盖根地址（如 https://xx.com）：BASE_URL / 抓取请求均依赖此值
-        ROOT_URL = root_url.rstrip("/")  # pyright: ignore[reportConstantRedefinition]
-        print(f"[配置] 已指定实际域名根地址: {ROOT_URL}")
+        # 覆盖业务域名（如 https://xx.com）：抓取与入库同源
+        txxy_env.PUBLIC_DOMAIN = root_url.rstrip("/")
+        print(f"[配置] 已指定业务域名: {txxy_env.PUBLIC_DOMAIN}")
     if public_url is not None:
         if not public_url.lower().startswith(("http://", "https://")):
             print(f"[错误] --public 参数必须是 http(s) 开头的完整域名: {public_url!r}", file=sys.stderr)
             sys.exit(1)
-        # 覆盖入库链接用的公开域名：仅影响 full_url 拼接，抓取仍走 ROOT_URL
-        PUBLIC_URL = public_url.rstrip("/")  # pyright: ignore[reportConstantRedefinition]
-        print(f"[配置] 入库链接使用公开域名: {PUBLIC_URL}")
+        # 域名已统一：--public 与 http(s) 根地址等价，均写入唯一业务域名
+        # （保留该参数仅为兼容 run_batch / 旧调用习惯）
+        txxy_env.PUBLIC_DOMAIN = public_url.rstrip("/")
+        print(f"[配置] 已指定业务域名: {txxy_env.PUBLIC_DOMAIN}")
+    ROOT_URL = txxy_env.PUBLIC_DOMAIN  # pyright: ignore[reportConstantRedefinition]
+    PUBLIC_URL = ROOT_URL  # pyright: ignore[reportConstantRedefinition]
     BASE_URL = ROOT_URL + "/thread0806.php"  # pyright: ignore[reportConstantRedefinition]
     OUTPUT_DIR = f"outputs/{datetime.now().strftime('%Y%m%d')}"  # pyright: ignore[reportConstantRedefinition]
     OUTPUT_FILE = f"{OUTPUT_DIR}/{FID}_output_{_RUN_BATCH_TS}.csv"  # pyright: ignore[reportConstantRedefinition]

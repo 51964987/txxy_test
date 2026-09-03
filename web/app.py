@@ -78,6 +78,9 @@ def health():
         "db": str(config.DB_FILE),
         "db_exists": config.DB_FILE.is_file(),
         "public_root": config.PUBLIC_ROOT,
+        # 运行环境（local / docker / linux）：域名是环境自适应取值的，
+        # 页面显示不对时先看这里确认跑在哪个环境
+        "env": config.RUN_ENV,
         "frontend_built": FRONTEND_DIST.is_dir(),
     }
 

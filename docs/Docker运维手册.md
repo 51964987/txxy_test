@@ -10,35 +10,35 @@
 > 除部署脚本外，所有 `docker compose` 命令都要在**项目根目录**执行。
 > 离线环境需要在命令中带上 overlay：`docker compose -f docker-compose.yml -f deploy/docker-compose.offline.yml <命令>`。
 
-| 操作 | 命令 |
-|---|---|
-| 看服务状态 | `docker compose ps` |
-| 实时日志 | `docker compose logs -f --tail 100 web` |
-| 重启 web | `docker compose restart web` |
-| 停止（保留数据） | `docker compose down` |
-| 进入容器 | `docker compose exec web bash` |
-| 立即备份 | `bash scripts/backup.sh ./backups` |
-| 导入数据 | `bash scripts/import-data.sh ./seed` |
-| 手动抓一次 | `docker compose --profile cron exec cron python -u run_batch.py false` |
-| 资源占用 | `docker stats` |
-| 磁盘/卷占用 | `docker system df -v` |
+| 操作             | 命令                                                                     |
+| ---------------- | ------------------------------------------------------------------------ |
+| 看服务状态       | `docker compose ps`                                                    |
+| 实时日志         | `docker compose logs -f --tail 100 web`                                |
+| 重启 web         | `docker compose restart web`                                           |
+| 停止（保留数据） | `docker compose down`                                                  |
+| 进入容器         | `docker compose exec web bash`                                         |
+| 立即备份         | `bash scripts/backup.sh ./backups`                                     |
+| 导入数据         | `bash scripts/import-data.sh ./seed`                                   |
+| 手动抓一次       | `docker compose --profile cron exec cron python -u run_batch.py false` |
+| 资源占用         | `docker stats`                                                         |
+| 磁盘/卷占用      | `docker system df -v`                                                  |
 
 ---
 
 ## 2. 服务与数据一览
 
-| 项目 | 值 |
-|---|---|
-| 服务名（compose） | `web`（展示服务）、`cron`（定时抓取，默认不启动） |
-| 容器名 | `txxy_test-web-1`、`txxy_test-cron-1` |
-| 端口映射 | 宿主机 `18088` → 容器 `8088`（容器内端口由 `TXXY_WEB_PORT` 固定） |
-| 健康检查 | `GET /api/health`，每 30s，超时 5s，重试 3 次，启动宽限 20s |
-| 命名卷 | `txxy_db` → `/app/db`、`txxy_outputs` → `/app/outputs`、`txxy_downloads` → `/app/downloads`（compose 中已用 `name:` 固定，**不带项目名前缀**） |
-| 运行用户 | web 为 `appuser(uid 1000)`；cron 为 root（需安装 crontab） |
-| 定时任务 | 每日 **01:00** 执行 `python -u run_batch.py false` |
-| 日志驱动 | `json-file`，单文件 10MB、保留 3 个（自动轮转） |
-| 抓取明细日志 | 容器内 `/app/outputs/<日期>/*.log` |
-| 重启策略 | `unless-stopped`（手动 stop 后不会自启，异常退出会自启） |
+| 项目              | 值                                                                                                                                                                    |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 服务名（compose） | `web`（展示服务）、`cron`（定时抓取，默认不启动）                                                                                                                 |
+| 容器名            | `txxy_test-web-1`、`txxy_test-cron-1`                                                                                                                             |
+| 端口映射          | 宿主机`18088` → 容器 `8088`（容器内端口由 `TXXY_WEB_PORT` 固定）                                                                                               |
+| 健康检查          | `GET /api/health`，每 30s，超时 5s，重试 3 次，启动宽限 20s                                                                                                         |
+| 命名卷            | `txxy_db` → `/app/db`、`txxy_outputs` → `/app/outputs`、`txxy_downloads` → `/app/downloads`（compose 中已用 `name:` 固定，**不带项目名前缀**） |
+| 运行用户          | web 为`appuser(uid 1000)`；cron 为 root（需安装 crontab）                                                                                                           |
+| 定时任务          | 每日**01:00** 执行 `python -u run_batch.py false`                                                                                                             |
+| 日志驱动          | `json-file`，单文件 10MB、保留 3 个（自动轮转）                                                                                                                     |
+| 抓取明细日志      | 容器内`/app/outputs/<日期>/*.log`                                                                                                                                   |
+| 重启策略          | `unless-stopped`（手动 stop 后不会自启，异常退出会自启）                                                                                                            |
 
 ---
 
@@ -242,14 +242,13 @@ docker compose up -d
 
 常用变量：
 
-| 变量 | 作用 | 生效方式 |
-|---|---|---|
-| `TXXY_HOST_PORT` | 宿主机映射端口 | 重启（端口映射需重建容器，`up -d` 会处理） |
-| `REMOTE_ROOT_URL` | 抓取直连域名 | 重启 cron |
-| `PUBLIC_ROOT` | 帖子外链归一化域名 | 重启 web |
-| `TXXY_ENABLE_AUTO_REFRESH` | 前端自动刷新开关 | 重启 web |
-| `TZ` | 时区 | 重启全部 |
-| `TXXY_IMAGE` | 镜像 tag（离线必填） | 重启全部 |
+| 变量                         | 作用                 | 生效方式                                     |
+| ---------------------------- | -------------------- | -------------------------------------------- |
+| `TXXY_HOST_PORT`           | 宿主机映射端口       | 重启（端口映射需重建容器，`up -d` 会处理） |
+| `TXXY_PUBLIC_DOMAIN`      | 唯一业务域名（抓取/入库/展示共用，默认 `https://txxy.com`） | 重启全部 |
+| `TXXY_ENABLE_AUTO_REFRESH` | 前端自动刷新开关     | 重启 web                                     |
+| `TZ`                       | 时区                 | 重启全部                                     |
+| `TXXY_IMAGE`               | 镜像 tag（离线必填） | 重启全部                                     |
 
 ### 6.2 改代码
 
@@ -314,6 +313,7 @@ docker compose up -d --build
 ```
 
 > **回滚前先备份**：新版本若改过数据库结构，旧版本可能读不回新数据。
+>
 > ```bash
 > bash scripts/backup.sh ./backups
 > ```
@@ -322,19 +322,19 @@ docker compose up -d --build
 
 ## 8. 故障排查
 
-| 症状 | 可能原因 | 处理 |
-|---|---|---|
-| 容器反复重启，`logs` 显示「数据目录不可写」 | 卷或宿主机目录属主不是 `uid 1000` | 按 [4.4](#44-卷维护) 执行 `chown -R 1000:1000` |
-| 启动报端口占用 | 宿主机 18088 已被占用 | 改 `.env` 的 `TXXY_HOST_PORT`，或释放占用进程 |
-| 一直 `Up (health: starting)` | 服务启动慢或初始化失败 | `docker compose logs -f web` 看具体报错；默认 20s 宽限 + 3 次重试后才判定 unhealthy |
-| `env file .env not found` | `.env` 不存在 | `cp .env.example .env`（compose 的 `env_file` 是必填项） |
-| 页面能开但没数据 | 命名卷是空的（隔离模式首次部署） | 按使用手册第 5 节导入历史数据 |
-| 抓取一直失败 | 源站不可达或被反爬拦截 | 看 `outputs/<日期>/*.log`；脚本连续失败会主动退出并保留现场 |
-| 共用模式下抓取变慢 / 偶发超时 | 宿主机与容器同时写库互相等锁 | 停掉宿主机计划任务 `txxy_daily_batch` |
-| 抓取时间不对（差 8 小时等） | 时区不符 | 改 `.env` 的 `TZ` 后重启 |
-| 磁盘空间告急 | 卷数据增长 / 旧镜像堆积 | `docker system df -v` 定位；`docker image prune` 清悬空镜像；按需清理 `outputs/` 旧日期目录 |
-| 离线部署报「本地不存在镜像 xxx」 | `.env` 的 `TXXY_IMAGE` 与实际导入的 tag 不一致 | `docker images \| grep txxy` 核对后改 `.env` |
-| 修改了代码但没生效 | 代码是构建时复制进镜像的 | 必须 `docker compose up -d --build` 重新构建 |
+| 症状                                          | 可能原因                                           | 处理                                                                                              |
+| --------------------------------------------- | -------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| 容器反复重启，`logs` 显示「数据目录不可写」 | 卷或宿主机目录属主不是`uid 1000`                 | 按[4.4](#44-卷维护) 执行 `chown -R 1000:1000`                                                    |
+| 启动报端口占用                                | 宿主机 18088 已被占用                              | 改`.env` 的 `TXXY_HOST_PORT`，或释放占用进程                                                  |
+| 一直`Up (health: starting)`                 | 服务启动慢或初始化失败                             | `docker compose logs -f web` 看具体报错；默认 20s 宽限 + 3 次重试后才判定 unhealthy             |
+| `env file .env not found`                   | `.env` 不存在                                    | `cp .env.example .env`（compose 的 `env_file` 是必填项）                                      |
+| 页面能开但没数据                              | 命名卷是空的（隔离模式首次部署）                   | 按使用手册第 5 节导入历史数据                                                                     |
+| 抓取一直失败                                  | 源站不可达或被反爬拦截                             | 看`outputs/<日期>/*.log`；脚本连续失败会主动退出并保留现场                                      |
+| 共用模式下抓取变慢 / 偶发超时                 | 宿主机与容器同时写库互相等锁                       | 停掉宿主机计划任务`txxy_daily_batch`                                                            |
+| 抓取时间不对（差 8 小时等）                   | 时区不符                                           | 改`.env` 的 `TZ` 后重启                                                                       |
+| 磁盘空间告急                                  | 卷数据增长 / 旧镜像堆积                            | `docker system df -v` 定位；`docker image prune` 清悬空镜像；按需清理 `outputs/` 旧日期目录 |
+| 离线部署报「本地不存在镜像 xxx」              | `.env` 的 `TXXY_IMAGE` 与实际导入的 tag 不一致 | `docker images \| grep txxy` 核对后改 `.env`                                                   |
+| 修改了代码但没生效                            | 代码是构建时复制进镜像的                           | 必须`docker compose up -d --build` 重新构建                                                     |
 
 排障通用三步：
 
@@ -348,11 +348,11 @@ docker compose exec web bash         # 3) 进容器核实文件与权限
 
 ## 9. 备份策略建议
 
-| 数据 | 重要性 | 建议频率 | 方式 |
-|---|---|---|---|
-| `txxy_db`（帖子 + 运行记录） | **高**，不可重建 | 每日，抓取任务之外的时间段 | `scripts/backup.sh` |
-| `txxy_downloads`（下载文件） | 中，体积大 | 每周或按需 | `scripts/backup.sh` |
-| `txxy_outputs`（运行日志 + 抓取明细） | 低，可重建 | 可不备 | — |
+| 数据                                    | 重要性                 | 建议频率                   | 方式                  |
+| --------------------------------------- | ---------------------- | -------------------------- | --------------------- |
+| `txxy_db`（帖子 + 运行记录）          | **高**，不可重建 | 每日，抓取任务之外的时间段 | `scripts/backup.sh` |
+| `txxy_downloads`（下载文件）          | 中，体积大             | 每周或按需                 | `scripts/backup.sh` |
+| `txxy_outputs`（运行日志 + 抓取明细） | 低，可重建             | 可不备                     | —                    |
 
 注意事项：
 
@@ -364,13 +364,13 @@ docker compose exec web bash         # 3) 进容器核实文件与权限
 
 ## 10. 安全基线（已内置）
 
-| 项 | 实现 |
-|---|---|
-| 非 root 运行 | web 以 `appuser(uid 1000)` 运行；仅 cron 因需安装 crontab 使用 root |
-| 提权防护 | 两个服务均设 `security_opt: no-new-privileges:true` |
-| 日志防爆盘 | `json-file` 单文件 10MB、保留 3 份 |
-| 资源上限 | cron 限制 1g 内存 / 1.5 CPU，避免抓取拖垮宿主 |
-| 密钥管理 | `.env` 不入库（`.gitignore`），仅通过 `env_file` 注入 |
+| 项           | 实现                                                                 |
+| ------------ | -------------------------------------------------------------------- |
+| 非 root 运行 | web 以`appuser(uid 1000)` 运行；仅 cron 因需安装 crontab 使用 root |
+| 提权防护     | 两个服务均设`security_opt: no-new-privileges:true`                 |
+| 日志防爆盘   | `json-file` 单文件 10MB、保留 3 份                                 |
+| 资源上限     | cron 限制 1g 内存 / 1.5 CPU，避免抓取拖垮宿主                        |
+| 密钥管理     | `.env` 不入库（`.gitignore`），仅通过 `env_file` 注入          |
 
 ---
 

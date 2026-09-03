@@ -87,9 +87,9 @@ python init_db.py
 ### 2. 批量抓取版块列表（推荐）
 
 ```bash
-python run_batch.py            # 默认：USE_LOCAL_PROXY 取配置区默认值（开启本地代理）
-python run_batch.py false      # 可选入参：本次关闭本地代理，直接访问 REMOTE_ROOT_URL 域名
-python run_batch.py true       # 可选入参：本次强制开启本地代理（即使配置区已改为 False）
+python run_batch.py            # 默认：本地代理开关取环境自适应值（仅本地 Windows 开启）
+python run_batch.py false      # 可选入参：本次关闭本地代理，直连唯一业务域名
+python run_batch.py true       # 可选入参：本次强制开启本地代理
 ```
 
 - 遍历 `run_batch.py` 顶部的 `SECTIONS`，每个版块启动一个独立进程执行 `scraper.py`；
@@ -101,9 +101,10 @@ python run_batch.py true       # 可选入参：本次强制开启本地代理�
 **1024 端口开关（`USE_LOCAL_PROXY`，默认开启）**：既可改顶部配置区，也可作为**可选命令行入参**（传入时按实际值执行，优先于配置区）：
 
 - 命令行：`python run_batch.py [true|false]`（接受 `true/1/yes/on` 与 `false/0/no/off`，大小写不敏感），如 `python run_batch.py false`；不传时取配置区默认值；
-- `USE_LOCAL_PROXY = True`（默认）：开启本地代理监控，`run_batch.py` 自动探测/启动/关闭 1024 端口 web 服务，`scraper.py` 使用 `http://127.0.0.1:1024` 作为抓取根地址；
-- `USE_LOCAL_PROXY = False`：**1024 端口启不起来时的备选方案**——手工关闭端口监控，并在 `REMOTE_ROOT_URL`（默认示例 `https://xx.com`）配置实际可访问的域名根地址；`run_batch.py` 不再探测/启停端口，自动将该域名作为根地址参数传给 `scraper.py`，抓取直接访问该域名；
-- **入库链接统一使用公开域名**：无论本地代理开关如何，`run_batch.py` 始终以 `--public <REMOTE_ROOT_URL>` 把真实域名传给 `scraper.py`，写入数据库/CSV 的 `url` 列拼接该公开域名（而非本机不可访问的 `127.0.0.1:1024`），保证链接离开本机仍可直接访问。
+- 本地代理开关默认由 `txxy_env.py` 按环境自动决定（仅本地 Windows 开启），命令行 `true`/`false` 可强制；
+- 代理开启时：`run_batch.py` 自动探测/启动/关闭 1024 端口 web 服务，`scraper.py` 发起请求时经 `txxy_env.to_fetch_url` 把域名临时替换为 `127.0.0.1:1024` ——**业务 URL 与入库数据始终是公开域名**；
+- 代理关闭时：**1024 端口启不起来时的备选**——不再探测/启停端口，抓取直连唯一业务域名；
+- **入库只存相对路径**：数据库/CSV 的 `url` 列存 `/htm_data/...`（不含域名，`txxy_env.to_storage_path` 规范化），换域名/换环境零成本；展示层渲染时再拼业务域名（`txxy_env.to_display_url`）。
 
 **端口守护（web 服务自动启停，仅 `USE_LOCAL_PROXY=True` 时生效）**：抓取目标由本机 `web.exe` 提供（`127.0.0.1:1024`），`run_batch.py` 自动管理该服务：
 
@@ -129,8 +130,8 @@ python scraper.py 2 --public https://xx.com  # 抓取走默认根地址，入库
 python scraper.py 2 --restart       # 忽略断点进度，强制重跑（提示"所有页面已完成"时用）
 ```
 
-- 版块 ID 为**必填**参数，`[起始页]` / `[结束页]` 可选（数字参数依次识别），缺省取顶部配置区 `START_PAGE` / `END_PAGE`；`[根地址]` 可选且**位置不限**（http/https 开头即识别为根地址），传入实际域名（如 `https://xx.com`）时覆盖默认的本地代理根地址，`BASE_URL` 与抓取请求均基于该域名（`run_batch.py` 关闭本地代理开关后会自动以 `python scraper.py <版块ID> <根地址>` 的形式传入）；
-- `--public <域名>`（可选）：指定**入库链接**使用的公开域名根地址，仅影响写入数据库/CSV 的链接拼接，不影响抓取根地址；默认与根地址相同。本地代理开启时若不传，入库链接会带 `127.0.0.1:1024`（离开本机不可访问），因此 `run_batch.py` 始终自动以 `--public <REMOTE_ROOT_URL>` 传入真实域名；
+- 版块 ID 为**必填**参数，`[起始页]` / `[结束页]` 可选（数字参数依次识别），缺省取顶部配置区 `START_PAGE` / `END_PAGE`；域名无需传——直接读唯一配置源 `txxy_env.PUBLIC_DOMAIN`，本地代理由 `txxy_env` 自动决定是否在请求时替换；
+- `http(s)` 参数与 `--public <域名>`（可选）：**仅为兼容旧用法保留**——域名已统一（抓取 = 入库 = 展示同一个），任一传入都只覆盖业务域名 `txxy_env.PUBLIC_DOMAIN`；
 - `--restart`（可选）：忽略断点进度，从起始页强制重跑；会先删除当天该版块已生成的 CSV/进度文件再重新抓取（删除有日志留痕），适用于提示"版块所有页面已完成，无需重复抓取"后仍想重抓的场景；与 `--public`、页码参数可自由组合；
 - 顶部配置区可调整 `REQUEST_INTERVAL`（请求间隔）、`AUTO_DETECT_END_PAGE`（动态获取末页）等；
 - 断点续写：进度写入 `<FID>_progress_<批次时间>.txt`，重新运行会从上次完成的页码继续；
@@ -244,8 +245,8 @@ python -X utf8 web/app.py          # 启动后访问 http://127.0.0.1:8088（需
   - `DELETE /api/downloads/{tid}`：删除任务（终态或已取消可删）；
   - 任务状态持久化于 `outputs/download_tasks.json`（由 `TXXY_DOWNLOAD_TASKS_FILE` 配置），历史终态任务按 `TXXY_DOWNLOAD_TASK_MAX_KEEP`（默认 200）自动裁剪；Web 进程仅做文件系统下载（复用 `download_files.process_one_detail`），不写 `posts.db`；
 - **只读安全**：后端以 `PRAGMA query_only=ON` 只读访问 `db/posts.db`，绝不写库，与抓取写进程（WAL 模式）安全并发；
-- **URL 归一化**：旧数据中 `http://127.0.0.1:1024` 前缀在展示层统一替换为 `PUBLIC_ROOT`（`web/config.py`，默认与 `run_batch.REMOTE_ROOT_URL` 一致，支持 `PUBLIC_ROOT` 环境变量覆盖），**不改数据库**；
-- **配置**：`web/config.py` 顶部可用环境变量覆盖（`TXXY_WEB_HOST` 地址 / `TXXY_WEB_PORT` 端口 / `PUBLIC_ROOT` 域名 / `POSTS_DB` 数据库路径 / `TXXY_DOWNLOAD_*` 下载中心参数 / `TXXY_TRASH_DIR` 回收站目录 / `TXXY_TRASH_KEEP_DAYS` 回收站保留天数（默认 7）等），默认监听 `127.0.0.1:8088`（8080 常被本机其他程序占用）；
+- **URL 归一化**：任意存储格式（历史完整 URL / 新相对路径）经 `txxy_env.to_display_url` 归一化为当前业务域名展示，外部域名链接原样保留，**不改数据库**、无需迁移；
+- **配置**：域名默认值只在项目根 `txxy_env.py` 一处（`TXXY_PUBLIC_DOMAIN` 唯一业务域名 / `TXXY_USE_LOCAL_PROXY` 本地代理开关 / `TXXY_LOCAL_PROXY` 代理地址）；展示端其它配置在 `web/config.py` 顶部用环境变量覆盖（`TXXY_WEB_HOST` / `TXXY_WEB_PORT` / `POSTS_DB` / `TXXY_DOWNLOAD_*` 下载中心参数 / `TXXY_TRASH_DIR` 回收站目录 / `TXXY_TRASH_KEEP_DAYS`（默认 7）等），默认监听 `127.0.0.1:8088`（8080 常被本机其他程序占用）；
 - **自动刷新开关**：`TXXY_ENABLE_AUTO_REFRESH`（默认 `1` 开启）控制数据总览的自动刷新功能——开启时 Header 显示"自动刷新"开关、前端启动 5s 轮询（`REFRESH_INTERVAL=5000`），抓取过程中 KPI 卡与折线图准实时更新；后端统计接口配套 5s TTL 缓存（`web/db.py` 的 `_TTL=5`），避免轮询空转打库；如需关闭，启动前设置 `TXXY_ENABLE_AUTO_REFRESH=0`（或直接改 `web/config.py` 为 `False`）。
 - **开发模式**：`cd web/frontend && npm run dev` 启动 Vite（端口 5173，`/api` 自动代理到 8088）热更新；改完执行 `npm run build` 重新构建，再启动 `python -X utf8 web/app.py` 生效。
 
@@ -280,7 +281,7 @@ schtasks /Delete /TN "txxy_daily_batch" /F
 
 | 现象 | 原因与解决 |
 |---|---|
-| 请求报 `WinError 10061 连接拒绝` | 本地 web 服务（127.0.0.1:1024）未运行：先执行 `python run_batch.py`（自动启动 web.exe），或手动启动 `D:\Tools\1024app_win10_2025_1.02\web.exe`；若 web.exe 无法启动，可执行 `python run_batch.py false`（或将配置区 `USE_LOCAL_PROXY` 改为 `False`），并在 `REMOTE_ROOT_URL` 配置实际域名（如 `https://xx.com`）后抓取（或 `python scraper.py 版块ID 1 100 https://xx.com` 直接指定） |
+| 请求报 `WinError 10061 连接拒绝` | 本地 web 服务（127.0.0.1:1024）未运行：先执行 `python run_batch.py`（自动启动 web.exe），或手动启动 `D:\Tools\1024app_win10_2025_1.02\web.exe`；若 web.exe 无法启动，执行 `python run_batch.py false`（或设 `TXXY_USE_LOCAL_PROXY=0`）关闭本地代理，将直连唯一业务域名抓取 |
 | `[终止] 检测到权限拦截` | 当前账号无权访问该版块，脚本自动停止，检查代理/账号 |
 | `内容非图片` | 图床返回广告 HTML 页：确认使用纯图片 `Accept` 头（已内置 `extract_images.IMG_HEADERS`） |
 | 下载失败提示 `ConnectionError / Read timed out` | 网络暂时性超时，脚本已自动降级重试一次；仍失败可稍后重跑（断点续传） |
@@ -290,7 +291,7 @@ schtasks /Delete /TN "txxy_daily_batch" /F
 ## 数据说明
 
 - `db/posts.db` 表结构：`posts(title PRIMARY KEY, fid, date, url, likes, author, replies, created_at, update_at, update_date)`，索引由 `init_db.py` 幂等创建（`date`/`fid`/`fid+date`、`likes`/`replies` 表达式索引、`author`/`created_at`、`date+created_at`/`fid+date+created_at` 复合索引等）；`likes`（点赞数）、`author`（作者）、`replies`（回复数）由 `scraper.py` 列表页按行提取；`created_at` 为帖子真实发布时间戳（Unix 秒，来自列表页 HTML `data-timestamp`，2026-08-27 起入库，存量数据随重抓自愈），`date` 为由该时间戳派生的真实发布日；`update_at`/`update_date` 为最近一次覆盖写入的时间戳/日期（**首次插入时为空字符串**，标题重复时自动更新），重复写入时除 `title` 外其余字段全部覆盖；旧库已由 `init_db.py` 自动 `ALTER TABLE` 补列（缺失时为空字符串）；
-- **入库链接使用公开域名**：`url` 列拼接 `--public` 指定的公开域名（`run_batch.py` 自动传 `REMOTE_ROOT_URL`），不包含本机才能访问的 `127.0.0.1:1024` 本地代理地址；
+- **入库只存相对路径**：`url` 列存 `/htm_data/...`（不含域名，由 `txxy_env.to_storage_path` 规范化），新数据不再含代理/域名前缀；历史完整 URL 由展示层归一化显示（见上「URL 归一化」）；
 - 多进程并发写库：`scraper.py` 以 `sqlite3.connect(DB_FILE, timeout=15)` 连接，busy_timeout 最多等锁 15 秒，替代原先手动 sleep 退避，避免并发写冲突丢数据；
 - CSV 与数据库同步写入：每 `BATCH_SIZE` 页刷新一次 CSV，每 `SQLITE_BATCH_ROWS` 行批量提交一次；
 - 运行结束时输出 `版块 SQLite 实际入库 N 条（标题重复已覆盖更新）` 与机器汇总行 `__SUMMARY__ fid=.. rows=.. db_rows=.. pages=..`，供调度器解析展示；

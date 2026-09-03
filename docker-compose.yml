@@ -18,6 +18,10 @@ services:
     ports:
       - "${TXXY_HOST_PORT:-18088}:8088"
     env_file: .env
+    environment:
+      # 显式标注运行环境：容器内未必有 /.dockerenv，显式声明比自动探测可靠。
+      # 决定域名类配置的默认值（本地 Windows 用 1024 代理，此处用公开域名）。
+      TXXY_ENV: docker
     volumes:
       - txxy_db:/app/db
       - txxy_outputs:/app/outputs
@@ -53,6 +57,9 @@ services:
       web:
         condition: service_healthy # 等 web 完成建库建表后再启动，避免并发初始化
     env_file: .env
+    environment:
+      # 抓取端同样需要环境标注（决定 REMOTE_ROOT_URL 的默认值）
+      TXXY_ENV: docker
     volumes:
       - txxy_db:/app/db
       - txxy_outputs:/app/outputs
