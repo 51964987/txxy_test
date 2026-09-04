@@ -24,3 +24,15 @@ export function colorForFid(fid: string | number | null | undefined): string {
   const idx = Number.isFinite(n) && n > 0 ? n % FID_PALETTE.length : 0
   return FID_PALETTE[idx]
 }
+
+/**
+ * 按排名/索引取色（用于没有稳定 ID 的维度，如作者榜）。
+ *
+ * 复用同一套 FID_PALETTE，不另建作者色板：两套色板色值重合但顺序不同时，
+ * 同一色值在两图里代表的排名不一致（如 #6366f1 在版块色板排第 11、在作者色板排第 1），
+ * 读者会误以为颜色存在跨图对应关系。取模保证不越界，调用方无需再写兜底色。
+ */
+export function colorByIndex(i: number): string {
+  const n = Number.isFinite(i) && i >= 0 ? Math.trunc(i) % FID_PALETTE.length : 0
+  return FID_PALETTE[n]
+}

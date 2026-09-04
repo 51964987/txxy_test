@@ -25,6 +25,7 @@ from pathlib import Path
 from threading import Lock
 from typing import Any
 
+from atomicfile import write_json_atomic
 import config
 import db
 
@@ -182,13 +183,18 @@ def source_lookup(name: str) -> dict[str, Any]:
     }
 
 
-# ---- B5 图片预览：受控路径解析（限定 downloads/ 内 + 图片扩展名白名单） ----
-def resolve_safe(rel: str) -> Path | None:
-    """把相对路径解析为 downloads/ 内的绝对路径；越界 / 不存在 / 非文件返回 None。
+# ---- 受控路径解析（限定 downloads/ 内） ----
+# 越界校验此前在 resolve_safe / open_folder / resolve_safe_dir 里各写一遍，
+# 同一份防护抄三份——将来补边界条件（软链接、大小写等）漏改一处就是路径穿越漏洞。
+# 收敛为 _resolve_within，只做「限定在 downloads/ 内」这一件事；
+# 各公开函数再叠加自己的文件/目录与根自身判定。
+def _resolve_within(rel: str) -> Path | None:
+    """把相对路径解析为 downloads/ 内的绝对路径；越界 / 非法 / 解析失败返回 None。
 
     防路径穿越：resolve 后要求目标位于 downloads/ 之内（root 自身或其后代）。
+    拒绝即安全，不做任何降级。
     """
-    rel = (rel or "").strip().replace("\\", "/").lstrip("/")
+    rel = (rel or "").strip().replace("\\", "/").strip("/")
     if not rel or rel.lower().startswith(("http://", "https://")):
         return None
     root = config.DOWNLOADS_DIR.resolve()
@@ -198,7 +204,25 @@ def resolve_safe(rel: str) -> Path | None:
         return None
     if target != root and root not in target.parents:
         return None
-    return target if target.is_file() else None
+    return target
+
+
+def _startfile(target: Path, action: str) -> None:
+    """调起系统默认程序打开本地路径（仅 Windows 的 os.startfile 可用）。
+
+    非 Windows 抛 OSError，由接口层统一转 501。
+    """
+    startfile = getattr(os, "startfile", None)
+    if startfile is None:
+        raise OSError(f"当前系统不支持{action}（仅 Windows 支持）")
+    startfile(str(target))
+
+
+# ---- B5 图片预览：受控路径解析（限定 downloads/ 内 + 图片扩展名白名单） ----
+def resolve_safe(rel: str) -> Path | None:
+    """文件版受控路径解析：限定 downloads/ 内且为已存在文件。"""
+    target = _resolve_within(rel)
+    return target if target is not None and target.is_file() else None
 
 
 # ---- B8 打开所在目录：调起系统文件管理器（仅 Windows 生效） ----
@@ -207,23 +231,15 @@ def open_folder(rel: str) -> bool:
 
     路径同样限定在 downloads/ 内；非 Windows 平台无 os.startfile，抛 OSError 由接口层转 501。
     """
-    rel = (rel or "").strip().replace("\\", "/").lstrip("/")
-    root = config.DOWNLOADS_DIR.resolve()
-    if rel:
-        try:
-            target = (root / rel).resolve()
-        except OSError:
-            return False
-        if target != root and root not in target.parents:
+    if (rel or "").strip():
+        target = _resolve_within(rel)
+        if target is None:
             return False
     else:
-        target = root
+        target = config.DOWNLOADS_DIR.resolve()
     if not target.is_dir():
         return False
-    startfile = getattr(os, "startfile", None)
-    if startfile is None:
-        raise OSError("当前系统不支持打开本地目录（仅 Windows 支持）")
-    startfile(str(target))
+    _startfile(target, "打开本地目录")
     return True
 
 
@@ -245,17 +261,12 @@ PLAYABLE_TYPES: dict[str, str] = {
 
 def resolve_safe_dir(rel: str) -> Path | None:
     """目录版受控路径解析：限定 downloads/ 内且为已存在目录；downloads/ 根自身不允许。"""
-    rel = (rel or "").strip().replace("\\", "/").strip("/")
-    if not rel or rel.lower().startswith(("http://", "https://")):
+    target = _resolve_within(rel)
+    if target is None or not target.is_dir():
         return None
-    root = config.DOWNLOADS_DIR.resolve()
-    try:
-        target = (root / rel).resolve()
-    except OSError:
-        return None
-    if target == root or root not in target.parents:
-        return None
-    return target if target.is_dir() else None
+    # 与 open_folder 不同：这里不允许 downloads/ 根自身
+    # （「打开 downloads 根目录」是 open_folder 的专属入口）
+    return None if target == config.DOWNLOADS_DIR.resolve() else target
 
 
 def invalidate_cache() -> None:
@@ -288,11 +299,7 @@ def _load_trash() -> list[dict[str, Any]]:
 
 def _save_trash(items: list[dict[str, Any]]) -> None:
     """原子写入回收站清单（先写临时文件再替换，避免中断损坏）"""
-    config.TRASH_DIR.mkdir(parents=True, exist_ok=True)
-    tmp = _TRASH_INDEX.with_suffix(".tmp")
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump({"items": items}, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, _TRASH_INDEX)
+    write_json_atomic(_TRASH_INDEX, {"items": items}, indent=2)
 
 
 def _path_size(p: Path) -> int:
@@ -592,8 +599,5 @@ def open_file(rel: str) -> bool:
     target = resolve_safe(rel)
     if target is None:
         return False
-    startfile = getattr(os, "startfile", None)
-    if startfile is None:
-        raise OSError("当前系统不支持打开本地文件（仅 Windows 支持）")
-    startfile(str(target))
+    _startfile(target, "打开本地文件")
     return True

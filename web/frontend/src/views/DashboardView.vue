@@ -16,8 +16,8 @@ import { Download } from '@element-plus/icons-vue'
 import { api, isAborted, type BoardDaily, type Boards, type BoardSort, type FidDistItem, type Overview, type RunSummary, type TodayTop, type TodayTopItem, type TopAuthor, type TopFid, type TrendByFid, type TrendPoint } from '../api'
 import { useDashboardStore } from '../stores/dashboard'
 import { useAppStore } from '../stores/app'
-import { formatShortTime } from '../utils/time'
-import { colorForFid } from '../utils/fidColor'
+import { formatDate, formatShortTime, pad2 } from '../utils/time'
+import { colorByIndex, colorForFid } from '../utils/fidColor'
 import RollingNumber from '../components/RollingNumber.vue'
 
 use([
@@ -115,8 +115,7 @@ const RANGE_LABEL: Record<RankRange, string> = {
 function rankDateRange(range: RankRange): { date_from: string; date_to: string } | null {
   if (range === 'all') return null
   const days = range === '7d' ? 7 : 30
-  const fmt = (d: Date) =>
-    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  const fmt = formatDate // 日期格式化复用 utils/time，不在本文件内联补零拼接
   const to = new Date()
   const from = new Date()
   from.setDate(from.getDate() - (days - 1))
@@ -608,7 +607,8 @@ function renderHBarChart(
             extra: d.extra,
             delta: d.delta,
             valueLabel: d.valueLabel,
-            itemStyle: { color: colors[i] ?? '#6366f1', borderRadius: [0, 6, 6, 0] },
+            // colorByIndex / colorForFid 均为取模取值，不会越界，无需兜底色
+            itemStyle: { color: colors[i], borderRadius: [0, 6, 6, 0] },
           })),
           label: {
             show: true,
@@ -639,16 +639,14 @@ function renderHBarChart(
   }
 }
 
-/** 活跃作者 Top10：横向条形图，主值=累计发帖，多色区分，点击下钻该作者帖子 */
-const AUTHOR_PALETTE = [
-  '#6366f1', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6',
-  '#06b6d4', '#ec4899', '#14b8a6', '#f97316', '#84cc16',
-]
+/** 活跃作者 Top10：横向条形图，主值=累计发帖，多色区分，点击下钻该作者帖子。
+ *  作者没有稳定 fid，按排名取色；复用 FID_PALETTE（见 utils/fidColor），
+ *  不另建一套作者色板，避免同一色值在两图里的排名含义不一致。 */
 function renderAuthorChart() {
   if (!authorChartRef.value) return
   const n = topAuthors.value.length
   if (!n) return
-  const colors = AUTHOR_PALETTE.slice(0, n)
+  const colors = topAuthors.value.map((_, i) => colorByIndex(i))
   renderHBarChart(
     authorChartRef.value,
     authorChart,
@@ -710,7 +708,7 @@ function monthRange(month?: string) {
   const [y, m] = month.split('-').map(Number)
   if (!y || !m) return null
   const lastDay = new Date(y, m, 0).getDate() // 下月第 0 天 = 本月最后一天
-  return { from: `${month}-01`, to: `${month}-${String(lastDay).padStart(2, '0')}` }
+  return { from: `${month}-01`, to: `${month}-${pad2(lastDay)}` }
 }
 
 /** 相对今天的文案：0→今天，1→昨天，n→N 天前 */

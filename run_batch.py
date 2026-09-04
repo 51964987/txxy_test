@@ -14,6 +14,7 @@ import os
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed, Future
 from datetime import datetime
+from urllib.parse import urlparse
 
 import file_logger
 import run_recorder
@@ -23,22 +24,9 @@ from run_recorder import SectionInfo
 # ============ 配置区域 ============
 
 # 版块列表: {版块ID: 版块名称}
-SECTIONS: dict[str, str] = {
-    "2": "亞洲無MA原創區",
-    "4": "歐美原創區",
-    "5": "動漫原創區",
-    "7": "技術討論區",
-    "8": "新時代的我們",
-    "15": "亞洲有MA原創區",
-    "16": "達蓋爾的旗幟",
-    "20": "CR文學交流區",
-    "21": "HTTP下載區",
-    "22": "在綫CR影院",
-    "25": "國產原創區",
-    "26": "中字原創區",
-    "28": "AI破解原創區",
-    # 按需添加更多版块...
-}
+# 取自 txxy_env.SECTIONS（唯一定义处）——展示端 web/config.py 也用它，
+# 避免两处各存一份、再靠注释互相提醒「保持一致」。
+SECTIONS: dict[str, str] = txxy_env.SECTIONS
 
 # 并发数（同时运行的 subprocess 数量上限）
 MAX_WORKERS = 3
@@ -64,8 +52,11 @@ FORCE_RESTART = False
 # scraper.py 抓取的站点由本机 web.exe 提供（127.0.0.1:1024）。
 # run_batch 运行前先确保端口可用：未监听则自动启动 web.exe，全部任务结束后再关闭。
 WEB_APP_EXE = r"D:\Tools\1024app_win10_2025_1.02\web.exe"  # web 服务程序路径
-WEB_HOST = "127.0.0.1"
-WEB_PORT = 1024
+# host/port 由唯一配置源的默认镜像地址派生，不另写字面量——
+# 否则改端口时，端口守护（启停 web.exe）与抓取地址会对不上。
+_mirror = urlparse(txxy_env.DEFAULT_LOCAL_PROXY)
+WEB_HOST = _mirror.hostname or "127.0.0.1"
+WEB_PORT = _mirror.port or 1024
 WEB_APP_START_TIMEOUT = 15     # 启动 web.exe 后等待端口就绪的最长时间（秒）
 WEB_APP_SHUTDOWN_TIMEOUT = 10  # 关闭 web.exe 后等待端口释放的最长时间（秒）
 

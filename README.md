@@ -15,6 +15,9 @@ pip install -r requirements.txt
 
 ```
 txxy_test/
+├── txxy_env.py         # 唯一配置源：环境判定 / 业务域名 / 本地镜像 / URL 转换 / 版块映射 / .env 加载
+├── http_headers.py     # 唯一 UA 与 Accept 定义（零依赖，抓取与各下载模块共用，避免 UA 散落多份）
+├── txt_export.py       # TXT 清单导出（磁力 / 云盘共用的「每行一条」写出逻辑）
 ├── scraper.py          # 单版块抓取器（写入 CSV + SQLite，断点续写、请求重试、连续失败保护、权限拦截检测）
 ├── run_batch.py        # 多版块并发调度器（并发启动 scraper.py 子进程；1024 端口开关[可选入参] + web.exe 端口守护；运行记录落库）
 ├── run_recorder.py     # 运行记录持久化（run_days / run_sections 写入 db/posts.db）

@@ -14,8 +14,9 @@
   - 过滤含 action=image&url= 的图片中转占位链接（如整页图床中转页）
 按完整链接去重保序，TXT 中每行一条。
 """
-import os
 import re
+
+from txt_export import save_lines_txt
 
 # ============ 云盘链接识别 ============
 # 匹配 /2023.redircdn.com/? 中转的网盘链接（到空白 / 引号 / 尖括号 / 标签边界为止）
@@ -63,15 +64,4 @@ def save_clouds_txt(
     内容为还原后的网盘地址，每行一条，无其它内容；
     UTF-8（含 BOM）编码，方便记事本直接查看。
     """
-    if not links:
-        return None
-    try:
-        os.makedirs(save_dir, exist_ok=True)
-        path = os.path.join(save_dir, filename)
-        with open(path, "w", encoding="utf-8-sig") as f:
-            _ = f.write("\n".join(links) + "\n")
-        print(f"已保存: {path}（{len(links)} 条云盘链接）")
-        return path
-    except Exception as e:
-        print(f"  [错误] 保存云盘清单失败: {e}")
-        return None
+    return save_lines_txt(links, save_dir, filename, "云盘链接")

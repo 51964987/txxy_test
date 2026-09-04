@@ -22,7 +22,6 @@ from __future__ import annotations
 import concurrent.futures as cf
 import json
 import queue
-import shutil
 import sys
 import threading
 import time
@@ -30,6 +29,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
+from atomicfile import write_json_atomic
 import config
 
 # 项目根目录加入 sys.path：download_files.py 位于 txxy_test/ 根（web/ 脚本目录不在其搜索范围内）
@@ -426,18 +426,9 @@ class DownloadTaskManager:
         """
         self._prune_locked()
         try:
-            config.DOWNLOAD_TASKS_FILE.parent.mkdir(parents=True, exist_ok=True)
-            bak = config.DOWNLOAD_TASKS_FILE.with_suffix(".json.bak")
-            if (
-                config.DOWNLOAD_TASKS_FILE.exists()
-                and config.DOWNLOAD_TASKS_FILE.stat().st_size > 2
-            ):
-                shutil.copyfile(config.DOWNLOAD_TASKS_FILE, bak)
-            tmp = config.DOWNLOAD_TASKS_FILE.with_suffix(".json.tmp")
-            tmp.write_text(
-                json.dumps(self._tasks, ensure_ascii=False, indent=2), encoding="utf-8"
+            write_json_atomic(
+                config.DOWNLOAD_TASKS_FILE, self._tasks, indent=2, backup=True
             )
-            tmp.replace(config.DOWNLOAD_TASKS_FILE)
         except OSError:
             # 持久化失败不影响内存中的任务执行，下轮保存时自动重试
             pass

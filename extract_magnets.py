@@ -10,8 +10,9 @@
 提取逻辑：正则匹配 HTML 中所有 magnet: 链接地址（还原 &amp; HTML 实体），
 按完整链接去重保序，TXT 中只保留 magnet: 开头的地址信息，每行一条。
 """
-import os
 import re
+
+from txt_export import save_lines_txt
 
 # ============ 磁力链接识别 ============
 # 匹配 HTML 中任意 magnet: 链接地址（到空白 / 引号 / 尖括号 / 标签边界为止）
@@ -49,15 +50,4 @@ def save_magnets_txt(
     内容只保留 magnet: 开头的地址信息，每行一条，无其它内容；
     UTF-8（含 BOM）编码，方便记事本直接查看。
     """
-    if not magnets:
-        return None
-    try:
-        os.makedirs(save_dir, exist_ok=True)
-        path = os.path.join(save_dir, filename)
-        with open(path, "w", encoding="utf-8-sig") as f:
-            _ = f.write("\n".join(magnets) + "\n")
-        print(f"已保存: {path}（{len(magnets)} 条磁力链接）")
-        return path
-    except Exception as e:
-        print(f"  [错误] 保存磁力清单失败: {e}")
-        return None
+    return save_lines_txt(magnets, save_dir, filename, "磁力链接")

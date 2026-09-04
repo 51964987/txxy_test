@@ -15,20 +15,13 @@ import requests
 
 # 通用下载核心（独立模块，无循环依赖）
 from media_download import download_media
+# 请求头统一由 http_headers 构造：UA / Accept-Language 全项目唯一定义，此处只选 Accept
+from http_headers import ACCEPT_IMAGE, build_headers
 
 # ============ 图片下载配置 ============
-# 浏览器 UA（与 download_files.HEADERS 保持一致，改动时需同步）
-_USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-)
 # 图片下载专用请求头：Accept 必须是纯图片类型（不能含 text/html），
 # 否则 EasyImage 等图床会判定为"浏览器直接打开图片"而 302 到广告查看页
-IMG_HEADERS = {
-    "User-Agent": _USER_AGENT,
-    "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
-    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-}
+IMG_HEADERS = build_headers(ACCEPT_IMAGE)
 # 图片按类型分目录：GIF 单独存放，其余图片统一放 jpgs
 GIF_SUBDIR = "gifs"
 JPG_SUBDIR = "jpgs"

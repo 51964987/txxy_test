@@ -1,6 +1,6 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
-import { formatFullTime } from '../utils/time'
+import { formatDateTime, formatFullTime } from '../utils/time'
 
 /**
  * Dashboard 全局共享状态：
@@ -28,22 +28,15 @@ export const useDashboardStore = defineStore('dashboard', () => {
   }
 
   // Header 右侧实时时钟：每秒刷新，展示当前时间
-  const nowText = ref<string>(formatNow())
+  // 时间格式化统一走 utils/time（此前本文件内重复实现了一份补零与拼接）
+  const nowText = ref<string>(formatDateTime(new Date()))
   let nowTimer: ReturnType<typeof setInterval> | null = null
-
-  function formatNow(): string {
-    const d = new Date()
-    const pad = (n: number) => String(n).padStart(2, '0')
-    const date = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
-    const time = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
-    return `${date} ${time}`
-  }
 
   function startClock() {
     if (nowTimer !== null) return
-    nowText.value = formatNow()
+    nowText.value = formatDateTime(new Date())
     nowTimer = setInterval(() => {
-      nowText.value = formatNow()
+      nowText.value = formatDateTime(new Date())
     }, 1000)
   }
 

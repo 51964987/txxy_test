@@ -1,20 +1,30 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
-import { api, formatSize, isAborted, type TrashItem } from '../api'
+import { formatSize } from '../api'
+import { formatFullTime } from '../utils/time'
+import { useTrash } from '../composables/useTrash'
 
-const items = ref<TrashItem[]>([])
-const loading = ref(false)
-const loadError = ref('')
-const keepDays = ref(7)
+// 回收站数据与操作统一由 useTrash 提供（ResourcesView 抽屉版共用同一份，
+// 避免两个入口各自维护一套而行为漂移）
+const {
+  items,
+  keepDays,
+  loading,
+  error: loadError,
+  totalSize,
+  expiredCount,
+  load,
+  restoreItem,
+  purgeItem,
+  purgeAll,
+} = useTrash()
 
 // 搜索与排序均在前端完成：回收站条目量远小于资源清单，无需后端分页
 const keyword = ref('')
 const sortKey = ref<'deleted_at' | 'size' | 'name'>('deleted_at')
 const sortOrder = ref<'asc' | 'desc'>('desc')
 
-const totalSize = computed(() => items.value.reduce((s, i) => s + (i.size || 0), 0))
-const expiredCount = computed(() => items.value.filter((i) => i.expired).length)
+// totalSize / expiredCount 由 useTrash 提供（与 ResourcesView 口径一致）
 
 const rows = computed(() => {
   const kw = keyword.value.trim().toLowerCase()
@@ -29,87 +39,8 @@ const rows = computed(() => {
   })
 })
 
-async function load() {
-  loading.value = true
-  loadError.value = ''
-  try {
-    const r = await api.trashList()
-    items.value = r.items
-    keepDays.value = r.keep_days
-  } catch (e) {
-    if (isAborted(e)) return
-    loadError.value = (e as Error).message
-    ElMessage.error(`加载回收站失败: ${loadError.value}`)
-  } finally {
-    loading.value = false
-  }
-}
-
-async function restoreItem(item: TrashItem) {
-  try {
-    await ElMessageBox.confirm(
-      `恢复「${item.name}」到原位置？\n若原路径已存在同名文件会恢复失败。`,
-      '恢复确认',
-      { type: 'warning', confirmButtonText: '恢复', cancelButtonText: '取消' },
-    )
-  } catch {
-    return
-  }
-  try {
-    await api.restoreResource(item.id)
-    ElMessage.success('已恢复到原位置')
-    await load()
-  } catch (e) {
-    if (isAborted(e)) return
-    ElMessage.error(`恢复失败: ${(e as Error).message}`)
-  }
-}
-
-async function purgeItem(item: TrashItem) {
-  try {
-    await ElMessageBox.confirm(
-      `彻底删除「${item.name}」？该操作不可恢复。`,
-      '彻底删除确认',
-      { type: 'error', confirmButtonText: '彻底删除', cancelButtonText: '取消' },
-    )
-  } catch {
-    return
-  }
-  try {
-    await api.purgeResource(item.id)
-    ElMessage.success('已彻底删除')
-    await load()
-  } catch (e) {
-    if (isAborted(e)) return
-    ElMessage.error(`删除失败: ${(e as Error).message}`)
-  }
-}
-
-async function purgeAll() {
-  const count = items.value.length
-  if (!count) return
-  try {
-    await ElMessageBox.confirm(
-      `彻底删除回收站中全部 ${count} 项（${formatSize(totalSize.value)}）？该操作不可恢复。`,
-      '清空回收站确认',
-      { type: 'error', confirmButtonText: '全部彻底删除', cancelButtonText: '取消' },
-    )
-  } catch {
-    return
-  }
-  try {
-    const r = await api.purgeResource('')
-    ElMessage.success(`已彻底删除 ${r.count} 项`)
-    await load()
-  } catch (e) {
-    if (isAborted(e)) return
-    ElMessage.error(`清空失败: ${(e as Error).message}`)
-  }
-}
-
-function fmtTime(s: string): string {
-  return (s || '').replace('T', ' ')
-}
+// 回收站的 load / restoreItem / purgeItem / purgeAll 已由 useTrash 提供（见文件头），
+// 此处不再重复实现——两份实现曾各自漂移（确认框、文案、刷新范围不一致）。
 
 function toggleSort(key: 'deleted_at' | 'size' | 'name') {
   if (sortKey.value === key) {
@@ -208,7 +139,7 @@ onMounted(load)
           <template #default="{ row }">{{ formatSize(row.size) }}</template>
         </el-table-column>
         <el-table-column label="删除时间" width="160">
-          <template #default="{ row }">{{ fmtTime(row.deleted_at) }}</template>
+          <template #default="{ row }">{{ formatFullTime(row.deleted_at) }}</template>
         </el-table-column>
         <el-table-column label="保留状态" width="110">
           <template #default="{ row }">

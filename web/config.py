@@ -101,23 +101,7 @@ TRASH_KEEP_DAYS = int(os.environ.get("TXXY_TRASH_KEEP_DAYS", "7"))
 # 前端 /api/config 读取该值，为 False 时不显示自动刷新开关、不启动轮询。
 ENABLE_AUTO_REFRESH = os.environ.get("TXXY_ENABLE_AUTO_REFRESH", "1").strip().lower() in ("1", "true", "yes", "on")
 
-# 版块名称映射（与 run_batch.SECTIONS 保持一致；未知 fid 显示为 版块<n>）
-FID_NAMES: dict[str, str] = {
-    "2": "亞洲無MA原創區",
-    "4": "歐美原創區",
-    "5": "動漫原創區",
-    "7": "技術討論區",
-    "8": "新時代的我們",
-    "15": "亞洲有MA原創區",
-    "16": "達蓋爾的旗幟",
-    "20": "CR文學交流區",
-    "21": "HTTP下載區",
-    "22": "在綫CR影院",
-    "25": "國產原創區",
-    "26": "中字原創區",
-    "28": "AI破解原創區",
-}
-
-
 def fid_name(fid: str) -> str:
-    return FID_NAMES.get(fid, f"版块{fid}")
+    """版块 ID → 名称。唯一映射在 txxy_env.SECTIONS，抓取端（run_batch）与展示端
+    共用同一份——此前各存一份、靠注释互相提醒「保持一致」，属典型手工同步债。"""
+    return _TXXY_ENV.fid_name(fid)

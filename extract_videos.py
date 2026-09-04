@@ -12,19 +12,12 @@ import requests
 
 # 通用下载核心（独立模块，无循环依赖）
 from media_download import download_media
+# 请求头统一由 http_headers 构造：UA / Accept-Language 全项目唯一定义，此处只选 Accept
+from http_headers import ACCEPT_VIDEO, build_headers
 
 # ============ 视频下载配置 ============
-# 浏览器 UA（与 download_files.HEADERS 保持一致，改动时需同步）
-_USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-)
-# 视频下载专用请求头（同理不能含 text/html，模拟 <video> 标签加载）
-VIDEO_HEADERS = {
-    "User-Agent": _USER_AGENT,
-    "Accept": "video/webm,video/mp4,video/ogg,video/*;q=0.9,*/*;q=0.8",
-    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-}
+# 视频下载专用请求头（Accept 不能含 text/html，模拟 <video> 标签加载）
+VIDEO_HEADERS = build_headers(ACCEPT_VIDEO)
 # 视频保存子目录（相对于图片目录）
 VIDEO_SUBDIR = "videos"
 # 视频完整扩展名集合（供主文件识别媒体直链）

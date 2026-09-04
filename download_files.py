@@ -31,6 +31,7 @@ from urllib.parse import urlparse
 
 import file_logger
 
+from http_headers import ACCEPT_HTML, build_headers
 from media_download import TIMEOUT
 from extract_images import (
     extract_image_urls,
@@ -66,11 +67,8 @@ from extract_clouds import extract_cloud_links, save_clouds_txt
 DOWNLOAD_ROOT = os.environ.get("DOWNLOADS_DIR", str(Path(__file__).resolve().parent / "downloads"))
 
 # 请求头，模拟浏览器（用于抓取 HTML 页面）
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-}
+# UA / Accept-Language 由 http_headers 统一定义，各下载模块与 scraper 共用同一份
+HEADERS = build_headers(ACCEPT_HTML)
 
 # 单张图片下载间隔（秒），避免请求过快
 DOWNLOAD_INTERVAL = 0.3

@@ -21,6 +21,15 @@ export function isAborted(e: unknown): boolean {
   return e instanceof ApiError && e.type === 'aborted'
 }
 
+/**
+ * SSE（EventSource）地址。
+ * EventSource 是浏览器原生长连接对象，无法走 fetch 封装，但地址前缀必须与 BASE 同源——
+ * 由封装统一提供，避免 view 里硬编码 '/api' 后改 BASE 时漏改。
+ */
+export function sseUrl(path: string): string {
+  return `${BASE}${path}`
+}
+
 /** 默认请求超时（毫秒）：防止网络异常时请求无限挂起、轮询堆积 */
 const DEFAULT_TIMEOUT = 10_000
 

@@ -193,3 +193,30 @@ def to_fetch_url(url: str) -> str:
     if not use_local_proxy() or not PUBLIC_DOMAIN:
         return url
     return url.replace(PUBLIC_DOMAIN, LOCAL_PROXY, 1)
+
+
+# ================= 版块映射（抓取端与展示端共用） =================
+# 曾分别在 run_batch.SECTIONS 与 web/config.FID_NAMES 各存一份、逐项相同，
+# 两边注释都写着「与对方保持一致」——典型的手工同步债，改一个版块要动两处。
+# 收敛到此处，两端复用。
+SECTIONS: dict[str, str] = {
+    "2": "亞洲無MA原創區",
+    "4": "歐美原創區",
+    "5": "動漫原創區",
+    "7": "技術討論區",
+    "8": "新時代的我們",
+    "15": "亞洲有MA原創區",
+    "16": "達蓋爾的旗幟",
+    "20": "CR文學交流區",
+    "21": "HTTP下載區",
+    "22": "在綫CR影院",
+    "25": "國產原創區",
+    "26": "中字原創區",
+    "28": "AI破解原創區",
+    # 按需添加更多版块...
+}
+
+
+def fid_name(fid: str) -> str:
+    """版块 ID → 版块名称（未知 ID 兜底为 版块<id>）"""
+    return SECTIONS.get(fid, f"版块{fid}")

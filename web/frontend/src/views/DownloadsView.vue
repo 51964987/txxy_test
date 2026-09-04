@@ -8,6 +8,7 @@ import {
 import {
   api,
   isAborted,
+  sseUrl,
   type DownloadTaskDetail,
   type DownloadTaskSummary,
 } from '../api'
@@ -357,7 +358,7 @@ let es: EventSource | null = null
 const usingSse = ref(false)
 function startSse() {
   if (es) return
-  es = new EventSource('/api/downloads/events')
+  es = new EventSource(sseUrl('/downloads/events'))
   es.addEventListener('task_update', (e) => {
     usingSse.value = true
     error.value = ''

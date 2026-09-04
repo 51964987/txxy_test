@@ -6,10 +6,18 @@ function isUnixSeconds(s: string): boolean {
   return /^\d{6,}$/.test(s)
 }
 
-// 二位补零
-function pad(n: number): string {
+// 二位补零（对外导出：需要自行拼接日期的场景复用它，避免各页面各写一份 padStart）
+export function pad2(n: number): string {
   return String(n).padStart(2, '0')
 }
+
+// Date → 'YYYY-MM-DD'（非法日期返回 '-'）
+export function formatDate(d: Date): string {
+  if (Number.isNaN(d.getTime())) return '-'
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`
+}
+
+
 
 // 相对时间主体：刚刚 / x 分钟前 / x 小时前 / x 天前，超过一周回落为 YYYY-MM-DD
 function relativeFrom(d: Date, fallback: string): string {
@@ -22,7 +30,7 @@ function relativeFrom(d: Date, fallback: string): string {
   if (h < 24) return `${h} 小时前`
   const day = Math.floor(h / 24)
   if (day < 7) return `${day} 天前`
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`
 }
 
 // 相对时间：x 分钟前 / x 小时前 / x 天前（双格式兼容）
@@ -36,18 +44,29 @@ export function formatRelativeTime(raw?: string | null): string {
   return relativeFrom(new Date(`${datePart}T${timePart}`), s.slice(0, 19))
 }
 
+// 日期 + 时分（'YYYY-MM-DD HH:mm'）：资源清单等列表场景，秒没有意义。
+// 兼容旧 ISO 字符串与新 Unix 秒时间戳两种形态（ResourcesView 曾自带一份局部实现）
+export function formatMinuteTime(raw?: string | number | null): string {
+  if (!raw) return '-'
+  const s = String(raw)
+  const d = isUnixSeconds(s) ? new Date(Number(s) * 1000) : new Date(s.replace(' ', 'T'))
+  return formatDateTime(d).slice(0, 16)
+}
+
+// Date → 'YYYY-MM-DD HH:mm:ss'（非法日期返回 '-'）
+export function formatDateTime(d: Date): string {
+  if (Number.isNaN(d.getTime())) return '-'
+  return (
+    `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} `
+    + `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`
+  )
+}
+
 // 完整时间展示（tooltip 等）：'YYYY-MM-DD HH:mm:ss'
 export function formatFullTime(raw?: string | null): string {
   if (!raw) return '-'
   const s = String(raw)
-  if (isUnixSeconds(s)) {
-    const d = new Date(Number(s) * 1000)
-    if (Number.isNaN(d.getTime())) return '-'
-    return (
-      `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} `
-      + `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
-    )
-  }
+  if (isUnixSeconds(s)) return formatDateTime(new Date(Number(s) * 1000))
   return s.replace('T', ' ').slice(0, 19)
 }
 
@@ -63,5 +82,5 @@ export function formatShortTime(raw?: string | null): string | null {
     d = new Date(`${datePart}T${timePart}`)
   }
   if (Number.isNaN(d.getTime())) return null
-  return `${pad(d.getHours())}:${pad(d.getMinutes())}`
+  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`
 }

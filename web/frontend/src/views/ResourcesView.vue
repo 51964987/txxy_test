@@ -15,10 +15,10 @@ import {
   type Resources,
   type ResourceText,
   type TorrentInfo,
-  type TrashItem,
-  type TrashResp,
 } from '../api'
 import { useAppStore } from '../stores/app'
+import { useTrash } from '../composables/useTrash'
+import { formatMinuteTime } from '../utils/time'
 
 const router = useRouter()
 // 移动端形态沿用布局层的统一断点（<768px），页面不自建第二套判定
@@ -195,12 +195,7 @@ function copyText(text: string, successMsg: string) {
   }
 }
 
-function fmtTime(ts: number): string {
-  if (!ts) return '-'
-  const d = new Date(ts * 1000)
-  const p = (n: number) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
-}
+// 时间展示统一走 utils/time：本文件曾自带一份补零与拼接，与 utils/time 重复
 
 // ---- P2-14 大列表虚拟滚动：展开文件夹的文件列表改用 el-table-v2 ----
 // 当前展开文件夹及其文件列表
@@ -556,74 +551,22 @@ async function removeFolder(item: ResourceItem) {
 
 // ===== 回收站 =====
 const trashVisible = ref(false)
-const trash = ref<TrashResp>({ items: [], keep_days: 7, total_size: 0 })
-const trashKeepDays = computed(() => trash.value.keep_days || 7)
-
-async function loadTrash() {
-  try {
-    trash.value = await api.trashList()
-  } catch (e) {
-    if (isAborted(e)) return
-    ElMessage.error(`加载回收站失败: ${(e as Error).message}`)
-  }
-}
+// 回收站的数据与操作统一由 useTrash 提供（与 TrashView 表格版共用同一份实现）：
+// 此前本文件与 TrashView 各写一套，恢复是否二次确认、清空文案是否带总量都已漂移不一致。
+// onChanged 用于回收站变动后同步刷新本页资源列表。
+const {
+  items: trashItems,
+  keepDays: trashKeepDays,
+  totalSize: trashTotalSize,
+  load: loadTrash,
+  restoreItem,
+  purgeItem,
+  purgeAll,
+} = useTrash({ onChanged: load })
 
 async function openTrash() {
   trashVisible.value = true
   await loadTrash()
-}
-
-async function restoreItem(item: TrashItem) {
-  try {
-    await api.restoreResource(item.id)
-    ElMessage.success('已恢复到原位置')
-    await Promise.all([loadTrash(), load()])
-  } catch (e) {
-    if (isAborted(e)) return
-    ElMessage.error(`恢复失败: ${(e as Error).message}`)
-  }
-}
-
-async function purgeItem(item: TrashItem) {
-  try {
-    await ElMessageBox.confirm(
-      `彻底删除「${item.name}」？该操作不可恢复。`,
-      '彻底删除确认',
-      { type: 'error', confirmButtonText: '彻底删除', cancelButtonText: '取消' },
-    )
-  } catch {
-    return
-  }
-  try {
-    await api.purgeResource(item.id)
-    ElMessage.success('已彻底删除')
-    await loadTrash()
-  } catch (e) {
-    if (isAborted(e)) return
-    ElMessage.error(`删除失败: ${(e as Error).message}`)
-  }
-}
-
-async function purgeAll() {
-  const count = trash.value.items.length
-  if (!count) return
-  try {
-    await ElMessageBox.confirm(
-      `彻底删除回收站中全部 ${count} 项？该操作不可恢复。`,
-      '清空回收站确认',
-      { type: 'error', confirmButtonText: '全部彻底删除', cancelButtonText: '取消' },
-    )
-  } catch {
-    return
-  }
-  try {
-    const r = await api.purgeResource('')
-    ElMessage.success(`已彻底删除 ${r.count} 项`)
-    await loadTrash()
-  } catch (e) {
-    if (isAborted(e)) return
-    ElMessage.error(`清空失败: ${(e as Error).message}`)
-  }
 }
 
 // B2 全局结果中点击命中目录：清空筛选并回到目录模式展开该目录
@@ -923,8 +866,8 @@ onBeforeUnmount(() => {
         <div>
           <div class="stat-label">回收站</div>
           <div class="stat-value">
-            {{ trash.items.length }} 项<template v-if="trash.items.length">
-              · {{ formatSize(trash.total_size) }}</template
+            {{ trashItems.length }} 项<template v-if="trashItems.length">
+              · {{ formatSize(trashTotalSize) }}</template
             >
           </div>
         </div>
@@ -1077,7 +1020,7 @@ onBeforeUnmount(() => {
           <!-- 动作组统一靠右（互联网文件/网盘列表的常见布局：筛选在左、动作在右） -->
           <div class="toolbar-right">
             <el-button type="warning" plain @click="openTrash">
-              回收站<template v-if="trash.items.length">（{{ trash.items.length }}）</template>
+              回收站<template v-if="trashItems.length">（{{ trashItems.length }}）</template>
             </el-button>
             <el-button :icon="'Refresh'" :loading="loading" @click="load">刷新</el-button>
           </div>
@@ -1205,7 +1148,7 @@ onBeforeUnmount(() => {
                 </div>
                 <div class="folder-line2">
                   <span class="text-muted folder-meta">
-                    {{ item.file_count }} 个文件 · {{ formatSize(item.total_size) }} · {{ fmtTime(item.mtime) }}
+                    {{ item.file_count }} 个文件 · {{ formatSize(item.total_size) }} · {{ formatMinuteTime(item.mtime) }}
                   </span>
                   <!-- B4 类型构成摘要 -->
                   <span v-if="folderMix(item).length" class="folder-mix">
@@ -1451,22 +1394,22 @@ onBeforeUnmount(() => {
     <el-drawer v-model="trashVisible" title="回收站" size="520px">
       <div class="trash-head">
         <span class="text-muted">
-          共 {{ trash.items.length }} 项 · {{ formatSize(trash.total_size) }} · 保留
-          {{ trash.keep_days }} 天
+          共 {{ trashItems.length }} 项 · {{ formatSize(trashTotalSize) }} · 保留
+          {{ trashKeepDays }} 天
         </span>
         <el-button
           type="danger"
           plain
           size="small"
-          :disabled="!trash.items.length"
+          :disabled="!trashItems.length"
           @click="purgeAll"
         >
           清空回收站
         </el-button>
       </div>
-      <el-empty v-if="!trash.items.length" description="回收站为空" />
+      <el-empty v-if="!trashItems.length" description="回收站为空" />
       <div v-else class="trash-list">
-        <div v-for="it in trash.items" :key="it.id" class="trash-item">
+        <div v-for="it in trashItems" :key="it.id" class="trash-item">
           <div class="trash-main">
             <div class="trash-name" :title="it.rel">
               {{ it.name }}

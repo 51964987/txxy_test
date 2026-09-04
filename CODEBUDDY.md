@@ -34,7 +34,15 @@ alwaysApply: true
 - 不生成未经过考量的低效方案。
 
 # 通用工程约束（适用本项目所有改动）
-1. **不重复造轮子**：若之前实现过类似功能，先理解已有的实现逻辑与曾思考过的细节，再在其基础上修改完善；不要绕开旧实现重新发明轮子。
+1. **不重复造轮子（强制，每次动笔前自查）**：新增任何通用能力前，必须按「**标准库 → 项目已有实现 → 已引入的第三方库 → 才允许自己写**」的顺序确认；前一级能解决，就不许自己写。项目里已有同类实现时，先完整读懂它（含注释里记录的取舍与踩过的坑），再在其基础上改，禁止绕开重写一份。
+   - **写前必做（不可跳过）**：用 `search_content` / `search_file` 搜关键词（函数名、能力名、模块名、常量字面量如 `https://txxy.com`），确认当前没有第二份同类实现；确认无重复后才动手。
+   - **禁止复制粘贴**：同一份逻辑出现在两处，即判为重复造轮子——必须抽到唯一一处，其它模块调用它（不允许「先复制一份到 A，再改 A」）。
+   - **默认值 / 常量同理**：同一默认值只允许在一个地方以常量形式定义，其它模块引用常量，不得复制字面量（复制即意味着将来必漏改一处）。
+   - **配置键同理**：不做「布尔开关 + 值」成对配置（如 `USE_X` + `X_ADDR`），开关状态应由值本身推出（如置空即关闭），否则会出现「开关开着但地址为空」的自相矛盾。
+   - **本项目已犯过的错（引以为戒）**：
+     1. `_load_dotenv` 曾在 `txxy_env.py` 与 `web/config.py` 各存一份、逐行相同 → 已合并为 `txxy_env.load_dotenv()`，后者改为调用；
+     2. 默认值 `https://txxy.com` 曾同时硬编码在两个文件 → 已收敛为 `txxy_env.DEFAULT_PUBLIC_DOMAIN`，`web/config.py` 不再保留兜底值（改为 fail-fast 抛错）；
+     3. 域名曾拆成「抓取 / 入库 / 展示」三套 + 两个旧别名共 7 个配置键 → 已收敛为 2 个。
 2. **中文注释 + UTF-8**：生成的代码注释一律用中文，文件以 UTF-8 编码保存。
 3. **运行环境为 Windows**：命令、路径分隔、脚本均按 Windows 环境处理（如 `cd d:\path`、反斜杠路径），不要假设 Linux/macOS。
 4. **不主动写测试与说明文档**：用户未明确要求时，不编写测试脚本，也不生成专门的项目说明 `.md` 文件。
@@ -59,6 +67,9 @@ alwaysApply: true
 ## 目录结构（勿随意新增顶层目录）
 ```
 txxy_test/                  # 抓取脚本在项目根：scraper.py / run_batch.py / run_recorder.py / init_db.py 等
+├── txxy_env.py       # 唯一配置源：环境判定 / 域名 / URL 转换 / 版块映射 / dotenv 加载
+├── http_headers.py   # 唯一 UA 与 Accept 定义（零依赖，抓取与下载模块共用）
+├── txt_export.py     # TXT 清单导出（磁力 / 云盘共用）
 ├── download_files.py 等    # 下载模块（download_tasks.py 复用其 process_one）
 └── web/
     ├── app.py        # FastAPI 入口（GZip + /api 耗时监控 + SPA 静态托管）
@@ -66,9 +77,10 @@ txxy_test/                  # 抓取脚本在项目根：scraper.py / run_batch.
     ├── config.py     # 配置（DB_FILE、ENABLE_AUTO_REFRESH 默认开启、下载中心参数）
     ├── db.py         # 只读连接 + 5s TTL 缓存 + URL 归一化
     ├── ratelimit.py  # 接口限流（固定窗口，/posts/export、/resources 挂载，超限 429）
+    ├── atomicfile.py # JSON 原子落盘（临时文件 + 替换，可开 .bak 轮转）
     ├── runs.py / resources.py / download_tasks.py  # 运行记录 / 资源扫描 / 下载中心队列
     └── frontend/src/
-        ├── api/ stores/ router/ layout/ components/ views/ utils/
+        ├── api/ stores/ router/ layout/ components/ views/ utils/ composables/
         └── views/    # Dashboard / Posts / Runs / Resources / Downloads / Trash 六个页面
 ```
 路由为 `/`、`/posts`、`/runs`、`/resources`、`/downloads`、`/trash` 六条（`/trash` 为 2026-08-31 经用户确认新增的回收管理页，此前为五条）。
@@ -85,3 +97,24 @@ txxy_test/                  # 抓取脚本在项目根：scraper.py / run_batch.
 9. **交付自检**：前端改动后 `cd web/frontend && npx vue-tsc --noEmit` 必须 0 错误，且 `read_lints`（ts-plugin IDE 诊断）也必须 0 错误——两者对模板的类型检查严格度不同，需双通道都通过；后端 `python web/app.py` 可启动且既有接口行为不变。
 10. **模板禁止对 setup 变量内联赋值**：`<script setup>` 顶层 `let` 变量（带字面量初始值，如 `let x: boolean = false`）在模板中直接写 `@mouseenter="x = true"`，会被 ts-plugin 按初始值收窄为字面量类型 `false` 而误报「不能将类型 true 分配给类型 false」（vue-tsc 不报此错）；一律用方法包装，如 `@mouseenter="setPaused(true)"`。
 11. **下钻必须继承上下文口径（数字自洽）**：从榜单 / 统计图表下钻到明细页时，必须携带当前生效的筛选口径（统计范围、时间窗口等），保证「榜单上的数字」与「明细页条数」严格一致——榜上显示 431 条，点进去就必须是这 431 条，而不是该维度的全部数据（如该作者累计 4314 条）。这是 BI 与看板类产品的通行做法（Grafana 的 dashboard variables、GA 的全局日期范围均如此）。判断标准：下钻目标是**明细记录列表**则继承上下文；是**实体档案页**（看全貌）则不必。明细页必须把生效条件集中展示为摘要条并支持逐项清除，让用户看得见、能调整，而不是散落在筛选框里靠猜。
+
+## 已有共享实现索引（写新代码前先查此表，禁止再写第二份）
+能力已存在时直接调用/扩展，不得另起炉灶；发现表中有遗漏的可复用实现，补充到此表。
+
+| 能力 | 唯一实现位置 | 说明 |
+|---|---|---|
+| 环境判定 / 域名 / URL 转换 | `txxy_env.py`（项目根） | **唯一配置源**：`detect_env()`、`PUBLIC_DOMAIN`、`LOCAL_PROXY`、`use_local_proxy()`、`display_domain()`、`to_storage_path()`、`to_display_url()`、`to_fetch_url()`、常量 `DEFAULT_PUBLIC_DOMAIN` / `DEFAULT_LOCAL_PROXY` |
+| `.env` 加载 | `txxy_env.load_dotenv()` | 全项目唯一 dotenv 实现；`web/config.py` 等模块一律复用，不得另写 |
+| 展示端配置 | `web/config.py` | 只读不定义域名，域名相关全部取自 `txxy_env`（配置源加载失败直接抛错，不静默降级到兜底值） |
+| URL 归一化 | `web/db.py: normalize_url()` | 内部转调 `txxy_env.to_display_url()`，不要在别处再写前缀替换逻辑 |
+| 统计查询缓存 | `web/db.py: cached()` | 5s TTL，新增统计接口必须用它包裹 |
+| 接口限流 | `web/ratelimit.py` | 固定窗口限流，新接口需限流时挂载它 |
+| HTTP 请求头 / UA | `http_headers.py`（项目根，零依赖） | 唯一 UA 与 Accept 定义：`build_headers(ACCEPT_HTML/IMAGE/VIDEO)`。禁止在模块里重写 UA 字面量 |
+| TXT 清单导出 | `txt_export.py: save_lines_txt()` | 磁力 / 云盘等「每行一条」清单共用，各模块只传文件名与日志标签 |
+| JSON 原子落盘 | `web/atomicfile.py: write_json_atomic()` | 唯一的「临时文件 + 原子替换」实现，支持 `indent` 与 `backup` 轮转 |
+| 版块映射 | `txxy_env.SECTIONS` / `fid_name()` | 抓取端与展示端共用，禁止各存一份再靠注释提醒同步 |
+| 前端 HTTP 请求 | `web/frontend/src/api/index.ts` | 原生 fetch 封装（超时 / 同 key 去重 / `ApiError`）+ `sseUrl()`；新请求一律走它，禁止裸 `fetch` 或硬编码 `/api` |
+| 前端颜色 | `web/frontend/src/utils/fidColor.ts` | 唯一色板：`colorForFid()`（按 fid 取模）/ `colorByIndex()`（按排名）。禁止另建第二套色板 |
+| 前端时间格式化 | `web/frontend/src/utils/time.ts` | `formatFullTime` / `formatDateTime` / `formatMinuteTime` / `formatRelativeTime` / `formatShortTime`。禁止在页面内自己补零拼字符串 |
+| 回收站数据与操作 | `web/frontend/src/composables/useTrash.ts` | TrashView（表格版）与 ResourcesView（抽屉版）共用；额外刷新用 `onChanged` 回调 |
+| 错误提示 | `web/app.py`（`HTTPException(detail)`）+ 前端 `ElMessage.error` | 后端统一 `detail`，前端统一解析，禁止另造 `{ok:false,msg}` 形态 |

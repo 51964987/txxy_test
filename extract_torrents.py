@@ -17,20 +17,13 @@ import requests
 
 # 通用下载核心（独立模块，无循环依赖）
 from media_download import TIMEOUT
+# 请求头统一由 http_headers 构造：UA / Accept-Language 全项目唯一定义，此处只选 Accept
+from http_headers import ACCEPT_HTML, build_headers
 
 # ============ 种子下载配置 ============
-# 浏览器 UA（与 download_files.HEADERS 保持一致，改动时需同步）
-_USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-)
-# 种子解析/下载请求头（与 download_files.HEADERS 一致，
-# rmdown 解析页需要 Accept 含 text/html）
-TORRENT_HEADERS = {
-    "User-Agent": _USER_AGENT,
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-}
+# 请求头统一由 http_headers 构造：UA / Accept-Language 全项目唯一定义，此处只选 Accept
+# （rmdown 解析页需要 Accept 含 text/html，故用 ACCEPT_HTML）
+TORRENT_HEADERS = build_headers(ACCEPT_HTML)
 
 # rmdown.com 中转链接（如 https://www.rmdown.com/link.php?hash=...）
 # hash 长度不固定（实测 40~43 位十六进制），用 + 兜底

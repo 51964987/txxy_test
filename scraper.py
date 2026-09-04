@@ -13,6 +13,7 @@ from typing import TextIO
 import file_logger
 import run_recorder
 import txxy_env
+from http_headers import ACCEPT_HTML, build_headers
 
 # ============ 配置区域 ============
 # 唯一业务域名：抓取与入库/展示共用（默认值只在项目根 txxy_env.py 一处维护，
@@ -37,12 +38,8 @@ OUTPUT_FILE = f"{OUTPUT_DIR}/{FID}_output_{_RUN_BATCH_TS}.csv"
 PROGRESS_FILE = f"{OUTPUT_DIR}/{FID}_progress_{_RUN_BATCH_TS}.txt"
 DB_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "db", "posts.db")
 
-# 请求头，模拟浏览器
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-}
+# 请求头，模拟浏览器（与下载模块共用 http_headers 里唯一的 UA 定义）
+HEADERS = build_headers(ACCEPT_HTML)
 
 # 页间请求间隔自适应（秒）：站点响应顺利时逐渐逼近下限，请求重试/失败后立即放大，
 # 降低被封风险；初始值沿用原固定 3s

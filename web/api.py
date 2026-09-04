@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
+from atomicfile import write_json_atomic
 import config
 import db
 import download_tasks
@@ -276,11 +277,7 @@ def _mark_new_and_save(board_key: str, urls: list[str], today: str) -> set[str]:
             # 仅保留「仍在榜」与「今天新入榜」的条目，避免文件随运行时间无限膨胀
             keep = set(urls) | fresh
             snap[board_key] = {u: d for u, d in board.items() if u in keep}
-            _SNAP_FILE.parent.mkdir(parents=True, exist_ok=True)
-            tmp = _SNAP_FILE.with_suffix(".json.tmp")
-            with tmp.open("w", encoding="utf-8") as f:
-                json.dump(snap, f, ensure_ascii=False)
-            tmp.replace(_SNAP_FILE)
+            write_json_atomic(_SNAP_FILE, snap)
             return fresh
     except Exception:
         return set()
