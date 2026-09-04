@@ -247,10 +247,10 @@ docker compose --profile cron down
 
 ### 7.3 域名与链接——唯一配置源
 
-**只有一个配置**：业务域名 `TXXY_PUBLIC_DOMAIN`（默认 `https://txxy.com`）。
-默认值只在项目根 `txxy_env.py` 一处维护（scraper / run_batch / web 全部只读不定义），
-改域名只改这一处。历史键 `PUBLIC_ROOT` / `REMOTE_ROOT_URL` 若仍被设置会自动当作业务
-域名识别（平滑迁移，旧 `.env` 无需改动即可沿用）。
+域名相关配置**只有两个**，且**都有默认值——零配置即可运行**：`TXXY_PUBLIC_DOMAIN`
+（业务域名，默认 `https://txxy.com`）与 `TXXY_LOCAL_PROXY`（本地镜像，本地 Windows
+默认启用）。默认值只在项目根 `txxy_env.py` 一处维护（scraper / run_batch / web 全部
+只读不定义），改域名只改这一处。
 
 三层解耦：
 
@@ -264,24 +264,25 @@ docker compose --profile cron down
 | 展示层 | 页面链接前缀 `display_domain()`：**本地 → `http://127.0.0.1:1024`（本机浏览器/下载可直接用），Docker / Linux → `https://txxy.com`** |
 
 展示层按环境区分是刻意的：本地装了 `web.exe` 代理，链接走它更快且一定能打开；
-Docker / 离线 Linux 没有该程序，只能给公开域名。本地若显式关闭代理
-（`TXXY_USE_LOCAL_PROXY=0`），展示也会自动退回公开域名（避免给出点不开的链接）。
-需要固定成别的值时设 `TXXY_DISPLAY_DOMAIN`（优先级最高）。
+Docker / 离线 Linux 没有该程序，只能用公开域名。本地若把镜像置空
+（`TXXY_LOCAL_PROXY=`），展示也会自动退回公开域名（避免给出点不开的链接）。
 
 本地 Windows 有 1024 端口代理（`web.exe`）加速/绕路抓取，Docker / 离线 Linux 没有该程序
 → 代理作为**可选的传输层开关**，与业务域名无关：
 
 | 变量 | 说明 | 默认 |
 |---|---|---|
-| `TXXY_PUBLIC_DOMAIN` | 唯一业务域名（抓取/入库/展示共用） | `https://txxy.com` |
-| `TXXY_USE_LOCAL_PROXY` | 是否经本地代理抓取 | 留空=环境自适应（仅 local 开启）；`1`/`0` 强制 |
-| `TXXY_LOCAL_PROXY` | 本地代理地址 | `http://127.0.0.1:1024`（一般不用改） |
-| `TXXY_ENV` | 显式声明运行环境 `local`/`docker`/`linux` | 留空自动探测 |
+| `TXXY_PUBLIC_DOMAIN` | 业务域名 | `https://txxy.com` |
+| `TXXY_LOCAL_PROXY` | 本地镜像地址（**置空 = 关闭、直连**） | 本地 Windows `http://127.0.0.1:1024`；Docker / Linux 空 |
 
-优先级：**进程显式环境变量 > `.env` > 代码默认**。
+**就这两个，且都有默认值——零配置即可运行。** 优先级：进程显式环境变量 > `.env` > 代码默认。
 
-**历史数据无需迁移**：旧库里 `http://127.0.0.1:1024/htm_data/...`（或旧域名）的完整链接，
-展示层会自动剥离前缀、拼当前业务域名；外部域名链接原样保留。
+> 为什么不能直接用业界通用的 `HTTPS_PROXY`：实测 `web.exe` 不是标准 HTTP 代理
+> （不支持 CONNECT，走代理会 `ProxyError`），它只是本地镜像，必须替换 host 访问，
+> 所以这个配置无法省掉。
+
+**历史数据无需迁移**：旧库里带域名前缀的完整链接，展示层会自动剥离前缀、拼当前展示域名；
+外部域名链接原样保留。
 
 确认当前生效值：
 
@@ -298,8 +299,8 @@ python scraper.py 7                          # 读唯一配置源（本地默认
 python scraper.py 7 https://xx.com           # 显式覆盖业务域名
 ```
 
-> **注意下载中心**：下载用的是页面链接，即展示域名——**本地环境经 1024 代理下载**，
-> Docker / Linux 直连公开域名。若所在机器直连该域名不通，把 `TXXY_DISPLAY_DOMAIN` 设为可访问地址。
+> **注意下载中心**：下载用的是页面链接，即展示域名——**本地环境经 1024 本地镜像下载**，
+> Docker / Linux 直连公开域名。若所在机器直连不通，把 `TXXY_LOCAL_PROXY` 设为可访问地址。
 
 本地直启（`python web/app.py`）同样读取项目根 `.env`：`txxy_env.py` / `web/config.py` 均内置
 零依赖 dotenv 加载（未引入 python-dotenv，离线环境友好）。行为同主流 dotenv——

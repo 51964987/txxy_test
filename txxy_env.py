@@ -1,30 +1,25 @@
-"""txxy 环境与域名 —— 唯一配置源（不要再在别的文件里写域名默认值）。
+"""txxy 环境与域名 —— 唯一配置源（全项目只有这里定义域名默认值）。
 
-背景
-----
-同一份代码要跑在两种环境：本地（Windows）经 1024 端口的 web.exe 代理抓取，
-Docker / 离线 Linux 没有该代理，需直连公开域名。旧实现把「抓取地址 / 入库
-链接 / 展示域名」拆成多个配置，散落在 scraper.py / run_batch.py /
-web/config.py / web/env_default.py 里，改一个域名要动多个文件，而且经常把
-代理地址 127.0.0.1:1024 误写进数据库——历史库里 99% 的该前缀就是这么来的。
+同一份代码跑在两种环境：本地 Windows 有 1024 端口的 web.exe 本地镜像（更快、能绕路），
+Docker / 离线 Linux 没有它，直连公开域名。
 
-本模块把一切收敛为**唯一配置源**，并按业界做法做三层解耦：
+配置项只有两个，且**都有合理默认值——零配置即可运行**（进程 export > .env > 代码默认）：
 
+  TXXY_PUBLIC_DOMAIN  业务域名（默认 https://txxy.com）
+  TXXY_LOCAL_PROXY    本地镜像地址（默认：本地 Windows 自动启用 http://127.0.0.1:1024，
+                      其它环境不启用；**显式置空即强制直连**）
+
+两个键各管一层，互不重叠：地址即开关（置空即关闭），展示前缀跟随本地镜像是否存在，
+因此不再需要额外的开关、展示域名或环境声明键。
+
+分层（互不影响）：
   存储层   数据库 / CSV 只存相对路径（/htm_data/...），不含域名 → 换域名零成本
-  业务层   抓取与展示共用同一个 PUBLIC_DOMAIN（唯一域名配置）
-  传输层   本地代理只在 to_fetch_url() 里生效一次——解决「怎么抓」的问题，
-           不污染业务 URL 与入库数据
+  业务层   抓取目标恒为业务域名
+  传输层   本地镜像只在 to_fetch_url() 生效一次，不污染业务 URL 与数据
+  展示层   页面链接前缀 display_domain()：有本地镜像用它（点得开、下载快），否则业务域名
 
-环境变量（进程 export > .env > 代码默认）：
-  TXXY_PUBLIC_DOMAIN   唯一业务域名（默认 https://txxy.com）
-  TXXY_LOCAL_PROXY     本地代理地址（默认 http://127.0.0.1:1024，一般不用改）
-  TXXY_USE_LOCAL_PROXY 是否经本地代理抓取：留空=环境自适应（仅 local 为开），
-                       显式 1/0 强制指定
-  TXXY_ENV             显式声明运行环境 local / docker / linux（留空则自动探测）
-
-兼容性（平滑迁移，不迁移任何数据）：
-  - 旧键 PUBLIC_ROOT / REMOTE_ROOT_URL 若仍被设置（未设新键时）自动当作业务域名；
-  - 历史库里的完整 URL（含 127.0.0.1:1024 前缀）经 to_display_url() 归一化展示。
+历史库里的完整 URL（含 127.0.0.1:1024 或旧域名前缀）经 to_display_url() 归一化展示，
+**无需迁移数据**。
 """
 import os
 import re
@@ -35,13 +30,23 @@ from urllib.parse import urlparse
 BASE_DIR = Path(__file__).resolve().parent
 
 
-def _load_dotenv(env_file: Path, override: bool = False) -> None:
-    """把 .env 键值对写入 os.environ（零依赖，行为对齐主流 dotenv）。
+def load_dotenv(env_file: Path, override: bool = False) -> None:
+    """把 .env 的键值对写入 os.environ（全项目唯一的 dotenv 加载器，供各模块复用）。
 
-    - 文件不存在静默跳过（容器内通常由 compose env_file 注入，无 .env 属正常）
-    - 不覆盖已存在的环境变量（显式 export 优先）
+    存在意义：Docker 部署由 compose 的 env_file 注入环境变量，但**本地直接
+    `python web/app.py` 时 .env 不会自动生效**——两种运行方式行为不一致，
+    改了 .env 却没效果是很隐蔽的坑。这里补上本地加载。
+
+    约定与主流 dotenv 一致：
+    - 文件不存在 / 不可读：静默跳过（容器内通常没有 .env 文件，属正常情况）
+    - 不覆盖已存在的环境变量：显式 export 的优先级更高
     - 忽略空行与 # 整行注释；支持 export 前缀、成对引号
-    - 行内注释：仅当 # 前是空白才截断（本项目 .env 正是 `K=v  # 注释` 写法）
+    - 行内注释：仅当 # 前面是空白时才截断，避免误伤值里含 # 的情形
+      （本项目 .env 正是 `TXXY_PUBLIC_DOMAIN=https://...   # 注释` 这种写法）
+
+    未直接使用 python-dotenv：容器与离线（air-gapped）环境按 requirements.txt
+    安装，目前依赖里没有它；为不增加离线部署的打包负担，保留这份零依赖实现。
+    若后续把 python-dotenv 加入 requirements.txt，可整体替换为 `dotenv.load_dotenv`。
     """
     try:
         lines = env_file.read_text(encoding="utf-8").splitlines()
@@ -68,8 +73,9 @@ def _load_dotenv(env_file: Path, override: bool = False) -> None:
             os.environ[key] = val
 
 
-# 模块级只执行一次：本文件 import 时即把 .env 载入 os.environ
-_load_dotenv(BASE_DIR / ".env")
+# 模块级只执行一次：本文件 import 时即把 .env 载入 os.environ。
+# 其它模块（web/config.py 等）复用本函数即可，不要各写一份。
+load_dotenv(BASE_DIR / ".env")
 
 ENV_LOCAL = "local"
 ENV_DOCKER = "docker"
@@ -77,10 +83,10 @@ ENV_LINUX = "linux"
 
 
 def detect_env() -> str:
-    """判定运行环境：TXXY_ENV 显式声明 → /.dockerenv（Docker 惯例）→ 平台判定。"""
-    explicit = (os.environ.get("TXXY_ENV") or "").strip().lower()
-    if explicit in (ENV_LOCAL, ENV_DOCKER, ENV_LINUX):
-        return explicit
+    """判定运行环境：/.dockerenv（Docker 惯例）→ 平台判定。
+
+    不做成配置项：显式声明环境容易出现「声明与环境不符」，且探测本身已足够可靠。
+    """
     if os.path.exists("/.dockerenv"):
         return ENV_DOCKER
     if os.name == "nt" or platform.system() == "Windows":
@@ -90,42 +96,43 @@ def detect_env() -> str:
 
 RUN_ENV = detect_env()
 
+# ================= 默认值（全项目只在这里出现一次） =================
+# 其它模块需要默认值时一律引用这两个常量，不得再复制字面量——
+# 否则将来改默认值必然漏改某一处，又变回「N 个地方配同一个东西」。
+DEFAULT_PUBLIC_DOMAIN = "https://txxy.com"
+DEFAULT_LOCAL_PROXY = "http://127.0.0.1:1024"
+
 # ================= 业务域名（唯一域名配置） =================
-# 抓取与入库/展示共用：各环境统一访问该域名，环境差异只体现在传输层代理开关上。
-# 兼容旧键：PUBLIC_ROOT / REMOTE_ROOT_URL 仍被识别，未设新键时自动当作业务域名。
-PUBLIC_DOMAIN = (
-    os.environ.get("TXXY_PUBLIC_DOMAIN")
-    or os.environ.get("PUBLIC_ROOT")
-    or os.environ.get("REMOTE_ROOT_URL")
-    or "https://t66y.com"
-).rstrip("/")
+# 抓取目标 / 展示（无本地镜像时）都用它。
+PUBLIC_DOMAIN = (os.environ.get("TXXY_PUBLIC_DOMAIN") or DEFAULT_PUBLIC_DOMAIN).rstrip("/")
 
-# ================= 本地代理（传输层，仅抓取时使用） =================
-# web.exe 镜像站点（127.0.0.1:1024）。只有本地 Windows 有它；Docker / Linux 直连。
-LOCAL_PROXY = (os.environ.get("TXXY_LOCAL_PROXY") or "http://127.0.0.1:1024").rstrip("/")
+# ================= 本地镜像（传输层，仅抓取时使用） =================
+# web.exe 在 127.0.0.1:1024 提供本地镜像。它不是标准 HTTP 代理（实测不支持 CONNECT，
+# 走 HTTPS_PROXY 会 ProxyError），只能靠替换 host 访问，故需本项目自行处理。
+# 未显式配置时：本地 Windows 默认启用，Docker / Linux 不启用（那些环境没有 web.exe）。
+# 显式置空（TXXY_LOCAL_PROXY=）即强制直连——无需额外的布尔开关。
+_raw_proxy = os.environ.get("TXXY_LOCAL_PROXY")
+# 未显式配置（键不存在）时按环境取默认；显式配置（含置空）一律以配置值为准
+LOCAL_PROXY = (
+    _raw_proxy
+    if _raw_proxy is not None
+    else (DEFAULT_LOCAL_PROXY if RUN_ENV == ENV_LOCAL else "")
+).strip().rstrip("/")
 
-# 是否经本地代理抓取：显式 TXXY_USE_LOCAL_PROXY 优先；留空按环境（仅 local 默认开）
-_use_proxy = (os.environ.get("TXXY_USE_LOCAL_PROXY") or "").strip().lower()
-USE_LOCAL_PROXY = (
-    _use_proxy in ("1", "true", "yes", "on") if _use_proxy else RUN_ENV == ENV_LOCAL
-)
+
+def use_local_proxy() -> bool:
+    """是否启用本地镜像：由 LOCAL_PROXY 是否有值决定（地址与开关合二为一）"""
+    return bool(LOCAL_PROXY)
 
 
 def display_domain() -> str:
-    """展示 / 点击用的域名——按环境区分，是页面上链接前缀的唯一来源。
+    """页面链接前缀：本机有本地镜像就用它（点击即开、下载走本机），否则用业务域名。
 
-    本地（代理可用）→ http://127.0.0.1:1024：本机浏览器能直接打开、下载也走本机代理；
-    其它环境（Docker / 离线 Linux，没有 web.exe）→ https://txxy.com 公开域名。
-
-    只影响**页面展示与外部点击**（帖子外链、CSV 导出、下载中心），
-    不影响抓取（抓的仍是 PUBLIC_DOMAIN，传输层再按需走代理）
+    只影响**展示与外部点击**（帖子外链、CSV 导出、下载中心）；
+    不影响抓取（抓的是 PUBLIC_DOMAIN，传输层再按需走镜像）
     与入库（恒为相对路径，与域名无关）。
-    可用 TXXY_DISPLAY_DOMAIN 显式覆盖（优先级最高）。
     """
-    override = (os.environ.get("TXXY_DISPLAY_DOMAIN") or "").strip()
-    if override:
-        return override.rstrip("/")
-    return LOCAL_PROXY if USE_LOCAL_PROXY else PUBLIC_DOMAIN
+    return LOCAL_PROXY or PUBLIC_DOMAIN
 
 
 def _own_hosts() -> set[str]:
@@ -180,9 +187,9 @@ def to_display_url(url: str | None) -> str:
 def to_fetch_url(url: str) -> str:
     """业务 URL → 实际请求 URL（全项目唯一接触本地代理的函数）。
 
-    USE_LOCAL_PROXY 时把公开域名替换成本地代理地址。业务代码其余地方一律使用
-    公开域名，从而保证代理地址永远不会写进数据或入库链接。
+    启用本地镜像（use_local_proxy()）时把业务域名替换成本地镜像地址。业务代码其余
+    地方一律使用业务域名，从而保证镜像地址永远不会写进数据或入库链接。
     """
-    if not USE_LOCAL_PROXY or not PUBLIC_DOMAIN:
+    if not use_local_proxy() or not PUBLIC_DOMAIN:
         return url
     return url.replace(PUBLIC_DOMAIN, LOCAL_PROXY, 1)

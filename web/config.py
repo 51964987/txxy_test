@@ -2,14 +2,15 @@
 
 环境变量两种来源（优先级：显式 export > .env）：
   - Docker 部署：由 compose 的 env_file 注入（容器内通常没有 .env 文件）
-  - 本地直启：自动加载项目根的 .env（见下方 _load_dotenv）
+  - 本地直启：自动加载项目根的 .env（复用 txxy_env.load_dotenv，全项目仅一份实现）
 
 路径与展示域名均可通过环境变量覆盖：
   POSTS_DB        数据库文件路径（默认 db/posts.db）
   OUTPUTS_DIR     outputs 目录（默认 outputs/）
   DOWNLOADS_DIR   downloads 目录（默认 downloads/）
-  TXXY_PUBLIC_DOMAIN  唯一业务域名（抓取/入库/展示共用，默认 https://txxy.com，
-                  详见项目根 txxy_env.py——那是全项目域名的唯一配置源）
+  TXXY_PUBLIC_DOMAIN  唯一业务域名（默认 https://txxy.com）。全项目只有它与
+                  TXXY_LOCAL_PROXY 两个域名相关配置，且都有默认值，
+                  详见项目根 txxy_env.py——那是全项目域名的唯一配置源
   TXXY_WEB_HOST   监听地址（默认 127.0.0.1，局域网访问设 0.0.0.0）
   TXXY_WEB_PORT   监听端口（默认 8080）
   TXXY_ENABLE_AUTO_REFRESH  是否启用数据总览自动刷新（默认 0/关闭，设为 1 开启）
@@ -19,93 +20,56 @@
   TXXY_DOWNLOAD_TASKS_FILE   下载任务历史持久化文件（默认 outputs/download_tasks.json）
 """
 import os
-import re
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent  # txxy_test/
-
-
-def _load_dotenv(env_file: Path, override: bool = False) -> None:
-    """把 .env 的键值对写入 os.environ（零依赖，不为此引入 python-dotenv）。
-
-    存在意义：Docker 部署由 compose 的 env_file 注入环境变量，但**本地直接
-    `python web/app.py` 时 .env 不会自动生效**——两种运行方式行为不一致，
-    改了 .env 却没效果是很隐蔽的坑。这里补上本地加载。
-
-    约定与主流 dotenv 一致：
-    - 文件不存在 / 不可读：静默跳过（容器内通常没有 .env 文件，属正常情况）
-    - 不覆盖已存在的环境变量：显式 export 的优先级更高
-    - 忽略空行与 # 整行注释；支持 export 前缀、成对引号
-    - 行内注释：仅当 # 前面是空白时才截断，避免误伤值里含 # 的情形
-      （本项目 .env 正是 `PUBLIC_ROOT=http://...   # 注释` 这种写法）
-    """
-    try:
-        lines = env_file.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return
-    for raw in lines:
-        line = raw.strip()
-        if not line or line.startswith("#"):
-            continue
-        if line.startswith("export "):
-            line = line[len("export "):].lstrip()
-        key, sep, val = line.partition("=")
-        if not sep:
-            continue
-        key, val = key.strip(), val.strip()
-        if not key:
-            continue
-        inline = re.search(r"\s+#.*$", val)
-        if inline:
-            val = val[:inline.start()].strip()
-        if len(val) >= 2 and val[0] == val[-1] and val[0] in ("'", '"'):
-            val = val[1:-1]
-        if override or key not in os.environ:
-            os.environ[key] = val
-
-
-# 必须在读取任何 os.environ 之前调用：否则默认值已经固化，后面再改 .env 也不生效
-_load_dotenv(BASE_DIR / ".env")
-
-DB_FILE = Path(os.environ.get("POSTS_DB", str(BASE_DIR / "db" / "posts.db")))
-OUTPUTS_DIR = Path(os.environ.get("OUTPUTS_DIR", str(BASE_DIR / "outputs")))
-DOWNLOADS_DIR = Path(os.environ.get("DOWNLOADS_DIR", str(BASE_DIR / "downloads")))
 
 # ---- 域名配置：全部收敛到项目根 txxy_env.py（唯一配置源），此处只读不定义 ----
 # 用 importlib 按文件路径加载，而不是把项目根塞进 sys.path——web/ 与项目根
 # 下存在 db.py 等同名模块，改 sys.path 会让 `import db` 指错模块。
 def _load_txxy_env():
+    """加载唯一配置源 txxy_env.py。
+
+    加载失败直接抛错（fail-fast）：配置源缺失或损坏时，若静默降级到本文件里另写的
+    一份兜底域名，就会出现「以为在用配置、实际在用另一处默认值」的隐蔽不一致——
+    两处默认值迟早会改漏一个。宁可启动失败并明确报错，也不带可能错误的域名继续跑。
+    """
     import importlib.util
 
     path = BASE_DIR / "txxy_env.py"
+    spec = importlib.util.spec_from_file_location("_txxy_env", str(path))
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"无法加载唯一配置源：{path}")
+    mod = importlib.util.module_from_spec(spec)
     try:
-        spec = importlib.util.spec_from_file_location("_txxy_env", str(path))
-        if spec is None or spec.loader is None:
-            return None
-        mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
-        return mod
-    except Exception:  # noqa: BLE001
-        print(f"[警告] 无法加载 {path}，域名相关功能将不可用")
-        return None
+    except Exception as e:  # 原样向上抛，但补上「这是配置源」的上下文，便于排查
+        raise RuntimeError(f"加载唯一配置源失败：{path}（{type(e).__name__}: {e}）") from e
+    return mod
 
 
+# 顺序要求：必须先加载配置源。txxy_env 在被加载时就会把项目根 .env 读入 os.environ，
+# 本文件之后所有 os.environ.get 才能拿到 .env 里的值（两者顺序不可调换）。
 _TXXY_ENV = _load_txxy_env()
+# 复用配置源的 dotenv 加载器再加载一次：一是明确表达「本文件的配置依赖 .env」，
+# 不依赖上一步的隐式副作用；二是该函数幂等（不覆盖已存在的环境变量），重复调用无副作用。
+# 全项目只有 txxy_env.load_dotenv 一份 dotenv 实现，此处不另写。
+_TXXY_ENV.load_dotenv(BASE_DIR / ".env")
 
-# 兼容旧属性名：app.py / db.py 等仍引用 config.PUBLIC_ROOT / RUN_ENV。
-# 展示域名按环境区分（本地 http://127.0.0.1:1024，Docker / Linux 为公开域名），
+# ---- 基础路径（须在 .env 生效之后读取，否则默认值已固化，改 .env 不生效）----
+DB_FILE = Path(os.environ.get("POSTS_DB", str(BASE_DIR / "db" / "posts.db")))
+OUTPUTS_DIR = Path(os.environ.get("OUTPUTS_DIR", str(BASE_DIR / "outputs")))
+DOWNLOADS_DIR = Path(os.environ.get("DOWNLOADS_DIR", str(BASE_DIR / "downloads")))
+
+# 展示域名（页面链接前缀）：本机有本地镜像则用镜像地址，否则用业务域名，
 # 见 txxy_env.display_domain()；抓取与入库另走 PUBLIC_DOMAIN / 相对路径，互不影响。
-PUBLIC_ROOT = _TXXY_ENV.display_domain() if _TXXY_ENV else "https://txxy.com"
+PUBLIC_ROOT = _TXXY_ENV.display_domain()
 # 当前运行环境（local / docker / linux），由 /api/health 暴露，便于确认配置来源
-RUN_ENV = _TXXY_ENV.RUN_ENV if _TXXY_ENV else "unknown"
-# 历史数据中可能出现的本地代理前缀（旧代码把它写进了库）
-LOCAL_PROXY_PREFIX = _TXXY_ENV.LOCAL_PROXY if _TXXY_ENV else "http://127.0.0.1:1024"
+RUN_ENV = _TXXY_ENV.RUN_ENV
 
 
 def to_display_url(url: str | None) -> str:
     """URL 归一化：历史完整 URL / 新的相对路径 → 展示用完整 URL（供 db.py 调用）"""
-    if not _TXXY_ENV:
-        return url or ""
     return _TXXY_ENV.to_display_url(url)
 
 HOST = os.environ.get("TXXY_WEB_HOST", "127.0.0.1")

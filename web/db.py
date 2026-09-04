@@ -74,8 +74,8 @@ def iter_query(sql: str, params: tuple[Any, ...] = ()) -> Iterator[sqlite3.Row]:
 def normalize_url(url: str | None) -> str:
     """任意存储格式 → 展示用完整 URL（历史完整 URL / 新相对路径都兼容）。
 
-    旧数据可能带 http://127.0.0.1:1024 或旧域名前缀，新数据入库为相对路径；
-    统一交给 config.to_display_url（收敛自 txxy_env）归一化到当前业务域名，
+    旧数据可能是带域名前缀的完整 URL，新数据入库为相对路径；
+    统一交给 config.to_display_url（收敛自 txxy_env）归一化为展示域名，
     外部域名链接原样保留，无需迁移历史数据。
     """
     return config.to_display_url(url)

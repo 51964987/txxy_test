@@ -104,11 +104,11 @@ python run_batch.py true       # 可选入参：本次强制开启本地代理
 - 本地代理开关默认由 `txxy_env.py` 按环境自动决定（仅本地 Windows 开启），命令行 `true`/`false` 可强制；
 - 代理开启时：`run_batch.py` 自动探测/启动/关闭 1024 端口 web 服务，`scraper.py` 发起请求时经 `txxy_env.to_fetch_url` 把域名临时替换为 `127.0.0.1:1024` ——**业务 URL 与入库数据始终是公开域名**；
 - 代理关闭时：**1024 端口启不起来时的备选**——不再探测/启停端口，抓取直连唯一业务域名；
-- **入库只存相对路径**：数据库/CSV 的 `url` 列存 `/htm_data/...`（不含域名，`txxy_env.to_storage_path` 规范化），换域名/换环境零成本；展示层渲染时再拼业务域名（`txxy_env.to_display_url`）。
+- **入库只存相对路径**：数据库/CSV 的 `url` 列存 `/htm_data/...`（不含域名，`txxy_env.to_storage_path` 规范化），换域名/换环境零成本；展示层渲染时再拼展示域名（`txxy_env.to_display_url`，本机有本地镜像则为镜像地址，否则为业务域名）。
 
 **端口守护（web 服务自动启停，仅 `USE_LOCAL_PROXY=True` 时生效）**：抓取目标由本机 `web.exe` 提供（`127.0.0.1:1024`），`run_batch.py` 自动管理该服务：
 
-- 运行前先探测 1024 端口：**未监听**则启动 `WEB_APP_EXE`（默认 `D:\Tools\1024app_win10_2025_1.02\web.exe`）并等待端口就绪（最长 `WEB_APP_START_TIMEOUT`=15 秒），启动失败直接终止本次抓取，并提示改用 `USE_LOCAL_PROXY=False` + `REMOTE_ROOT_URL`；
+- 运行前先探测 1024 端口：**未监听**则启动 `WEB_APP_EXE`（默认 `D:\Tools\1024app_win10_2025_1.02\web.exe`）并等待端口就绪（最长 `WEB_APP_START_TIMEOUT`=15 秒），启动失败直接终止本次抓取，并提示改用 `python run_batch.py false` 直连业务域名；
 - 端口**已监听**：视为外部进程占用，跳过启动，任务结束后也不关闭（不干扰外部进程）；
 - 全部任务结束后：关闭本脚本启动的 web.exe 并等待端口释放（最长 `WEB_APP_SHUTDOWN_TIMEOUT`=10 秒）；`terminate` 失效时按端口定位 PID 强制结束进程树，确保无残留；
 - 启动、就绪、关闭、释放每个环节均打印 `[服务]` 前缀日志。
@@ -245,8 +245,8 @@ python -X utf8 web/app.py          # 启动后访问 http://127.0.0.1:8088（需
   - `DELETE /api/downloads/{tid}`：删除任务（终态或已取消可删）；
   - 任务状态持久化于 `outputs/download_tasks.json`（由 `TXXY_DOWNLOAD_TASKS_FILE` 配置），历史终态任务按 `TXXY_DOWNLOAD_TASK_MAX_KEEP`（默认 200）自动裁剪；Web 进程仅做文件系统下载（复用 `download_files.process_one_detail`），不写 `posts.db`；
 - **只读安全**：后端以 `PRAGMA query_only=ON` 只读访问 `db/posts.db`，绝不写库，与抓取写进程（WAL 模式）安全并发；
-- **URL 归一化**：任意存储格式（历史完整 URL / 新相对路径）经 `txxy_env.to_display_url` 归一化为当前业务域名展示，外部域名链接原样保留，**不改数据库**、无需迁移；
-- **配置**：域名默认值只在项目根 `txxy_env.py` 一处（`TXXY_PUBLIC_DOMAIN` 唯一业务域名 / `TXXY_USE_LOCAL_PROXY` 本地代理开关 / `TXXY_LOCAL_PROXY` 代理地址）；展示端其它配置在 `web/config.py` 顶部用环境变量覆盖（`TXXY_WEB_HOST` / `TXXY_WEB_PORT` / `POSTS_DB` / `TXXY_DOWNLOAD_*` 下载中心参数 / `TXXY_TRASH_DIR` 回收站目录 / `TXXY_TRASH_KEEP_DAYS`（默认 7）等），默认监听 `127.0.0.1:8088`（8080 常被本机其他程序占用）；
+- **URL 归一化**：任意存储格式（历史完整 URL / 新相对路径）经 `txxy_env.to_display_url` 归一化为当前展示域名（本机有本地镜像则为镜像地址，否则为业务域名），外部域名链接原样保留，**不改数据库**、无需迁移；
+- **配置**：域名相关只有两项，都在项目根 `txxy_env.py`（`TXXY_PUBLIC_DOMAIN` 业务域名 / `TXXY_LOCAL_PROXY` 本地镜像地址，置空即直连；两者都有默认值，零配置可跑）；展示端其它配置在 `web/config.py` 顶部用环境变量覆盖（`TXXY_WEB_HOST` / `TXXY_WEB_PORT` / `POSTS_DB` / `TXXY_DOWNLOAD_*` 下载中心参数 / `TXXY_TRASH_DIR` 回收站目录 / `TXXY_TRASH_KEEP_DAYS`（默认 7）等），默认监听 `127.0.0.1:8088`（8080 常被本机其他程序占用）；
 - **自动刷新开关**：`TXXY_ENABLE_AUTO_REFRESH`（默认 `1` 开启）控制数据总览的自动刷新功能——开启时 Header 显示"自动刷新"开关、前端启动 5s 轮询（`REFRESH_INTERVAL=5000`），抓取过程中 KPI 卡与折线图准实时更新；后端统计接口配套 5s TTL 缓存（`web/db.py` 的 `_TTL=5`），避免轮询空转打库；如需关闭，启动前设置 `TXXY_ENABLE_AUTO_REFRESH=0`（或直接改 `web/config.py` 为 `False`）。
 - **开发模式**：`cd web/frontend && npm run dev` 启动 Vite（端口 5173，`/api` 自动代理到 8088）热更新；改完执行 `npm run build` 重新构建，再启动 `python -X utf8 web/app.py` 生效。
 
@@ -281,7 +281,7 @@ schtasks /Delete /TN "txxy_daily_batch" /F
 
 | 现象 | 原因与解决 |
 |---|---|
-| 请求报 `WinError 10061 连接拒绝` | 本地 web 服务（127.0.0.1:1024）未运行：先执行 `python run_batch.py`（自动启动 web.exe），或手动启动 `D:\Tools\1024app_win10_2025_1.02\web.exe`；若 web.exe 无法启动，执行 `python run_batch.py false`（或设 `TXXY_USE_LOCAL_PROXY=0`）关闭本地代理，将直连唯一业务域名抓取 |
+| 请求报 `WinError 10061 连接拒绝` | 本地 web 服务（127.0.0.1:1024）未运行：先执行 `python run_batch.py`（自动启动 web.exe），或手动启动 `D:\Tools\1024app_win10_2025_1.02\web.exe`；若 web.exe 无法启动，执行 `python run_batch.py false`（或在 `.env` 把 `TXXY_LOCAL_PROXY` 置空）关闭本地镜像，将直连业务域名抓取 |
 | `[终止] 检测到权限拦截` | 当前账号无权访问该版块，脚本自动停止，检查代理/账号 |
 | `内容非图片` | 图床返回广告 HTML 页：确认使用纯图片 `Accept` 头（已内置 `extract_images.IMG_HEADERS`） |
 | 下载失败提示 `ConnectionError / Read timed out` | 网络暂时性超时，脚本已自动降级重试一次；仍失败可稍后重跑（断点续传） |

@@ -245,7 +245,8 @@ docker compose up -d
 | 变量                         | 作用                 | 生效方式                                     |
 | ---------------------------- | -------------------- | -------------------------------------------- |
 | `TXXY_HOST_PORT`           | 宿主机映射端口       | 重启（端口映射需重建容器，`up -d` 会处理） |
-| `TXXY_PUBLIC_DOMAIN`      | 唯一业务域名（抓取/入库/展示共用，默认 `https://txxy.com`） | 重启全部 |
+| `TXXY_PUBLIC_DOMAIN`      | 业务域名（默认 `https://txxy.com`） | 重启全部 |
+| `TXXY_LOCAL_PROXY`      | 本地镜像地址（置空=直连；Docker 内默认即为空） | 重启全部 |
 | `TXXY_ENABLE_AUTO_REFRESH` | 前端自动刷新开关     | 重启 web                                     |
 | `TZ`                       | 时区                 | 重启全部                                     |
 | `TXXY_IMAGE`               | 镜像 tag（离线必填） | 重启全部                                     |

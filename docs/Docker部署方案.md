@@ -2,10 +2,11 @@
 
 > 状态：**已实施**。交付物已创建（第 4 节）、最小代码改动已完成（第 5 节）、一键部署脚本已提供（第 6 节）。
 > 变更历史：2026-08 追加三环境一键部署脚本；**2026-08-31 完成第 13 节优化**——数据默认改为命名卷隔离（共用宿主机 DB 保留为 overlay）、cron 改为 profile 默认不启用、web 非 root、补齐健康检查/日志轮转/资源限制、新增离线（air-gapped）镜像 tar 交付与 `deploy/deploy_offline.sh`。
-> 演进（2026-09）：域名配置收敛为**唯一配置源** `txxy_env.py`——抓取/入库/展示共用
-> `TXXY_PUBLIC_DOMAIN`；本地代理降为传输层开关 `TXXY_USE_LOCAL_PROXY`；数据库/CSV 改存
-> 相对路径，历史完整 URL 由展示层自动归一化（无需迁移）。本文多处 `REMOTE_ROOT_URL` /
-> `PUBLIC_ROOT` 写法已被该实现取代，以 `.env.example` 新注释与《部署使用手册》7.3 为准。
+> 演进（2026-09）：域名配置收敛为**唯一配置源** `txxy_env.py`——只保留
+> `TXXY_PUBLIC_DOMAIN`（业务域名）与 `TXXY_LOCAL_PROXY`（本地镜像，置空即直连）两个键，
+> 且都有默认值（零配置可跑）；数据库/CSV 改存相对路径，历史完整 URL 由展示层自动
+> 归一化（无需迁移）。本文早期章节的旧写法已被取代，以 `.env.example` 与
+> 《部署使用手册》7.3 为准。
 > 注：本页为**设计与决策**文档（为什么这么做），不与「数据总览大屏」文档合并；大屏相关汇总见 `数据总览大屏设计与优化总览.md`。
 
 > **配套操作文档**（具体怎么做，命令可直接复制执行）：
@@ -41,7 +42,7 @@
 
 `run_batch.py` 默认 `USE_LOCAL_PROXY=True`：抓取依赖**本机 Windows 程序 `web.exe`**（监听 `127.0.0.1:1024`），运行前自动启动、结束后关闭。**该程序是 Windows 可执行文件，Docker/Linux 容器内不存在**。
 
-好在代码已内置直连模式：`USE_LOCAL_PROXY=False` 时**完全不碰 web.exe**（`run_batch.py` 约第 386-401 行直连分支），改为直接访问 `REMOTE_ROOT_URL` 实际域名抓取，且入库链接始终使用 `REMOTE_ROOT_URL`（`--public` 参数）。
+好在代码已内置直连模式：`USE_LOCAL_PROXY=False` 时**完全不碰 web.exe**，抓取直连业务域名（`TXXY_PUBLIC_DOMAIN`），入库则恒为相对路径（不含域名）。
 
 > **结论：Docker 部署必须且只需运行 `python run_batch.py false`（关闭本地代理 + 直连域名）。**
 
@@ -75,7 +76,7 @@
 - **离线环境**：overlay 文件 `deploy/docker-compose.offline.yml` + 镜像 tar（由 `docker/build-offline.sh` 导出），见 13.3.2。
 - **定时抓取默认关闭**：cron 服务位于 `profiles: ["cron"]`，需 `docker compose --profile cron up -d` 启用（离线环境不要启用）。
 - **时区**：镜像内置 `TZ=Asia/Shanghai` + `tzdata`（`outputs/日期目录`、运行记录日期、cron 触发时间均依赖本地时区，否则容器内 UTC 会差 8 小时）。
-- **抓取模式**：`run_batch.py false` 直连 `REMOTE_ROOT_URL`；请求间隔等反爬参数保持代码默认（3s/页），不做放宽。
+- **抓取模式**：`run_batch.py false` 直连业务域名；请求间隔等反爬参数保持代码默认（3s/页），不做放宽。
 
 ## 4. 交付物清单（已创建）
 
@@ -279,7 +280,7 @@ exec cron -f                    # cron 前台运行, 容器不退出
 ### 4.5 docker/txxy_cron（草案）
 
 ```
-# 每日 01:00 全量抓取; false = 关闭本地代理, 直连 REMOTE_ROOT_URL
+# 每日 01:00 全量抓取; false = 不使用本地镜像, 直连业务域名
 0 1 * * * root cd /app && python -u run_batch.py false >> /proc/1/fd/1 2>&1
 ```
 
@@ -307,9 +308,9 @@ _verify_runs_ui.py
 ### 4.7 .env.example（草案）
 
 ```
-# ---- 业务域名与本地代理（唯一配置源 txxy_env.py；旧键 REMOTE_ROOT_URL / PUBLIC_ROOT 仍兼容识别）----
-# TXXY_PUBLIC_DOMAIN=https://txxy.com      # 唯一业务域名（代码默认即此值，通常无需配置）
-# TXXY_USE_LOCAL_PROXY=0                   # Docker/Linux 直连请设 0；本地 Windows 走代理才设 1
+# ---- 域名（唯一配置源 txxy_env.py；只有两个键，都有默认值，零配置可跑）----
+# TXXY_PUBLIC_DOMAIN=https://txxy.com      # 业务域名（代码默认即此值，通常无需配置）
+# TXXY_LOCAL_PROXY=                        # 本地镜像：置空=直连（Docker/Linux 即默认空）
 
 # ---- Web 服务 ----
 TXXY_WEB_HOST=0.0.0.0                 # 容器内必须 0.0.0.0 才能对外访问
@@ -335,20 +336,17 @@ TZ=Asia/Shanghai
 
 > 原则：能不改代码就不改；以下仅 1 处可选小改动。
 
-### 5.1 run_batch.py：REMOTE_ROOT_URL 支持环境变量覆盖（已由 txxy_env 演进取代，仅存档）
+### 5.1 抓取域名支持环境变量覆盖（已由 txxy_env 演进取代，仅存档）
 
-> 后续演进（2026-09）：域名默认值已收敛到项目根 `txxy_env.py`（`TXXY_PUBLIC_DOMAIN`），
+> 后续演进（2026-09）：域名默认值已收敛到项目根 `txxy_env.py`——只保留
+> `TXXY_PUBLIC_DOMAIN`（业务域名）与 `TXXY_LOCAL_PROXY`（本地镜像，置空即直连）两个键，
 > run_batch / scraper / web 只读不定义；本小节历史改动被取代。
 
-```python
-REMOTE_ROOT_URL = os.environ.get("REMOTE_ROOT_URL", "127.0.0.1:1024")
-```
-
-`.env` 一处管理域名，三处环境部署无需进容器改代码；已验证 env 覆盖生效、默认值不变。
+`.env` 一处管理域名，各环境部署无需进容器改代码。
 
 ### 5.2 其他
 
-- `web/config.py` 已原生支持 `PUBLIC_ROOT / TXXY_WEB_HOST / TXXY_WEB_PORT / POSTS_DB / OUTPUTS_DIR / DOWNLOADS_DIR` 环境变量，**无需改动**。
+- `web/config.py` 已原生支持 `TXXY_WEB_HOST / TXXY_WEB_PORT / POSTS_DB / OUTPUTS_DIR / DOWNLOADS_DIR` 等环境变量，**无需改动**。
 - `USE_LOCAL_PROXY` 通过 cron 命令参数 `false` 传入，**无需改动**。
 - 数据库路径 `scraper/run_recorder` 写 `项目根/db/posts.db`，容器内工作目录固定 `/app`，与 web 端 `POSTS_DB` 默认路径天然一致，**无需改动**。
 
@@ -361,7 +359,7 @@ REMOTE_ROOT_URL = os.environ.get("REMOTE_ROOT_URL", "127.0.0.1:1024")
 ```bash
 # 1) 准备配置（各环境相同）
 cd txxy_test
-cp .env.example .env          # 修改 REMOTE_ROOT_URL / PUBLIC_ROOT / TXXY_HOST_PORT
+cp .env.example .env          # 按需修改 TXXY_PUBLIC_DOMAIN / TXXY_HOST_PORT
 
 # 2) 一键构建并启动（默认：命名卷隔离，不启用抓取）
 docker compose up -d --build
@@ -515,9 +513,9 @@ docker compose exec web ls db/ outputs/ downloads/
 
 ## 10. 风险与注意事项
 
-1. **反爬风险**：容器直连 `REMOTE_ROOT_URL` 与 Windows 本地代理走同一域名，但出口 IP 不同（容器走宿主网络）。保持 3s/页间隔、并发 3、错峰 5s 不变；建议先小范围（单版块）试跑，确认不被拦截（`scraper.py` 检测到权限拦截会主动 `sys.exit(1)` 并提示）。
+1. **反爬风险**：容器与 Windows 本机访问的是同一业务域名，但出口 IP 不同（容器走宿主网络）。保持 3s/页间隔、并发 3、错峰 5s 不变；建议先小范围（单版块）试跑，确认不被拦截（`scraper.py` 检测到权限拦截会主动 `sys.exit(1)` 并提示）。
 2. **抓取耗时**：13 版块 × 100 页全量约 1300 请求 × 3s ≈ 65 分钟，3 并发下约 25-40 分钟；每日 01:00 定时足够，且断点续传机制会跳过已完成页（每天增量很快）。
-3. **web.exe 依赖已解除**：容器内不装、不碰 web.exe；`run_batch.py false` 直连。若 `REMOTE_ROOT_URL` 站点不可达，抓取会连续失败 3 页后停止并保留现场日志。
+3. **web.exe 依赖已解除**：容器内不装、不碰 web.exe；`run_batch.py false` 直连业务域名。若业务域名不可达，抓取会连续失败 3 页后停止并保留现场日志。
 4. **时区**：镜像已设 `TZ=Asia/Shanghai`；若目标主机在其它时区，改 `.env` 的 `TZ` 即可（注意 `outputs/日期目录` 与运行记录日期会随之变化）。
 5. **端口冲突**：宿主 18088 被占用时改 `.env` 的 `TXXY_HOST_PORT`（或改 compose 映射，如 `28088:8088`）。
 6. **资源限制**（可选）：抓取是 CPU/网络密集 + 多进程，可在 compose 里给 cron 服务加 `deploy.resources.limits`（如 memory 1g）。
@@ -531,9 +529,9 @@ docker compose exec web ls db/ outputs/ downloads/
 
 | # | 事项 | 默认建议 |
 |---|---|---|
-| 1 | 抓取模式改为 `USE_LOCAL_PROXY=False` 直连 `REMOTE_ROOT_URL` | 接受（Docker 无 web.exe，唯一可行） |
+| 1 | 抓取模式改为 `USE_LOCAL_PROXY=False` 直连业务域名 | 接受（Docker 无 web.exe，唯一可行） |
 | 2 | 唯一业务域名 `TXXY_PUBLIC_DOMAIN` | `https://txxy.com`（代码默认即此值，无需配置） |
-| 3 | 域名收敛为唯一配置源 `txxy_env.py` | 完成（替代原 REMOTE_ROOT_URL 的两处改动） |
+| 3 | 域名收敛为唯一配置源 `txxy_env.py` | 完成（默认值统一在 txxy_env.py，仅两个键） |
 | 4 | 定时抓取时间 | 每日 01:00；环境 A 部署后**停用宿主机计划任务**（`schtasks /Delete /TN "txxy_daily_batch" /F`），只保留容器 cron，避免同时写库 |
 | 5 | 下载功能是否纳入容器 | 初期不内置，`downloads/` 卷预留 |
 | 6 | 数据策略 | **2026-08-31 调整**：默认改为命名卷隔离（与宿主机目录无关）；共用宿主机 `db/posts.db` 保留为 `deploy/docker-compose.host-db.yml` overlay（环境 A 需要沿用本地数据时使用）；详见第 13 节 |
@@ -543,7 +541,7 @@ docker compose exec web ls db/ outputs/ downloads/
 
 ---
 
-> 按第 4 节清单的文件均已创建于项目根目录；第 5 节的最小代码改动（`run_batch.py` 支持 `REMOTE_ROOT_URL` env 覆盖）已完成。此后如需变更，直接编辑交付物文件即可。
+> 按第 4 节清单的文件均已创建于项目根目录；第 5 节的最小代码改动（抓取域名支持 env 覆盖）已完成。此后如需变更，直接编辑交付物文件即可。
 
 ## 12. 后续建议实现
 
@@ -773,7 +771,7 @@ docker run --rm -v txxy_db:/data -v "$(pwd):/backup" alpine \
 
 - **A**：默认隔离后，宿主机计划任务 `txxy_daily_batch` 与容器 cron 不会争抢同一个 SQLite（各写各的库），**冲突风险自然消除**；仅当使用 `host-db` overlay 时才需要停计划任务。
 - **B（WSL）**：若项目位于 `/mnt/d/...`（DrvFs），bind mount 性能很差；默认改命名卷后此问题规避。建议 WSL 环境优先用默认隔离方案。
-- 两者均应在 `.env` 校验业务域名（`TXXY_PUBLIC_DOMAIN`；历史键 `REMOTE_ROOT_URL`/`PUBLIC_ROOT` 兼容识别）为实际可访问域名（不能是本地代理地址）。
+- 两者均应在 `.env` 校验业务域名 `TXXY_PUBLIC_DOMAIN` 为实际可访问域名（不能是本地镜像地址）。
 
 #### 13.3.2 环境 C：私有离线 Linux（本次新增重点）
 
@@ -846,7 +844,7 @@ curl http://127.0.0.1:18088/api/health
 | 7 | **cron profile 化** | `profiles: ["cron"]` | 中 | 离线/纯展示场景不启 cron |
 | 8 | **init_db 并发** | 建议仅 web 初始化；cron 依赖 web 健康后再启动（`depends_on: service_healthy`） | 低 | 现为两容器各跑一次，幂等但存在竞争 |
 | 9 | **版本化 tag** | `vX.Y.Z-hash10` + `latest` | 高（离线必需） | 沿用 12.1 规范 |
-| 10 | **`.env` 校验** | 部署脚本校验 `REMOTE_ROOT_URL` 非空且非 `127.0.0.1:1024`（离线模式例外） | 中 | 避免拿着默认模板直接部署导致抓取全失败 |
+| 10 | **`.env` 校验** | 部署脚本校验 `TXXY_PUBLIC_DOMAIN` 非空且非本地地址（离线模式例外） | 中 | 避免拿着默认模板直接部署导致抓取全失败 |
 | 11 | **`.dockerignore` 补充** | 增加 `*.md`、`docs/`、`_*.png`、`_*.txt`、`docker/bundle/` 等 | 低 | 减小构建上下文 |
 | 12 | **离线产物不入库** | `.gitignore` 增加 `docker/bundle/` | 中 | 避免几百 MB tar 进版本库 |
 

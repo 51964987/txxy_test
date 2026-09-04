@@ -1,2 +1,2 @@
-# 每日 22:30 全量抓取; false = 关闭本地代理, 直连 REMOTE_ROOT_URL
+# 每日 22:30 全量抓取; false = 不使用本地镜像, 直连业务域名
 30 22 * * * root cd /app && python -u run_batch.py false >> /proc/1/fd/1 2>&1

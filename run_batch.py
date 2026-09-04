@@ -49,13 +49,12 @@ STAGGER_DELAY = 5
 # scraper.py 路径
 SCRAPER_SCRIPT = os.path.join(os.path.dirname(__file__), "scraper.py")
 
-# ---- 域名与代理：唯一配置源在项目根 txxy_env.py，此处只读不定义 ----
-# USE_LOCAL_PROXY：是否使用本地 1024 端口代理（web.exe）抓取。
-#   默认由 txxy_env 按环境决定（仅本地 Windows 开启，Docker / Linux 直连）；
-#   命令行可覆盖：python run_batch.py [true|false]。
-# 业务域名统一为 txxy_env.PUBLIC_DOMAIN —— 抓取与入库同源，本地代理仅是传输层
-# （scraper 子进程发起请求时经 txxy_env.to_fetch_url 自行处理，无需父进程透传）。
-USE_LOCAL_PROXY = txxy_env.USE_LOCAL_PROXY
+# ---- 域名与本地镜像：唯一配置源在项目根 txxy_env.py，此处只读不定义 ----
+# 全项目只有两个域名相关配置，且都有默认值（零配置可跑）：
+#   TXXY_PUBLIC_DOMAIN  业务域名（默认 https://txxy.com）
+#   TXXY_LOCAL_PROXY    本地镜像地址（本地 Windows 默认启用；置空=强制直连）
+# USE_LOCAL_PROXY 只由 TXXY_LOCAL_PROXY 是否有值推出，命令行 [true|false] 可临时覆盖。
+USE_LOCAL_PROXY = txxy_env.use_local_proxy()
 
 # 是否忽略断点进度强制重跑（--restart）：True 时所有版块从第 1 页重新抓取，
 # 当天该版块已生成的 CSV/进度文件会被删除重新生成（透传给各 scraper.py 子进程，见 scraper.py）
@@ -309,14 +308,19 @@ def run_scraper(fid: str, name: str, run_id: int = 0) -> tuple[str, str, bool, i
             # --restart：忽略断点进度，强制重跑该版块（scraper.py 会删除当天 CSV/进度文件后从头抓取）
             cmd.append("--restart")
         # 域名不再透传：子进程与父进程同一项目根，scraper 导入 txxy_env 时按环境与
-        # .env 自行取值。这里仅把本进程生效的代理开关显式传给子进程，
-        # 避免命令行覆盖（python run_batch.py false）在子进程里丢失。
+        # .env 自行取值。这里仅把本进程生效的本地镜像地址显式传给子进程——
+        # 置空即关闭，从而让命令行覆盖（python run_batch.py false）在子进程里不丢失。
+        proxy_addr = (
+            (txxy_env.LOCAL_PROXY or txxy_env.DEFAULT_LOCAL_PROXY)
+            if USE_LOCAL_PROXY
+            else ""
+        )
         # 批量运行时由本脚本统一汇总写运行记录，关闭子进程各自的落库，避免重复记录；
         # 同时把 run_id 传给子进程，子进程实时更新自己版块的进度明细
         env = {
             **os.environ,
             "SCRAPER_RECORD_RUN": "0",
-            "TXXY_USE_LOCAL_PROXY": "1" if USE_LOCAL_PROXY else "0",
+            "TXXY_LOCAL_PROXY": proxy_addr,
         }
         if run_id:
             env["SCRAPER_RUN_ID"] = str(run_id)
@@ -394,12 +398,12 @@ def main() -> None:
             print(f"[1024服务] web 服务启动失败，终止本次抓取: {e}", file=sys.stderr)
             print(
                 "[提示] 1024 端口启不起来时，可执行 python run_batch.py false"
-                + "（或设环境变量 TXXY_USE_LOCAL_PROXY=0）关闭本地代理，将直连业务域名重试",
+                + "（或在 .env 把 TXXY_LOCAL_PROXY 置空）关闭本地镜像，将直连业务域名重试",
                 file=sys.stderr,
             )
             sys.exit(1)
     else:
-        log(f"[1024服务] 本地代理开关已关闭（USE_LOCAL_PROXY=False），直连业务域名: {txxy_env.PUBLIC_DOMAIN}")
+        log(f"[1024服务] 本地镜像已关闭（USE_LOCAL_PROXY=False），直连业务域名: {txxy_env.PUBLIC_DOMAIN}")
 
     total = len(SECTIONS)
     print(f"共 {total} 个版块，并发数: {MAX_WORKERS}，启动间隔: {STAGGER_DELAY}s\n")

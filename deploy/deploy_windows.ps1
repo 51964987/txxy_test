@@ -55,7 +55,7 @@ Write-Host "==> [2/5] 准备 .env" -ForegroundColor Cyan
 if (-not (Test-Path .env)) {
     Copy-Item .env.example .env
     Write-Host "[提示] 已从 .env.example 生成 .env" -ForegroundColor Yellow
-    Write-Host "[提示] 请检查 REMOTE_ROOT_URL / PUBLIC_ROOT 是否为实际可访问域名" -ForegroundColor Yellow
+    Write-Host "[提示] 如需改业务域名，检查 TXXY_PUBLIC_DOMAIN（默认 https://txxy.com，一般无需改）" -ForegroundColor Yellow
 } else {
     Write-Host "[跳过] .env 已存在"
 }

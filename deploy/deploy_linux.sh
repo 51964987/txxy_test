@@ -55,7 +55,7 @@ echo "==> [2/5] 准备 .env"
 if [ ! -f .env ]; then
     cp .env.example .env
     echo "[提示] 已从 .env.example 生成 .env"
-    echo "[提示] 请检查 REMOTE_ROOT_URL / PUBLIC_ROOT 是否为实际可访问域名"
+    echo "[提示] 如需改业务域名，检查 TXXY_PUBLIC_DOMAIN（默认 https://txxy.com，一般无需改）"
 else
     echo "[跳过] .env 已存在"
 fi
