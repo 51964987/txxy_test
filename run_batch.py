@@ -307,12 +307,19 @@ def run_scraper(fid: str, name: str, run_id: int = 0) -> tuple[str, str, bool, i
             else ""
         )
         # 批量运行时由本脚本统一汇总写运行记录，关闭子进程各自的落库，避免重复记录；
-        # 同时把 run_id 传给子进程，子进程实时更新自己版块的进度明细
+        # 同时把 run_id 传给子进程，子进程实时更新自己版块的进度明细。
+        #
+        # 剔除 TZ：.env 里的 TZ=Asia/Shanghai 是给容器用的（IANA 时区名），
+        # 但本模块加载 .env 后它会进入 os.environ 并被子进程的 CRT 读取——
+        # Windows 不认 IANA 时区名，会把它误解析成 UTC+1，导致子进程
+        # datetime.now() 比本地时间早 7 小时（表现为 CSV/progress 文件名与日志
+        # 时间不符，凌晨运行还会写进前一天的日期目录）。
+        # 容器内的 TZ 由 Dockerfile 的 ENV 提供，不依赖 .env，剔除无副作用。
         env = {
-            **os.environ,
-            "SCRAPER_RECORD_RUN": "0",
-            "TXXY_LOCAL_PROXY": proxy_addr,
+            k: v for k, v in os.environ.items() if k != "TZ"
         }
+        env["SCRAPER_RECORD_RUN"] = "0"
+        env["TXXY_LOCAL_PROXY"] = proxy_addr
         if run_id:
             env["SCRAPER_RUN_ID"] = str(run_id)
         proc = subprocess.Popen(
