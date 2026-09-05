@@ -320,6 +320,9 @@ def run_scraper(fid: str, name: str, run_id: int = 0) -> tuple[str, str, bool, i
         }
         env["SCRAPER_RECORD_RUN"] = "0"
         env["TXXY_LOCAL_PROXY"] = proxy_addr
+        # 把本批次的起始时刻传给子进程：子进程的日志 / CSV / 进度文件都用它命名，
+        # 与批次本身落在同一日期目录（跨午夜不分裂），并和运行记录 run_date 对齐。
+        env[file_logger.RUN_BATCH_TS_ENV] = file_logger.run_batch_ts()
         if run_id:
             env["SCRAPER_RUN_ID"] = str(run_id)
         proc = subprocess.Popen(

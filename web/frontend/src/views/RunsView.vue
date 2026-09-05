@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { ElMessage } from 'element-plus'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { api, formatDuration, isAborted, type RunDetail, type RunSummary } from '../api'
 
 const dates = ref<RunSummary[]>([])
@@ -43,6 +43,8 @@ async function refreshQuiet() {
   try {
     const r = await api.runs()
     dates.value = r.dates
+    localProxyDefault.value = r.local_proxy_default
+    activePid.value = r.active_pid
     clampPage()
     if (activeDir.value) {
       const row = r.dates.find((d) => d.dir === activeDir.value)
@@ -83,6 +85,8 @@ async function loadList() {
   try {
     const r = await api.runs()
     dates.value = r.dates
+    localProxyDefault.value = r.local_proxy_default
+    activePid.value = r.active_pid
     clampPage()
     if (r.dates.length && !activeDir.value) {
       await showDetail(r.dates[0])
@@ -131,6 +135,144 @@ function statusText(s: string): string {
   return s
 }
 
+// ---- 启动抓取（全局按钮 + 参数弹窗，参考业界 Run with parameters） ----
+
+/** 是否有运行中的批次：全项目同时只跑一个批次，运行中时按钮切为「强制终止」 */
+const hasActive = computed(() => dates.value.some((d) => d.status === 'running'))
+
+/** Web 端启动且仍存活的抓取进程 pid；null 表示批次进程已消亡（孤儿）或非 Web 启动 */
+const activePid = ref<number | null>(null)
+
+/** 本地镜像默认开关：来自后端（txxy_env.use_local_proxy，与 run_batch 配置区同源） */
+const localProxyDefault = ref(true)
+
+const startVisible = ref(false)
+const starting = ref(false)
+const startForm = reactive({ use_local_proxy: true, restart: false })
+
+/** 将要执行的命令行预览（对应 run_batch.py 入参说明） */
+const startCmd = computed(
+  () =>
+    `python run_batch.py ${startForm.use_local_proxy ? 'true' : 'false'}` +
+    (startForm.restart ? ' --restart' : ''),
+)
+
+function openStartDialog() {
+  startForm.use_local_proxy = localProxyDefault.value
+  startForm.restart = false
+  startVisible.value = true
+}
+
+async function confirmStart() {
+  starting.value = true
+  try {
+    await api.startRun({
+      use_local_proxy: startForm.use_local_proxy,
+      restart: startForm.restart,
+    })
+    ElMessage.success('抓取批次已启动，稍后列表会出现新的运行记录')
+    startVisible.value = false
+    void refreshQuiet()
+  } catch (e) {
+    if (isAborted(e)) return
+    ElMessage.error(`启动失败: ${(e as Error).message}`)
+  } finally {
+    starting.value = false
+  }
+}
+
+/** 强制终止当前批次（业界 Abort）：进程消亡的孤儿同样适用（仅清理记录），
+ *  终止后防重解除，可立即重新「开始抓取」 */
+async function confirmStop() {
+  const orphan = activePid.value == null
+  try {
+    await ElMessageBox.confirm(
+      orphan
+        ? '抓取进程已消亡（可能是启动失败），将把运行记录标记为「手动中断」以解除防重。是否继续？'
+        : '将强制终止当前抓取进程（含全部版块子进程），运行记录标记为「手动中断」。是否继续？',
+      '强制终止',
+      { confirmButtonText: '终止', cancelButtonText: '取消', type: 'warning' },
+    )
+  } catch {
+    return // 用户取消
+  }
+  try {
+    const r = await api.stopRun()
+    ElMessage.success(
+      r.killed ? '已终止抓取进程，现在可以重新发起抓取' : '批次进程已消亡，已清理运行记录',
+    )
+  } catch (e) {
+    if (isAborted(e)) return
+    ElMessage.error(`终止失败: ${(e as Error).message}`)
+  }
+  void refreshQuiet()
+}
+
+// ---- 运行日志抽屉（参考下载中心详情抽屉；运行中每 2s 轮询准实时） ----
+const LOG_POLL_INTERVAL = 2000
+
+const logVisible = ref(false)
+const logLines = ref<string[]>([])
+const logTruncated = ref(false)
+const logSource = ref('batch')
+const logSources = ref<{ label: string; value: string }[]>([])
+const logRowStatus = ref('')
+const logBoxRef = ref()
+let logTimer: number | null = null
+let logTarget: { runId?: number; date: string } | null = null
+
+async function openLogDrawer(row: RunSummary) {
+  logTarget = { runId: row.id, date: row.dir }
+  logRowStatus.value = row.status
+  logVisible.value = true
+  logSource.value = 'batch'
+  logLines.value = []
+  // 日志源：批次总日志 + 各版块日志（sections 来自明细接口；日志回退记录也能取到）
+  try {
+    const d = row.id ? await api.runDetailById(row.id) : await api.runDetail(row.dir)
+    logSources.value = [
+      { label: '批次总日志', value: 'batch' },
+      ...d.sections.map((s) => ({ label: `${s.fid} ${s.name}`, value: s.fid })),
+    ]
+  } catch {
+    logSources.value = [{ label: '批次总日志', value: 'batch' }]
+  }
+  stopLogPoll()
+  void fetchLog()
+  // 仅运行中的批次轮询；已结束的日志不会再变，拉一次即可
+  if (row.status === 'running') logTimer = window.setInterval(fetchLog, LOG_POLL_INTERVAL)
+}
+
+async function fetchLog() {
+  if (!logTarget) return
+  try {
+    const r = await api.runLog({
+      run_id: logTarget.runId,
+      date: logTarget.runId == null ? logTarget.date : undefined,
+      log: logSource.value,
+    })
+    logLines.value = r.lines
+    logTruncated.value = r.truncated
+    await nextTick()
+    const box = (logBoxRef.value as { textarea?: HTMLTextAreaElement } | undefined)?.textarea
+    if (box) box.scrollTop = box.scrollHeight
+  } catch {
+    /* 单次拉取失败忽略（如日志文件尚未生成），下轮轮询重试 */
+  }
+}
+
+function stopLogPoll() {
+  if (logTimer !== null) {
+    window.clearInterval(logTimer)
+    logTimer = null
+  }
+}
+
+watch(logVisible, (v) => {
+  if (!v) stopLogPoll()
+})
+watch(logSource, () => void fetchLog())
+
 function sectionType(s: string): 'success' | 'danger' | 'primary' | 'info' {
   if (s === 'ok') return 'success'
   if (s === 'fail') return 'danger'
@@ -156,6 +298,7 @@ onBeforeUnmount(() => {
     clearInterval(pollTimer)
     pollTimer = null
   }
+  stopLogPoll()
   document.removeEventListener('visibilitychange', onVisibilityChange)
 })
 </script>
@@ -163,7 +306,8 @@ onBeforeUnmount(() => {
 <template>
   <div v-loading="loading">
     <div class="page-card" style="margin-bottom: 16px">
-      <div class="note">
+      <div class="head-row">
+        <div class="note">
         <el-icon style="margin-right: 6px"><InfoFilled /></el-icon>
         <span>
           运行记录由 <code>run_batch</code> / <code>scraper</code> 运行开始时创建、逐页上报进度并实时落库
@@ -174,6 +318,29 @@ onBeforeUnmount(() => {
           改动前仅留日志的历史记录会回退解析 <code>outputs/&lt;日期&gt;/</code> 的日志展示。
           记录超过 5 条时自动分页，每页 5 条。
         </span>
+        </div>
+        <el-tooltip
+          v-if="!hasActive"
+          content="启动 run_batch 全量抓取（遍历所有版块）"
+          placement="top"
+        >
+          <el-button type="primary" class="start-btn" @click="openStartDialog">
+            <el-icon style="margin-right: 4px"><VideoPlay /></el-icon>
+            开始抓取
+          </el-button>
+        </el-tooltip>
+        <el-tooltip
+          v-else
+          :content="activePid == null
+            ? '抓取进程已消亡（可能启动失败），点击清理运行记录以解除防重'
+            : '强制终止当前抓取进程（含全部子进程），之后可重新发起'"
+          placement="top"
+        >
+          <el-button type="danger" plain class="start-btn" @click="confirmStop">
+            <el-icon style="margin-right: 4px"><CircleClose /></el-icon>
+            强制终止
+          </el-button>
+        </el-tooltip>
       </div>
 
       <el-table :data="pagedDates" highlight-current-row style="width: 100%" @current-change="onCurrentChange">
@@ -215,6 +382,15 @@ onBeforeUnmount(() => {
         <el-table-column label="耗时" :min-width="65">
           <template #default="{ row }">{{ formatDuration(row.duration) }}</template>
         </el-table-column>
+        <el-table-column label="操作" :min-width="70" fixed="right">
+          <template #default="{ row }">
+            <el-tooltip content="查看批次 / 版块运行日志（运行中每 2s 准实时刷新）" placement="top">
+              <el-button link type="primary" @click="openLogDrawer(row)">
+                <el-icon style="margin-right: 3px"><Document /></el-icon>日志
+              </el-button>
+            </el-tooltip>
+          </template>
+        </el-table-column>
       </el-table>
 
       <div class="runs-pager" v-if="dates.length > PAGE_SIZE">
@@ -227,6 +403,45 @@ onBeforeUnmount(() => {
           @current-change="onPageChange"
         />
       </div>
+
+      <!-- 启动抓取：参数与 run_batch.py 命令行一一对应（业界 Run with parameters） -->
+      <el-dialog v-model="startVisible" title="启动抓取批次" width="520px">
+        <div class="start-cmd">{{ startCmd }}</div>
+        <el-checkbox v-model="startForm.use_local_proxy">使用本地镜像代理（true）</el-checkbox>
+        <div class="param-desc">
+          走本机 1024 镜像访问；取消勾选则直连业务域名（对应入参 USE_LOCAL_PROXY，
+          默认勾选状态来自 .env 配置）
+        </div>
+        <el-checkbox v-model="startForm.restart">强制重跑（--restart）</el-checkbox>
+        <div class="param-desc warn">
+          忽略断点进度：当天已生成的 CSV / 进度文件会被删除并重新生成，请确认后再勾选
+        </div>
+        <template #footer>
+          <el-button @click="startVisible = false">取消</el-button>
+          <el-button type="primary" :loading="starting" @click="confirmStart">启动</el-button>
+        </template>
+      </el-dialog>
+
+      <!-- 运行日志抽屉：批次总日志 / 各版块日志切换，运行中每 2s 轮询准实时 -->
+      <el-drawer v-model="logVisible" title="运行日志" size="62%">
+        <div class="log-toolbar">
+          <el-select v-model="logSource" size="small" style="width: 280px">
+            <el-option v-for="s in logSources" :key="s.value" :label="s.label" :value="s.value" />
+          </el-select>
+          <span v-if="logRowStatus === 'running'" class="log-live">
+            ● 实时更新（{{ LOG_POLL_INTERVAL / 1000 }}s）
+          </span>
+          <span v-if="logTruncated" class="log-truncated">日志过长，仅显示尾部 {{ logLines.length }} 行</span>
+        </div>
+        <el-input
+          ref="logBoxRef"
+          :model-value="logLines.join('\n')"
+          type="textarea"
+          :rows="30"
+          readonly
+          class="log-box"
+        />
+      </el-drawer>
     </div>
 
     <div class="page-card" v-loading="detailLoading">
@@ -302,6 +517,66 @@ onBeforeUnmount(() => {
   font-size: 13px;
   margin-bottom: 14px;
   line-height: 1.6;
+}
+
+/* 顶部行：说明文案 + 全局「开始抓取」按钮（业界布局：主操作放右上） */
+.head-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.head-row .note {
+  flex: 1;
+}
+
+.start-btn {
+  flex-shrink: 0;
+}
+
+/* 启动弹窗：命令行预览 + 参数说明 */
+.start-cmd {
+  font-family: Consolas, monospace;
+  font-size: 12px;
+  background: #f2f4f8;
+  padding: 8px 10px;
+  border-radius: 6px;
+  margin-bottom: 14px;
+  color: #1f2d3d;
+}
+
+.param-desc {
+  color: #909399;
+  font-size: 12px;
+  line-height: 1.6;
+  margin: 2px 0 14px 24px;
+}
+
+.param-desc.warn {
+  color: #e6a23c;
+}
+
+/* 运行日志抽屉 */
+.log-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.log-live {
+  color: #67c23a;
+  font-size: 12px;
+}
+
+.log-truncated {
+  color: #909399;
+  font-size: 12px;
+}
+
+.log-box :deep(textarea) {
+  font-family: Consolas, monospace;
+  font-size: 12px;
 }
 
 .note code {

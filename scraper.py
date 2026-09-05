@@ -30,9 +30,11 @@ AUTO_DETECT_END_PAGE = False             # 是否动态获取末页页码（Fals
 FORCE_RESTART = False                    # 是否忽略断点进度强制重跑（--restart）
 
 # 输出目录 & 文件（统一放在 outputs/日期/ 下：最外层 outputs，再到日期目录）
-_OUTPUT_DATE = datetime.now().strftime("%Y%m%d")
-# 批次时间戳：本次运行起始时刻，格式 YYYYMMDD_HHMMSS，贯穿整个进程
-_RUN_BATCH_TS = datetime.now().strftime("%Y%m%d_%H%M%S")
+# 批次时间戳复用 file_logger 里的唯一定义（run_batch 通过环境变量注入，单跑时取当前时刻），
+# 使同批次的 CSV / 进度 / 日志共享同一时间戳、落在同一日期目录——此前此处另算一份，
+# 跨午夜时子进程产物会与批次本身分处两个日期目录，断点续传也读不到之前的进度。
+_RUN_BATCH_TS = file_logger.run_batch_ts()
+_OUTPUT_DATE = _RUN_BATCH_TS[:8]
 OUTPUT_DIR = f"outputs/{_OUTPUT_DATE}"
 OUTPUT_FILE = f"{OUTPUT_DIR}/{FID}_output_{_RUN_BATCH_TS}.csv"
 PROGRESS_FILE = f"{OUTPUT_DIR}/{FID}_progress_{_RUN_BATCH_TS}.txt"
@@ -694,7 +696,7 @@ def _apply_cli_args() -> None:
     ROOT_URL = txxy_env.PUBLIC_DOMAIN  # pyright: ignore[reportConstantRedefinition]
     PUBLIC_URL = ROOT_URL  # pyright: ignore[reportConstantRedefinition]
     BASE_URL = ROOT_URL + "/thread0806.php"  # pyright: ignore[reportConstantRedefinition]
-    OUTPUT_DIR = f"outputs/{datetime.now().strftime('%Y%m%d')}"  # pyright: ignore[reportConstantRedefinition]
+    OUTPUT_DIR = f"outputs/{_OUTPUT_DATE}"  # pyright: ignore[reportConstantRedefinition]
     OUTPUT_FILE = f"{OUTPUT_DIR}/{FID}_output_{_RUN_BATCH_TS}.csv"  # pyright: ignore[reportConstantRedefinition]
     PROGRESS_FILE = f"{OUTPUT_DIR}/{FID}_progress_{_RUN_BATCH_TS}.txt"  # pyright: ignore[reportConstantRedefinition]
 

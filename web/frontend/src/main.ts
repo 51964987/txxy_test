@@ -6,7 +6,7 @@ import zhCn from 'element-plus/es/locale/lang/zh-cn'
 import {
   Aim, ArrowRight, CaretTop, ChatDotRound, CircleCheck, CircleClose, Clock, Coin, Collection,
   DataLine, Delete, Document, Download, Expand, Files, Fold, Folder, FolderOpened, FullScreen,
-  InfoFilled, List, Loading, Menu, Odometer, Refresh, Search, Star, Timer, TrendCharts, User,
+  InfoFilled, List, Loading, Menu, Odometer, Refresh, Search, Star, Timer, TrendCharts, User, VideoPlay,
 } from '@element-plus/icons-vue'
 import 'element-plus/dist/index.css'
 
@@ -24,7 +24,7 @@ app.use(ElementPlus, { locale: zhCn })
 for (const [key, component] of Object.entries({
   Aim, ArrowRight, CaretTop, ChatDotRound, CircleCheck, CircleClose, Clock, Coin, Collection,
   DataLine, Delete, Document, Download, Expand, Files, Fold, Folder, FolderOpened, FullScreen,
-  InfoFilled, List, Loading, Menu, Odometer, Refresh, Search, Star, Timer, TrendCharts, User,
+  InfoFilled, List, Loading, Menu, Odometer, Refresh, Search, Star, Timer, TrendCharts, User, VideoPlay,
 })) {
   app.component(key, component)
 }

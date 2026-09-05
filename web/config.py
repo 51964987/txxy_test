@@ -105,3 +105,10 @@ def fid_name(fid: str) -> str:
     """版块 ID → 名称。唯一映射在 txxy_env.SECTIONS，抓取端（run_batch）与展示端
     共用同一份——此前各存一份、靠注释互相提醒「保持一致」，属典型手工同步债。"""
     return _TXXY_ENV.fid_name(fid)
+
+
+def use_local_proxy() -> bool:
+    """是否启用本地镜像代理：唯一实现在 txxy_env.use_local_proxy()，此处只转发。
+    run_batch 配置区同源（USE_LOCAL_PROXY = txxy_env.use_local_proxy()），
+    Web 端触发抓取时把它返回给前端做「启动抓取」弹窗的默认勾选状态。"""
+    return _TXXY_ENV.use_local_proxy()

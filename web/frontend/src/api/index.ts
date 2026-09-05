@@ -465,7 +465,19 @@ export const api = {
     /** 列排序方向：asc / desc；为空表示不按列排序 */
     sort_order?: string
   }) => get<PostsPage>('/posts', p as Record<string, string | number | undefined>),
-  runs: () => get<{ dates: RunSummary[] }>('/runs'),
+  runs: () =>
+    get<{ dates: RunSummary[]; local_proxy_default: boolean; active_pid: number | null }>('/runs'),
+  /** 启动一次 run_batch 全量抓取（参数与 run_batch 命令行一一对应） */
+  startRun: (p: { use_local_proxy: boolean; restart: boolean }) =>
+    post<{ started: boolean; pid: number }>('/runs/start', p),
+  /** 强制终止当前批次：杀进程树 + running 记录落为「手动中断」，之后可重新启动 */
+  stopRun: () => post<{ stopped: boolean; killed: boolean; records: number }>('/runs/stop'),
+  /** 读取一次运行的日志尾部（log: batch=总日志 / web=启动日志 / fid=版块日志） */
+  runLog: (p: { run_id?: number; date?: string; log?: string }) =>
+    get<{ lines: string[]; truncated: boolean; size: number; file: string }>(
+      '/runs/log',
+      p as Record<string, string | number | undefined>,
+    ),
   runDetail: (dir: string) => get<RunDetail>(`/runs/${dir}`),
   runDetailById: (id: number) => get<RunDetail>(`/runs/detail/${id}`),
   resources: () => get<Resources>('/resources'),

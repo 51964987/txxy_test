@@ -937,9 +937,71 @@ def posts_export(
 @router.get("/runs")
 def runs_list() -> dict[str, Any]:
     def _calc():
-        return {"dates": runs.list_runs()}
+        return {
+            "dates": runs.list_runs(),
+            # 抓取触发弹窗的默认参数：与 run_batch 配置区同源（txxy_env.use_local_proxy）
+            "local_proxy_default": config.use_local_proxy(),
+            # Web 端启动且仍存活的抓取进程 pid：前端据此区分「终止进程」与「清理孤儿」
+            "active_pid": runs.active_pid(),
+        }
 
     return db.cached("runs", _calc)
+
+
+class RunStartReq(BaseModel):
+    """启动抓取请求体：两个布尔与 run_batch 命令行参数一一对应。
+
+    use_local_proxy → USE_LOCAL_PROXY（true=走本地镜像，false=直连业务域名）；
+    restart → --restart（忽略断点进度，当天 CSV/进度文件删除重新生成）。
+    """
+
+    use_local_proxy: bool
+    restart: bool
+
+
+@router.post("/runs/start")
+def runs_start(req: RunStartReq) -> dict[str, Any]:
+    """启动一次 run_batch 全量抓取（业界 Run with parameters）。
+
+    全项目同时只跑一个抓取批次，故无行级重跑；409 = 已有运行中的批次（防并发）。
+    子进程拉起后立即返回，新运行记录由脚本自建，前端轮询可见。
+    """
+    try:
+        return runs.start_run(req.use_local_proxy, req.restart)
+    except ValueError as e:
+        raise HTTPException(409, str(e)) from e
+
+
+@router.post("/runs/stop")
+def runs_stop() -> dict[str, Any]:
+    """强制终止当前抓取批次（业界 Abort）：杀进程树 + running 记录落为 cancelled。
+
+    进程已消亡的孤儿同样适用（仅清理记录），终止后可立即重新「开始抓取」；
+    404 = 没有 Web 端启动的批次且无 running 记录可清理。
+    """
+    try:
+        return runs.stop_run()
+    except LookupError as e:
+        raise HTTPException(404, str(e)) from e
+
+
+@router.get("/runs/log")
+def runs_log(
+    run_id: int | None = None,
+    date: str | None = None,
+    log: str = "batch",
+) -> dict[str, Any]:
+    """读取一次运行的日志尾部（抽屉准实时展示：batch 总日志 / web 启动日志 / scraper_<fid>）。
+
+    404 = 记录与日志都不存在；日志回退记录（无 id）用 date 参数定位。
+    注意必须声明在 /runs/{date_str} 通配路由之前，否则 log 会被吞成日期参数。
+    """
+    try:
+        return runs.get_run_log(run_id=run_id, date=date, log=log)
+    except LookupError as e:
+        raise HTTPException(404, str(e)) from e
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
 
 
 @router.get("/runs/detail/{run_id}")

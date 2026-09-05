@@ -47,10 +47,25 @@ RETENTION_DAYS = 3
 # 日期目录名（YYYYMMDD）匹配，用于定位 outputs/ 下的按日目录
 _DIR_RE = re.compile(r"^\d{8}$")
 
+# 批次时间戳环境变量：run_batch 启动 scraper 子进程时注入本批次的起始时刻，
+# 使同批次所有产物（日志 / CSV / 进度）共享同一时间戳与日期目录。
+# 不注入时各进程自行取「当前时刻」——跨午夜的批次就会分裂到两个日期目录，
+# 与运行记录 run_date（批次启动日）不一致，断点续传也读不到之前的进度。
+RUN_BATCH_TS_ENV = "TXXY_RUN_BATCH_TS"
+
+
+def run_batch_ts() -> str:
+    """本次运行的批次时间戳（YYYYMMDD_HHMMSS），供 run_batch 传给子进程复用。"""
+    return _run_batch_ts
+
 
 def log_dir() -> str:
-    """返回当天日志目录 outputs/YYYYMMDD/"""
-    return os.path.join(LOG_ROOT, datetime.now().strftime("%Y%m%d"))
+    """返回本次运行的日志目录 outputs/YYYYMMDD/。
+
+    日期取自批次时间戳（而非当前时刻）：跨午夜的批次，其子进程在次日启动，
+    若按「当前时刻」取目录就会与批次本身分处两个目录。
+    """
+    return os.path.join(LOG_ROOT, _run_batch_ts[:8])
 
 
 class _Tee:
@@ -151,8 +166,12 @@ _raw_mode = False
 _program = ""
 
 # 本次运行（批次）起始时间戳：格式 YYYYMMDD_HHMMSS，用于日志/数据文件名
-# 贯穿整个进程，保证同一次运行中所有文件共享同一批次时间（而非各自取实时时间）
-_run_batch_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+# 贯穿整个进程，保证同一次运行中所有文件共享同一批次时间（而非各自取实时时间）。
+# 子进程（run_batch → scraper）靠 RUN_BATCH_TS_ENV 环境变量沿用父批次的时刻，
+# 否则跨进程不连续、跨午夜还会把同批次产物分到两个日期目录（见 RUN_BATCH_TS_ENV 说明）。
+_run_batch_ts = os.environ.get(RUN_BATCH_TS_ENV, "").strip() or datetime.now().strftime(
+    "%Y%m%d_%H%M%S"
+)
 
 
 def _add_timestamps(data: str) -> str:

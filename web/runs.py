@@ -11,6 +11,9 @@
   否则回退为同目录下 scraper_<fid>_<YYYYMMDD>.log，按 __SUMMARY__ 机器行统计。
 """
 import re
+import sqlite3
+import subprocess
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -285,7 +288,9 @@ def _parse_run_batch_log(path: Path) -> dict[str, Any]:
 
 
 def _scraper_duration(date_dir: Path, fid: str) -> int | None:
-    path = date_dir / f"scraper_{fid}_{date_dir.name}.log"
+    path = _latest_log(date_dir, f"scraper_{fid}_{date_dir.name}*.log")
+    if path is None:
+        return None
     if not path.is_file():
         return None
     first_ts = last_ts = None
@@ -358,8 +363,8 @@ def get_run_detail(date_str: str) -> dict[str, Any]:
     if detail:
         return detail
     date_dir = config.OUTPUTS_DIR / date_str
-    rb = date_dir / f"run_batch_{date_str}.log"
-    if rb.is_file():
+    rb = _latest_log(date_dir, f"run_batch_{date_str}*.log")
+    if rb is not None and rb.is_file():
         parsed = _parse_run_batch_log(rb)
         # 从同目录 scraper 日志补齐各版块耗时
         for s in parsed["sections"]:
@@ -402,3 +407,276 @@ def list_runs() -> list[dict[str, Any]]:
     # 整体按日期倒序；同日中数据库记录（有 id）在前，日志回退项（无 id）在后
     out.sort(key=lambda r: (r["dir"], r.get("id") is not None), reverse=True)
     return out
+
+
+# ==================== 运行日志读取（tail 模式，配合前端轮询准实时） ====================
+
+# 只读尾部：日志可达数十 MB，全量读既慢又没必要，前端只需最新进展
+_LOG_TAIL_BYTES = 256 * 1024
+_LOG_MAX_LINES = 500
+# 时间窗口上界容差（秒）：批次写完最后心跳后还会再写几行（如日志清理输出），
+# 用心跳时间当硬上界会把批次自己的主日志排除掉（实测差 2 秒即丢失）
+_LOG_WINDOW_SLACK = 300
+
+
+def _latest_log(date_dir: Path, pattern: str) -> Path | None:
+    """日期目录下匹配 pattern 的最新日志文件。
+
+    run_batch / scraper 的文件名带启动时刻后缀（file_logger 生成，
+    如 run_batch_20260905_235303.log，同日多次运行各一个、互不覆盖），
+    取修改时间最新者；glob 同时兼容旧版纯日期命名（run_batch_20260905.log）。
+    """
+    candidates = sorted(date_dir.glob(pattern), key=lambda f: f.stat().st_mtime, reverse=True)
+    return candidates[0] if candidates else None
+
+
+def _windowed_log(
+    pattern: str, since: str | None = None, until: str | None = None
+) -> Path | None:
+    """按批次的运行时间窗口 [since, until] 定位日志（跨日期目录 glob，取最新者）。
+
+    为什么不看日期目录：file_logger 按**进程启动时刻**建日期目录，跨午夜的批次
+    （23:53 启动、跑过零点）其子进程日志落在次日目录，而运行记录的 run_date 是
+    批次启动日——按目录定位要么漏掉跨天版块（0 行），要么命中上一批次在同目录
+    留下的同名日志（拿到 3 行的旧日志，两种情况实际都发生过）。
+    按时间窗口定位才准确：since = 批次 created_at，
+    until = 批次最后心跳（运行中不设上界，日志仍在增长，取最新即可）。
+    """
+    candidates = sorted(
+        config.OUTPUTS_DIR.glob(pattern),
+        key=lambda f: f.stat().st_mtime,
+        reverse=True,
+    )
+
+    def _ts(text: str) -> float | None:
+        try:
+            return datetime.fromisoformat(text).timestamp()
+        except ValueError:
+            return None
+
+    start = _ts(since) if since else None
+    raw_end = _ts(until) if until else None
+    end = raw_end + _LOG_WINDOW_SLACK if raw_end is not None else None
+    if start is not None:
+        candidates = [c for c in candidates if c.stat().st_mtime >= start]
+    if end is not None:
+        candidates = [c for c in candidates if c.stat().st_mtime <= end]
+    return candidates[0] if candidates else None
+
+
+def _tail_lines(path: Path) -> dict[str, Any]:
+    """读日志文件尾部（末尾 _LOG_TAIL_BYTES / _LOG_MAX_LINES 行），供抽屉实时展示。
+
+    返回 {lines, truncated, size}；截断时丢弃首个大概率残缺的半行，前端有提示位。
+    """
+    if not path.is_file():
+        return {"lines": [], "truncated": False, "size": 0, "missing": True}
+    size = path.stat().st_size
+    with open(path, "rb") as f:
+        if size > _LOG_TAIL_BYTES:
+            _ = f.seek(size - _LOG_TAIL_BYTES)
+            data = f.read()
+            lines = data.decode("utf-8", errors="replace").splitlines()[1:]  # 丢残缺半行
+            truncated = True
+        else:
+            data = f.read()
+            lines = data.decode("utf-8", errors="replace").splitlines()
+            truncated = False
+    if len(lines) > _LOG_MAX_LINES:
+        lines = lines[-_LOG_MAX_LINES:]
+        truncated = True  # 行数超限同样丢弃了开头，前端提示位要一致
+    return {"lines": lines, "truncated": truncated, "size": size}
+
+
+def get_run_log(
+    run_id: int | None = None, date: str | None = None, log: str = "batch"
+) -> dict[str, Any]:
+    """读取一次运行的日志尾部。日志源由 log 参数决定：
+    - batch（默认）：outputs/<日期>/run_batch_<日期>.log（批次总日志，含转发的子进程输出）
+    - web：outputs/run_batch_web.log（Web 端触发的启动期输出，含启动失败原因）
+    - 其余值视为版块 fid：outputs/<日期>/scraper_<fid>_<日期>.log
+
+    run_id 从库里反查运行日期；日志回退记录（无 id，纯历史日志）直接传 date。
+    """
+    created_at: str | None = None
+    # 运行中的批次不设时间窗口上界（日志仍在增长）；已结束的用最后心跳收口
+    until: str | None = None
+    if run_id is not None:
+        rows = db.query(
+            "SELECT run_date, created_at, updated_at, status FROM run_days WHERE id = ?",
+            (run_id,),
+        )
+        if not rows:
+            raise LookupError(f"未找到运行记录 ID {run_id}")
+        date = str(rows[0]["run_date"])
+        created_at = str(rows[0]["created_at"] or "") or None
+        if rows[0]["status"] != "running":
+            until = str(rows[0]["updated_at"] or "") or None
+    if not date or not (len(date) == 8 and date.isdigit()):
+        raise ValueError("需要 run_id 或 8 位日期（YYYYMMDD）来定位日志")
+    date_dir = config.OUTPUTS_DIR / date
+    def _lookup(pattern_all: str, pattern_day: str) -> Path | None:
+        # 数据库记录有批次时间窗口 → 跨目录按窗口定位（精确，含跨天场景）；
+        # 日志回退记录（无 id / 无窗口）→ 退化为本日期目录内匹配，避免串到其它批次
+        if created_at:
+            return _windowed_log(pattern_all, created_at, until)
+        return _latest_log(date_dir, pattern_day)
+
+    if log == "batch":
+        path = _lookup("*/run_batch_*.log", f"run_batch_{date}*.log")
+    elif log == "web":
+        path = config.OUTPUTS_DIR / _WEB_LOG
+    else:
+        path = _lookup(f"*/scraper_{log}_*.log", f"scraper_{log}_{date}*.log")
+    if path is None:
+        return {"lines": [], "truncated": False, "size": 0, "missing": True, "file": ""}
+    result = _tail_lines(path)
+    result["file"] = str(path)
+    return result
+
+
+# ==================== Web 端触发抓取（业界 Run with parameters / Abort） ====================
+
+# Web 触发启动的进程 pid 与输出留痕（放 outputs/，与 run_batch 自身日志同目录）
+_PID_FILE = "run_batch_web.pid"
+_WEB_LOG = "run_batch_web.log"
+
+
+def _pid_path() -> Path:
+    return config.OUTPUTS_DIR / _PID_FILE
+
+
+def active_pid() -> int | None:
+    """Web 端启动的抓取进程 pid（进程已消亡或 pid 被无关进程复用时返回 None）。
+
+    pid 持久化在磁盘文件——Web 服务重启后仍可定位并终止批次
+    （业界 Jenkins abort 语义：可终止状态不随控制器重启丢失）。
+    """
+    p = _pid_path()
+    if not p.is_file():
+        return None
+    try:
+        pid = int(p.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return None
+    try:
+        import psutil
+
+        if not psutil.Process(pid).name().lower().startswith("python"):
+            return None  # pid 已被复用为无关进程，不可误杀
+    except Exception:
+        return None
+    return pid
+
+
+def has_active_run() -> bool:
+    """是否存在「活的」运行中批次（Web 端触发前的防并发检查）。
+
+    口径与列表展示一致：running 但超过 RUNNING_STALE_SECONDS 无心跳的记录
+    属进程消亡残留（孤儿降级），不算活——它们本来就需要重新跑。
+    并发跑两个抓取批次会同时写同一批 CSV/SQLite 与运行记录，故拒绝。
+    """
+    if not _db_ready():
+        return False
+    rows = db.query(
+        "SELECT id, status, created_at, updated_at FROM run_days WHERE status = 'running'"
+    )
+    return any(not _running_stale(dict(r)) for r in rows)
+
+
+def start_run(use_local_proxy: bool, restart: bool) -> dict[str, Any]:
+    """启动一次 run_batch 全量抓取（业界 Run with parameters）。
+
+    全项目同时只跑一个抓取批次（run_batch 遍历全部版块），无需行级重跑；
+    两个参数与 run_batch 命令行一一对应：
+    - use_local_proxy → USE_LOCAL_PROXY（true=走本地 1024 镜像，false=直连业务域名），
+      显式传值而非「不传」，语义清晰且不受配置区默认值变化影响；
+    - restart → --restart（忽略断点进度，当天已生成的 CSV/进度文件删除重新生成）。
+
+    以子进程拉起（脚本运行开始自建 running 记录并写 outputs/<日期>/ 日志），
+    Web 进程不等待、不接管其输出。前端 4 秒轮询 + 列表 5 秒缓存，新记录最迟十余秒出现。
+    防重不过以 ValueError 抛出（消息直接面向用户），由 API 层转 409。
+    """
+    if has_active_run():
+        raise ValueError("已有运行中的抓取批次，请等其完成后再触发（避免并发抓取互踩数据）")
+
+    cmd = [sys.executable, "-X", "utf8", "run_batch.py", "true" if use_local_proxy else "false"]
+    if restart:
+        cmd.append("--restart")
+    # CREATE_NO_WINDOW：Web 服务为后台进程，避免每次触发弹出控制台窗口
+    flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+    # 输出留痕：脚本自己会写 run_batch_<日期>.log，但其 file_logger.setup 之前的
+    # 启动期错误（参数/环境/1024 服务启动失败）只进 stdout——此前重定向 DEVNULL，
+    # 进程无声消亡时无从排查（实际发生过）。改重定向到固定日志，append 并带触发头。
+    config.OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
+    log_fh = open(config.OUTPUTS_DIR / _WEB_LOG, "ab")
+    try:
+        log_fh.write(
+            f"\n===== Web 触发 {datetime.now().isoformat(timespec='seconds')} "
+            f"{' '.join(cmd[2:])} =====\n".encode("utf-8")
+        )
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                cwd=str(config.BASE_DIR),
+                stdin=subprocess.DEVNULL,
+                stdout=log_fh,
+                stderr=log_fh,
+                creationflags=flags,
+            )
+        except OSError as e:
+            raise ValueError(f"启动抓取进程失败: {e}") from e
+    finally:
+        # Popen 已复制 fd，父进程侧立即关闭，避免句柄常驻
+        _ = log_fh.close()
+    # pid 落盘：Web 重启后强制终止仍能定位进程
+    _ = _pid_path().write_text(str(proc.pid), encoding="utf-8")
+    return {"started": True, "pid": proc.pid, "cmd": cmd}
+
+
+def stop_run() -> dict[str, Any]:
+    """强制终止当前批次（业界 Abort）：杀 Web 启动的进程树，并把 running 记录落为
+    cancelled（手动中断，与脚本内 Ctrl+C 的口径一致），终止后可立即重新启动。
+
+    两类场景都能处理：
+    - 进程在跑（卡死或正常）：taskkill /T 连同 run_batch spawn 的 scraper 子进程整树杀；
+    - 进程已消亡的孤儿（脚本启动失败 / 机器重启）：无进程可杀，仅清理记录——
+      否则要等 30 分钟僵死阈值才会降级，期间「开始抓取」一直被防重挡住。
+    pid 文件不存在 → LookupError（API 转 404，说明批次非 Web 端启动）。
+    """
+    now = datetime.now().isoformat(timespec="seconds")
+    pid = active_pid()
+    killed = False
+    if pid is not None:
+        # /T 整树（run_batch 会 spawn 多个 scraper 子进程），/F 强制
+        r = subprocess.run(
+            ["taskkill", "/F", "/T", "/PID", str(pid)],
+            capture_output=True,
+            text=True,
+            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+        )
+        killed = r.returncode == 0
+
+    rows = db.query("SELECT id, created_at FROM run_days WHERE status = 'running'")
+    if not rows and pid is None:
+        raise LookupError("当前没有可终止的抓取批次")
+    # Web 读连接（db.open_conn）是只读的；终止落库是运维写操作（业界 Abort 也落库），
+    # 此处单独开可写连接，字段口径与 run_recorder.finish_run 一致。仅 stop_run 使用。
+    conn = sqlite3.connect(str(config.DB_FILE), timeout=10)
+    try:
+        for r in rows:
+            duration = None
+            try:
+                start = datetime.fromisoformat(str(r["created_at"]))
+                duration = int((datetime.now() - start).total_seconds())
+            except ValueError:
+                pass
+            _ = conn.execute(
+                "UPDATE run_days SET status = 'cancelled', duration = ?, updated_at = ? WHERE id = ?",
+                (duration, now, r["id"]),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+    _ = _pid_path().unlink(missing_ok=True)
+    return {"stopped": True, "killed": killed, "records": len(rows)}
