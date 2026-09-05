@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import {
   ElMessage,
   ElMessageBox,
@@ -279,6 +279,62 @@ function showDetail(row: DownloadTaskSummary) {
   void fetchDetail(true)
 }
 
+// ---- 执行日志展示：任务事件区 + 按链接折叠的下载过程明细 ----
+const logsBoxRef = ref()
+
+/** 解析任务日志：非缩进行为任务事件 / 逐 URL 结果摘要；
+ *  缩进的 [i/N] 行（下载过程明细）归入对应链接组，供折叠展示 */
+const parsedLogs = computed(() => {
+  const events: string[] = []
+  const groups: { seq: string; title: string; lines: string[] }[] = []
+  let cur: { seq: string; title: string; lines: string[] } | null = null
+  for (const raw of detailTask.value?.logs || []) {
+    // 明细行：前导空白 + [i/N]（由后端缩进标注归属）
+    const detail = raw.match(/^\s+\[(\d+\/\d+)\]\s?(.*)$/)
+    if (detail) {
+      if (!cur || cur.seq !== detail[1]) {
+        cur = { seq: detail[1], title: '', lines: [] }
+        groups.push(cur)
+      }
+      cur.lines.push(detail[2])
+      continue
+    }
+    // 结果摘要行：[i/N] 开头（无缩进）
+    const summary = raw.match(/^\[(\d+\/\d+)\]\s?(.*)$/)
+    if (summary) {
+      cur = { seq: summary[1], title: summary[2], lines: [] }
+      groups.push(cur)
+      events.push(raw)
+      continue
+    }
+    events.push(raw)
+    cur = null
+  }
+  return { events, groups }
+})
+
+// 折叠项：默认全部展开——否则用户打开详情只看到任务事件，
+// 会误以为「没有下载过程明细」（明细在下方折叠区里）
+const expandedLogs = ref<string[]>([])
+watch(
+  () => parsedLogs.value.groups.map((g) => g.seq).join(','),
+  (keys) => {
+    expandedLogs.value = keys ? keys.split(',') : []
+  },
+  { immediate: true },
+)
+
+// 日志更新（SSE / 轮询）时自动滚动到最新
+watch(
+  () => detailTask.value?.logs?.length,
+  async () => {
+    await nextTick()
+    const box = (logsBoxRef.value as { textarea?: HTMLTextAreaElement } | undefined)
+      ?.textarea
+    if (box) box.scrollTop = box.scrollHeight
+  },
+)
+
 function statusTagType(status: string): string {
   if (status === 'done') return 'success'
   if (status === 'failed') return 'danger'
@@ -555,12 +611,31 @@ onBeforeUnmount(() => {
 
         <div class="detail-title">执行日志</div>
         <el-input
-          :model-value="(detailTask.logs || []).join('\n')"
+          ref="logsBoxRef"
+          :model-value="parsedLogs.events.join('\n')"
           type="textarea"
           :rows="8"
           readonly
           class="logs-box"
         />
+
+        <div class="detail-title">按链接明细（{{ parsedLogs.groups.length }}）</div>
+        <el-collapse
+          v-if="parsedLogs.groups.length"
+          v-model="expandedLogs"
+          class="log-groups"
+        >
+          <el-collapse-item
+            v-for="g in parsedLogs.groups"
+            :key="g.seq"
+            :name="g.seq"
+          >
+            <template #title>
+              <span class="log-group-title">[{{ g.seq }}] {{ g.title }}</span>
+            </template>
+            <pre class="log-detail">{{ g.lines.join('\n') }}</pre>
+          </el-collapse-item>
+        </el-collapse>
 
         <div class="detail-title">链接明细（D7 含耗时）</div>
         <el-table :data="detailTask.items" size="small" border>
@@ -667,6 +742,24 @@ onBeforeUnmount(() => {
 .logs-box :deep(textarea) {
   font-family: Consolas, monospace;
   font-size: 12px;
+}
+
+/* 按链接折叠的下载过程明细（等宽，与任务日志区一致） */
+.log-groups :deep(.log-group-title) {
+  font-family: Consolas, monospace;
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.log-groups :deep(.log-detail) {
+  font-family: Consolas, monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin: 0;
+  padding: 4px 8px;
+  background: #fafafa;
+  border-radius: 4px;
 }
 
 .error-text {
