@@ -43,9 +43,11 @@ const POLL_INTERVAL = 4000
 let pageVisible = true
 let polling = false
 
-/** 静默刷新：更新列表 + 当前选中明细，不打断用户查看；防重入（上一轮未完成则跳过本轮） */
-async function refreshQuiet() {
-  if (polling) return
+/** 静默刷新：更新列表 + 当前选中明细，不打断用户查看；防重入（上一轮未完成则跳过本轮）。
+ *  force=true 用于用户主动操作（启动/删除/终止）后——这类刷新必须立刻生效，
+ *  否则会被正在进行的轮询挡掉，表现为「点了没反应，要等几秒」 */
+async function refreshQuiet(force = false) {
+  if (polling && !force) return
   polling = true
   try {
     const r = await api.runs()
@@ -179,7 +181,9 @@ async function confirmStart() {
     })
     ElMessage.success('抓取批次已启动，稍后列表会出现新的运行记录')
     startVisible.value = false
-    void refreshQuiet()
+    markPendingStart()
+    // 子进程启动并写入运行记录需要 1~2 秒，稍等再拉一次，让新批次尽快出现
+    window.setTimeout(() => void refreshQuiet(true), 1200)
   } catch (e) {
     if (isAborted(e)) return
     ElMessage.error(`启动失败: ${(e as Error).message}`)
@@ -275,6 +279,34 @@ function stopLogPoll() {
   }
 }
 
+// 「开始抓取」后子进程建记录需要 1~2 秒：期间按钮显示「启动中…」并禁用，
+// 否则用户以为点了没反应而连点，后端会 409 拒绝（防并发批次）
+const pendingStart = ref(false)
+let pendingStartTimer: number | null = null
+
+function markPendingStart() {
+  pendingStart.value = true
+  if (pendingStartTimer !== null) window.clearTimeout(pendingStartTimer)
+  // 兜底解除：子进程启动失败、始终没建记录时，30 秒后恢复按钮可用
+  pendingStartTimer = window.setTimeout(() => {
+    pendingStart.value = false
+    pendingStartTimer = null
+  }, 30000)
+}
+
+function clearPendingStart() {
+  if (pendingStartTimer !== null) {
+    window.clearTimeout(pendingStartTimer)
+    pendingStartTimer = null
+  }
+  pendingStart.value = false
+}
+
+// 新批次一出现在列表里就解除「启动中」（按钮切为「强制终止」）
+watch(hasActive, (v) => {
+  if (v) clearPendingStart()
+})
+
 watch(logVisible, (v) => {
   if (!v) stopLogPoll()
 })
@@ -314,7 +346,8 @@ async function confirmDelete(row: RunSummary) {
     if (isAborted(e)) return
     ElMessage.error(`删除失败: ${(e as Error).message}`)
   }
-  void refreshQuiet()
+  // 后端已失效列表缓存，强制刷新让记录立刻从列表消失
+  void refreshQuiet(true)
 }
 
 function sectionType(s: string): 'success' | 'danger' | 'primary' | 'info' {
@@ -343,6 +376,7 @@ onBeforeUnmount(() => {
     pollTimer = null
   }
   stopLogPoll()
+  clearPendingStart()
   document.removeEventListener('visibilitychange', onVisibilityChange)
 })
 </script>
@@ -365,12 +399,17 @@ onBeforeUnmount(() => {
         </div>
         <el-tooltip
           v-if="!hasActive"
-          content="启动 run_batch 全量抓取（遍历所有版块）"
+          :content="pendingStart ? '抓取进程启动中，请稍候…' : '启动 run_batch 全量抓取（遍历所有版块）'"
           placement="top"
         >
-          <el-button type="primary" class="start-btn" @click="openStartDialog">
+          <el-button
+            type="primary"
+            class="start-btn"
+            :disabled="pendingStart"
+            @click="openStartDialog"
+          >
             <el-icon style="margin-right: 4px"><VideoPlay /></el-icon>
-            开始抓取
+            {{ pendingStart ? '启动中…' : '开始抓取' }}
           </el-button>
         </el-tooltip>
         <el-tooltip

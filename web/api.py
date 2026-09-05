@@ -967,9 +967,12 @@ def runs_start(req: RunStartReq) -> dict[str, Any]:
     子进程拉起后立即返回，新运行记录由脚本自建，前端轮询可见。
     """
     try:
-        return runs.start_run(req.use_local_proxy, req.restart)
+        result = runs.start_run(req.use_local_proxy, req.restart)
     except ValueError as e:
         raise HTTPException(409, str(e)) from e
+    # 写后立即失效列表缓存：否则前端刷新拿到的仍是 5 秒内的旧快照，看不到新批次
+    db.invalidate("runs")
+    return result
 
 
 @router.post("/runs/stop")
@@ -980,9 +983,12 @@ def runs_stop() -> dict[str, Any]:
     404 = 没有 Web 端启动的批次且无 running 记录可清理。
     """
     try:
-        return runs.stop_run()
+        result = runs.stop_run()
     except LookupError as e:
         raise HTTPException(404, str(e)) from e
+    # 记录已落为 cancelled，立即失效缓存让列表同步（否则要等 TTL）
+    db.invalidate("runs")
+    return result
 
 
 class RunIdReq(BaseModel):
@@ -998,11 +1004,15 @@ def runs_delete(req: RunIdReq) -> dict[str, Any]:
     409 = 记录仍在运行（需先强制终止）；404 = 记录不存在。
     """
     try:
-        return runs.delete_run(req.run_id)
+        result = runs.delete_run(req.run_id)
     except LookupError as e:
         raise HTTPException(404, str(e)) from e
     except ValueError as e:
         raise HTTPException(409, str(e)) from e
+    # 删除后立即失效：列表缓存（旧快照里记录还在）与按日期查的详情缓存
+    db.invalidate("runs")
+    db.invalidate("run_detail_")
+    return result
 
 
 @router.get("/runs/log")

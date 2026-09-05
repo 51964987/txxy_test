@@ -110,3 +110,16 @@ def cached(key: str, fn: Callable[[], Any]) -> Any:
     val = fn()
     _cache[key] = (now, val)
     return val
+
+
+def invalidate(prefix: str = "") -> None:
+    """失效缓存：prefix 为空则清空，否则清除以该前缀开头的键。
+
+    写操作（启动 / 终止 / 删除抓取）后必须调用——否则列表接口会把 TTL 内的旧快照
+    继续返回给前端，用户点了删除却看到记录还在、点了开始却看不到新记录。
+    """
+    if not prefix:
+        _cache.clear()
+        return
+    for k in [k for k in _cache if k.startswith(prefix)]:
+        _ = _cache.pop(k, None)
