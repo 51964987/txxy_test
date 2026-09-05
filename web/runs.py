@@ -634,6 +634,31 @@ def start_run(use_local_proxy: bool, restart: bool) -> dict[str, Any]:
     return {"started": True, "pid": proc.pid, "cmd": cmd}
 
 
+def delete_run(run_id: int) -> dict[str, Any]:
+    """删除一次运行记录（业界 Delete run）：级联删除 run_sections 明细。
+
+    两点约束：
+    - 运行中的记录不允许删——先「强制终止」再删，否则子进程仍在实时上报进度，
+      会出现「记录已删、数据还在写」的脏状态；
+    - 只删库记录，不删 outputs 下的日志文件：同一天多次运行共用日期目录，
+      按运行粒度删文件极易误删其它批次；日志本身有 3 天保留策略自动清理。
+    """
+    rows = db.query("SELECT id, status FROM run_days WHERE id = ?", (run_id,))
+    if not rows:
+        raise LookupError(f"未找到运行记录 ID {run_id}")
+    if rows[0]["status"] == "running":
+        raise ValueError("该记录仍在运行中，请先「强制终止」后再删除")
+    conn = sqlite3.connect(str(config.DB_FILE), timeout=10)
+    try:
+        cur = conn.execute("DELETE FROM run_sections WHERE run_id = ?", (run_id,))
+        sections = cur.rowcount if cur.rowcount > 0 else 0
+        _ = conn.execute("DELETE FROM run_days WHERE id = ?", (run_id,))
+        conn.commit()
+    finally:
+        conn.close()
+    return {"deleted": True, "id": run_id, "sections": sections}
+
+
 def stop_run() -> dict[str, Any]:
     """强制终止当前批次（业界 Abort）：杀 Web 启动的进程树，并把 running 记录落为
     cancelled（手动中断，与脚本内 Ctrl+C 的口径一致），终止后可立即重新启动。

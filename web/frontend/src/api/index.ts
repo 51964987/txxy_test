@@ -472,6 +472,9 @@ export const api = {
     post<{ started: boolean; pid: number }>('/runs/start', p),
   /** 强制终止当前批次：杀进程树 + running 记录落为「手动中断」，之后可重新启动 */
   stopRun: () => post<{ stopped: boolean; killed: boolean; records: number }>('/runs/stop'),
+  /** 删除一次运行记录（级联版块明细，不删日志文件）；409 = 记录仍在运行 */
+  deleteRun: (runId: number) =>
+    post<{ deleted: boolean; id: number; sections: number }>('/runs/delete', { run_id: runId }),
   /** 读取一次运行的日志尾部（log: batch=总日志 / web=启动日志 / fid=版块日志） */
   runLog: (p: { run_id?: number; date?: string; log?: string }) =>
     get<{ lines: string[]; truncated: boolean; size: number; file: string }>(

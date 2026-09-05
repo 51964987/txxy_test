@@ -1,7 +1,14 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { api, formatDuration, isAborted, type RunDetail, type RunSummary } from '../api'
+import {
+  api,
+  formatDuration,
+  isAborted,
+  type RunDetail,
+  type RunSection,
+  type RunSummary,
+} from '../api'
 
 const dates = ref<RunSummary[]>([])
 const loading = ref(false)
@@ -221,11 +228,11 @@ const logBoxRef = ref()
 let logTimer: number | null = null
 let logTarget: { runId?: number; date: string } | null = null
 
-async function openLogDrawer(row: RunSummary) {
+async function openLogDrawer(row: RunSummary, initialSource = 'batch') {
   logTarget = { runId: row.id, date: row.dir }
   logRowStatus.value = row.status
   logVisible.value = true
-  logSource.value = 'batch'
+  logSource.value = initialSource
   logLines.value = []
   // 日志源：批次总日志 + 各版块日志（sections 来自明细接口；日志回退记录也能取到）
   try {
@@ -272,6 +279,43 @@ watch(logVisible, (v) => {
   if (!v) stopLogPoll()
 })
 watch(logSource, () => void fetchLog())
+
+/** 明细表格里点某个版块的「日志」：沿用当前详情对应的运行记录，日志源切到该版块 */
+async function openSectionLog(sec: RunSection) {
+  const row =
+    dates.value.find((d) => d.id != null && d.id === current.value?.id) ??
+    dates.value.find((d) => d.dir === activeDir.value)
+  if (!row) return
+  await openLogDrawer(row, sec.fid)
+}
+
+/** 删除一次运行记录（业界 Delete run）：级联版块明细，运行中需先终止 */
+async function confirmDelete(row: RunSummary) {
+  if (row.id == null) return
+  try {
+    await ElMessageBox.confirm(
+      `将删除运行记录 #${row.id}（${row.date} ${row.time ?? ''}）及其版块明细，删除后不可恢复。` +
+        '仅删除数据库记录，outputs 下的日志文件保留（由日志保留策略自动清理）。是否继续？',
+      '删除运行记录',
+      { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' },
+    )
+  } catch {
+    return // 用户取消
+  }
+  try {
+    await api.deleteRun(row.id)
+    ElMessage.success('运行记录已删除')
+    // 详情正指向被删记录时一并清空，避免抽屉/明细残留
+    if (current.value?.id === row.id) {
+      current.value = null
+      activeDir.value = ''
+    }
+  } catch (e) {
+    if (isAborted(e)) return
+    ElMessage.error(`删除失败: ${(e as Error).message}`)
+  }
+  void refreshQuiet()
+}
 
 function sectionType(s: string): 'success' | 'danger' | 'primary' | 'info' {
   if (s === 'ok') return 'success'
@@ -374,19 +418,60 @@ onBeforeUnmount(() => {
             <span v-else class="text-muted">—</span>
           </template>
         </el-table-column>
-        <el-table-column prop="ok" label="成功" :min-width="45" />
-        <el-table-column prop="fail" label="失败" :min-width="45" />
-        <el-table-column prop="skip" label="未执行" :min-width="50" show-overflow-tooltip />
+        <el-table-column label="版块" :min-width="104" align="center">
+          <template #header>
+            <el-tooltip content="本次运行纳入的版块总数（括注：成功 / 失败 / 未执行）" placement="top">
+              <span class="th-tip">
+                版块
+                <el-icon><InfoFilled /></el-icon>
+              </span>
+            </el-tooltip>
+          </template>
+          <template #default="{ row }">
+            <el-tooltip
+              :content="`共 ${row.ok + row.fail + row.skip} 个版块：成功 ${row.ok} / 失败 ${row.fail} / 未执行 ${row.skip}`"
+              placement="top"
+            >
+              <span class="stat">
+                <span class="s-total">{{ row.ok + row.fail + row.skip }}</span>
+                <span class="s-sub">
+                  <span class="s-ok">{{ row.ok }}</span>
+                  <span class="s-sep">/</span>
+                  <span :class="row.fail ? 's-fail' : 's-muted'">{{ row.fail }}</span>
+                  <span class="s-sep">/</span>
+                  <span class="s-muted">{{ row.skip }}</span>
+                </span>
+              </span>
+            </el-tooltip>
+          </template>
+        </el-table-column>
         <el-table-column prop="csv" label="CSV 条数" :min-width="75" show-overflow-tooltip />
         <el-table-column prop="sqlite" label="SQLite 条数" :min-width="80" show-overflow-tooltip />
         <el-table-column label="耗时" :min-width="65">
           <template #default="{ row }">{{ formatDuration(row.duration) }}</template>
         </el-table-column>
-        <el-table-column label="操作" :min-width="70" fixed="right">
+        <el-table-column label="操作" :min-width="118" fixed="right">
           <template #default="{ row }">
             <el-tooltip content="查看批次 / 版块运行日志（运行中每 2s 准实时刷新）" placement="top">
               <el-button link type="primary" @click="openLogDrawer(row)">
                 <el-icon style="margin-right: 3px"><Document /></el-icon>日志
+              </el-button>
+            </el-tooltip>
+            <el-tooltip
+              :content="row.status === 'running'
+                ? '运行中的记录需先「强制终止」才能删除'
+                : row.id == null
+                  ? '该记录由历史日志回退推导，无数据库记录可删'
+                  : '删除该运行记录及其版块明细（不删日志文件）'"
+              placement="top"
+            >
+              <el-button
+                link
+                type="danger"
+                :disabled="row.status === 'running' || row.id == null"
+                @click="confirmDelete(row)"
+              >
+                删除
               </el-button>
             </el-tooltip>
           </template>
@@ -502,6 +587,15 @@ onBeforeUnmount(() => {
           <el-table-column label="耗时" :min-width="80">
             <template #default="{ row }">{{ formatDuration(row.duration) }}</template>
           </el-table-column>
+          <el-table-column label="操作" :min-width="70" fixed="right">
+            <template #default="{ row }">
+              <el-tooltip content="查看该版块的抓取日志" placement="top">
+                <el-button link type="primary" @click="openSectionLog(row)">
+                  <el-icon style="margin-right: 3px"><Document /></el-icon>日志
+                </el-button>
+              </el-tooltip>
+            </template>
+          </el-table-column>
         </el-table>
       </template>
       <el-empty v-else description="暂无运行记录（outputs/ 下没有日志）" />
@@ -593,6 +687,50 @@ onBeforeUnmount(() => {
 .time-cell {
   margin-left: 6px;
   color: #909399;
+}
+
+/* 「版块」合并列：成功 / 失败 / 未执行，斜杠分隔（业界计数指标常用分隔） */
+.th-tip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  cursor: help;
+}
+
+.stat {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 版块总数为主数字，成功/失败/未执行作次要信息括在后面 */
+.s-total {
+  font-weight: 600;
+  color: #1f2d3d;
+}
+
+.s-sub {
+  font-size: 12px;
+}
+
+.s-ok {
+  color: #67c23a;
+  font-weight: 600;
+}
+
+.s-fail {
+  color: #f56c6c;
+  font-weight: 600;
+}
+
+.s-muted {
+  color: #909399;
+}
+
+.s-sep {
+  color: #dcdfe6;
+  margin: 0 5px;
 }
 
 .detail-head {

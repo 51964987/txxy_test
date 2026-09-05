@@ -985,6 +985,26 @@ def runs_stop() -> dict[str, Any]:
         raise HTTPException(404, str(e)) from e
 
 
+class RunIdReq(BaseModel):
+    """按 run_days 主键操作的请求体（删除等）。"""
+
+    run_id: int
+
+
+@router.post("/runs/delete")
+def runs_delete(req: RunIdReq) -> dict[str, Any]:
+    """删除一次运行记录（级联版块明细，不删日志文件）。
+
+    409 = 记录仍在运行（需先强制终止）；404 = 记录不存在。
+    """
+    try:
+        return runs.delete_run(req.run_id)
+    except LookupError as e:
+        raise HTTPException(404, str(e)) from e
+    except ValueError as e:
+        raise HTTPException(409, str(e)) from e
+
+
 @router.get("/runs/log")
 def runs_log(
     run_id: int | None = None,
