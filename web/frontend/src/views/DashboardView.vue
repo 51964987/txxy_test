@@ -142,7 +142,6 @@ const fidTrendCache = new Map<number, TrendByFid>()
 const loadingFidTrend = ref(false)
 const fidTrendSwitching = ref(false)
 const fidTrendVisible = ref(false)
-const fidTrendBlockRef = ref<HTMLDivElement | null>(null)
 const fidTrendRef = ref<HTMLDivElement | null>(null)
 const fidTrendChart = shallowRef<ECharts | null>(null)
 let fidTrendTipPaused: boolean = false
@@ -154,6 +153,38 @@ const linkedFid = ref<{ name: string; color: string } | null>(null)
 const fidColorByName = ref<Record<string, string>>({})
 // 反向联动：点总趋势某天 -> 分版块同天高亮（垂直标线）
 const linkedDay = ref<string | null>(null)
+// 联动区间：全站趋势的缩放条（dataZoom）选区，分版块图按同一日期区间裁剪
+// （后端 trend_by_fid 只支持 days=最近N天，无日期区间参数，故在前端按选区裁剪已加载的数据）
+const trendZoomRange = ref<{ start: string; end: string } | null>(null)
+
+// ===== 单卡片全屏（复用 useAppStore 的元素级全屏，与整页「大屏」共用状态）=====
+const trendCardRef = ref<HTMLDivElement | null>(null)
+const fidTrendCardRef = ref<HTMLDivElement | null>(null)
+/** 当前处于卡片全屏的卡片：伪全屏降级时需要它来加 fixed 覆盖层样式 */
+const fsCard = ref<'trend' | 'fid' | null>(null)
+
+/** 分版块卡片渲染出来后（overview 加载完成）再挂懒加载 observer。
+ *  mounted 时卡片尚未渲染（骨架屏分支），直接 observe(null) 会静默失败。
+ *  观察目标就是卡片根元素（fidTrendCardRef，与卡片全屏共用同一元素）。 */
+watch(
+  fidTrendCardRef,
+  (el) => {
+    if (!el || fidTrendObserver || !('IntersectionObserver' in window)) return
+    fidTrendObserver = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          fidTrendObserver?.disconnect()
+          fidTrendObserver = null
+          fidTrendVisible.value = true
+          loadFidTrend()
+        }
+      },
+      { rootMargin: '200px 0px' },
+    )
+    fidTrendObserver.observe(el)
+  },
+  { immediate: true },
+)
 
 
 
@@ -410,6 +441,9 @@ function renderTrendChart() {
           renderFidTrendChart()
         }
       })
+      // 缩放条（dataZoom）选区联动：拖选后分版块图按同一区间裁剪，
+      // 此前未监听该事件，导致选了区间后另一张图纹丝不动
+      trendChart.value.on('datazoom', () => applyTrendZoom())
     }
     // 联动配色：当分版块图例聚焦某版块时，全站趋势同步换为该版块色
     const base = linkedFid.value?.color ?? '#2f6fed'
@@ -794,6 +828,21 @@ function onResize() {
 }
 
 /**
+ * 单卡片全屏：复用 useAppStore 的元素级全屏（不支持时自动降级为伪全屏），
+ * 与整页「大屏」共用同一 fullscreen 状态，退出走 Esc 或再次点击按钮。
+ * 尺寸变化由 ResizeObserver + watch(app.fullscreen) 的 rebuildCharts 兜底。
+ */
+async function onCardFullscreen(which: 'trend' | 'fid'): Promise<void> {
+  if (app.fullscreen) {
+    fsCard.value = null
+    await app.exitFullscreen()
+    return
+  }
+  fsCard.value = which
+  await app.enterFullscreen(which === 'trend' ? trendCardRef.value : fidTrendCardRef.value)
+}
+
+/**
  * 大屏模式切换时重建全部图表实例：
  * ECharts 的 Tooltip 挂载容器（appendTo / appendToBody）在实例初始化时即确定，
  * 后续 setOption 修改不生效；真全屏下挂 body 的 tooltip 不显示，故必须重建。
@@ -911,20 +960,12 @@ onMounted(() => {
   }
 
   // 分版块趋势：懒加载（进入视口后再加载，避免首屏一次性拉取过多）
-  if (hasObserver && fidTrendBlockRef.value) {
-    fidTrendObserver = new IntersectionObserver(
-      (entries) => {
-        if (entries.some((e) => e.isIntersecting)) {
-          fidTrendObserver?.disconnect()
-          fidTrendObserver = null
-          fidTrendVisible.value = true
-          loadFidTrend()
-        }
-      },
-      { rootMargin: '200px 0px' },
-    )
-    fidTrendObserver.observe(fidTrendBlockRef.value)
-  } else if (!hasObserver) {
+  // 注意：不能在这里直接 observe——mounted 时 overview 尚未返回，模板走骨架屏分支，
+  // 卡片 ref 还是 null，observer 会永远创建不出来（实测：trend_by_fid 从未请求，
+  // 分版块图一直空白）。已改为 watch 卡片 ref 出现后再 observe（见上方 watch）。
+  if (!('IntersectionObserver' in window)) {
+    // 兼容不支持 IntersectionObserver 的旧浏览器：直接加载
+    fidTrendVisible.value = true
     loadFidTrend()
   }
 
@@ -1189,6 +1230,8 @@ function onTrendDaysChange() {
     trendDayOptions.value = [...trendDayOptions.value, n]
   }
   trendDays.value = n
+  // 天数变了，旧的缩放选区不再有意义（数据点数量与日期都已改变）
+  trendZoomRange.value = null
   loadTrendOnly()
   // 分版块由全站趋势联动下钻：已加载或可见时同步刷新
   if (fidTrendVisible.value || fidTrend.value.dates.length) {
@@ -1266,12 +1309,56 @@ function clearDayLink() {
   renderFidTrendChart()
 }
 
+/** 读取趋势图缩放条的当前选区，换算为日期区间并存到 trendZoomRange，
+ *  再让分版块图按该区间重绘——两图口径保持一致。
+ *  选区覆盖全部数据点时不设区间（等同于未筛选），避免无谓裁剪。 */
+function applyTrendZoom(): void {
+  const chart = trendChart.value
+  if (!chart || !trend.value.length) return
+  const dz = (chart.getOption() as { dataZoom?: any[] }).dataZoom?.[0]
+  if (!dz) return
+  const n = trend.value.length
+  // 未拖动过（百分比模式，无 startValue）时按比例换算索引；拖动后直接用索引
+  const rawStart = dz.startValue ?? ((dz.start ?? 0) / 100) * (n - 1)
+  const rawEnd = dz.endValue ?? ((dz.end ?? 100) / 100) * (n - 1)
+  const i0 = Math.max(0, Math.min(n - 1, Math.floor(Math.min(rawStart, rawEnd))))
+  const i1 = Math.max(i0, Math.min(n - 1, Math.ceil(Math.max(rawStart, rawEnd))))
+  trendZoomRange.value =
+    i0 === 0 && i1 === n - 1
+      ? null
+      : { start: trend.value[i0].date, end: trend.value[i1].date }
+  renderFidTrendChart()
+}
+
+/** 清除趋势选区：复位缩放条并让分版块图恢复全区间 */
+function clearTrendZoom(): void {
+  trendZoomRange.value = null
+  trendChart.value?.dispatchAction({ type: 'dataZoom', start: 0, end: 100 })
+  renderFidTrendChart()
+}
+
 function renderFidTrendChart() {
   const el = fidTrendRef.value
   if (!el) return
-  const dates = fidTrend.value.dates
-  const series = fidTrend.value.series
+  let dates = fidTrend.value.dates
+  let series = fidTrend.value.series
   if (!dates.length || !series.length) return
+
+  // 跟随「全站发布趋势」的缩放条选区裁剪：两图联动，必须同区间。
+  // 用日期字符串比较取命中范围，不依赖两张图的日期序列完全对齐。
+  const zoom = trendZoomRange.value
+  if (zoom) {
+    const hit = dates
+      .map((d, i) => ({ d, i }))
+      .filter((x) => x.d >= zoom.start && x.d <= zoom.end)
+      .map((x) => x.i)
+    if (hit.length > 1) {
+      const a = hit[0]
+      const b = hit[hit.length - 1]
+      dates = dates.slice(a, b + 1)
+      series = series.map((s) => ({ ...s, data: s.data.slice(a, b + 1) }))
+    }
+  }
 
   // P1-8：数据指纹（含联动聚焦/日期依赖），无变化跳过 setOption
   const fidKey =
@@ -1534,7 +1621,11 @@ function renderFidTrendChart() {
 
     <!-- 每日发布趋势：全站趋势 + 分版块 同行各占 1/2 -->
     <div class="trend-row">
-    <div class="page-card chart-card trend-half">
+    <div
+      ref="trendCardRef"
+      class="page-card chart-card trend-half"
+      :class="{ 'is-card-fs': app.pseudoFullscreen && fsCard === 'trend' }"
+    >
       <div class="chart-head">
         <div class="chart-head-left">
           <span class="chart-title">全站发布趋势</span>
@@ -1575,6 +1666,19 @@ function renderFidTrendChart() {
           >
             <el-option v-for="d in trendDayOptions" :key="d" :label="`${d}天`" :value="d" />
           </el-select>
+          <el-tooltip
+            :content="app.fullscreen ? '退出全屏（Esc）' : '全屏查看该卡片'"
+            placement="top"
+            :teleported="!app.fullscreen"
+          >
+            <el-button
+              class="card-fs-btn"
+              text
+              :icon="app.fullscreen ? 'Aim' : 'FullScreen'"
+              aria-label="卡片全屏"
+              @click="onCardFullscreen('trend')"
+            />
+          </el-tooltip>
         </div>
       </div>
       <div v-if="!trend.length && loadingP0" class="chart chart-loading">
@@ -1596,7 +1700,11 @@ function renderFidTrendChart() {
     </div>
 
     <!-- 每日发布趋势（分版块）：同行右侧 1/2 宽，懒加载 -->
-    <div ref="fidTrendBlockRef" class="page-card chart-card trend-half">
+    <div
+      ref="fidTrendCardRef"
+      class="page-card chart-card trend-half"
+      :class="{ 'is-card-fs': app.pseudoFullscreen && fsCard === 'fid' }"
+    >
       <div class="chart-head">
         <div class="chart-head-left">
           <span class="chart-title">分版块发布对比</span>
@@ -1604,6 +1712,11 @@ function renderFidTrendChart() {
             <span class="link-dot"></span>
             联动聚焦日：{{ linkedDay.slice(5) }}
             <span class="link-close" @click="clearDayLink">✕</span>
+          </span>
+          <span v-if="trendZoomRange" class="link-badge" style="--link-color: #e6ebf5">
+            <span class="link-dot"></span>
+            跟随趋势区间：{{ trendZoomRange.start.slice(5) }} ~ {{ trendZoomRange.end.slice(5) }}
+            <span class="link-close" @click="clearTrendZoom">✕</span>
           </span>
         </div>
         <div class="chart-head-right">
@@ -1621,6 +1734,19 @@ function renderFidTrendChart() {
               <span class="ts-value"><RollingNumber :value="fidTrendStats.peak" /></span>
             </div>
           </div>
+          <el-tooltip
+            :content="app.fullscreen ? '退出全屏（Esc）' : '全屏查看该卡片'"
+            placement="top"
+            :teleported="!app.fullscreen"
+          >
+            <el-button
+              class="card-fs-btn"
+              text
+              :icon="app.fullscreen ? 'Aim' : 'FullScreen'"
+              aria-label="卡片全屏"
+              @click="onCardFullscreen('fid')"
+            />
+          </el-tooltip>
         </div>
       </div>
       <div v-if="!fidTrend.series.length && loadingFidTrend" class="chart chart-loading">
@@ -1976,6 +2102,32 @@ function renderFidTrendChart() {
 
 .chart-card {
   min-width: 0;
+}
+
+/* 单卡片全屏：真全屏由 :fullscreen 兜底（浏览器自带铺满），
+   不支持元素级 Fullscreen API 时降级为 fixed 覆盖层（.is-card-fs）。
+   图表高度由 --chart-h 驱动，全屏态只需放大它即可。 */
+.chart-card:fullscreen,
+.chart-card.is-card-fs {
+  --chart-h: calc(100vh - 150px);
+
+  border-radius: 0;
+  margin: 0;
+  padding: 16px 20px;
+  background: #fff;
+}
+
+.chart-card.is-card-fs {
+  position: fixed;
+  inset: 0;
+  z-index: 3000;
+  width: 100vw;
+  height: 100vh;
+  overflow: auto;
+}
+
+.card-fs-btn {
+  flex-shrink: 0;
 }
 
 .chart-head {
