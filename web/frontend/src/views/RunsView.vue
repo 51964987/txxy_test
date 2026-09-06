@@ -15,6 +15,8 @@ const loading = ref(false)
 const detailLoading = ref(false)
 const current = ref<RunDetail | null>(null)
 const activeDir = ref('')
+/** 当前详情对应的运行记录 id（唯一）；日志回退项无 id，此时才退回用 dir 定位 */
+const activeId = ref<number | null>(null)
 
 /** 分页：每页 5 条 */
 const PAGE_SIZE = 5
@@ -26,6 +28,26 @@ const pagedDates = computed(() => {
   return dates.value.slice(start, start + PAGE_SIZE)
 })
 
+const tableRef = ref<{ setCurrentRow?: (row: RunSummary) => void } | null>(null)
+
+/** 行唯一键：数据库记录用 id，日志回退项（无 id）用 dir */
+function rowKey(row: RunSummary): string {
+  return row.id != null ? String(row.id) : `dir-${row.dir}`
+}
+
+/** 列表数据被整体替换后恢复选中高亮。
+
+ *  el-table 的 highlight-current-row 按「行对象引用」记录当前行，而轮询是
+ *  dates.value = r.dates 整体替换——引用全变，高亮就丢了（明细因改用 id 定位不受影响）。
+ *  这里按 activeId 把当前页里对应的行重新设为当前行。
+ */
+function restoreCurrentRow() {
+  const row = pagedDates.value.find((d) =>
+    activeId.value !== null ? d.id === activeId.value : d.dir === activeDir.value && d.id == null,
+  )
+  if (row) tableRef.value?.setCurrentRow?.(row)
+}
+
 /** 数据更新后校正页码，避免当前页超出总页数 */
 function clampPage() {
   const maxPage = Math.max(1, Math.ceil(dates.value.length / PAGE_SIZE))
@@ -34,6 +56,8 @@ function clampPage() {
 
 function onPageChange(page: number) {
   currentPage.value = page
+  // 翻回选中行所在页时，把高亮设回去（翻页不重建数据，el-table 不会自动恢复）
+  void nextTick(() => restoreCurrentRow())
 }
 
 /** 轮询句柄：页面存活期间始终每 4 秒静默刷新，确保新启动的运行记录（running）能实时出现并更新进度 */
@@ -55,11 +79,18 @@ async function refreshQuiet(force = false) {
     localProxyDefault.value = r.local_proxy_default
     activePid.value = r.active_pid
     clampPage()
-    if (activeDir.value) {
-      const row = r.dates.find((d) => d.dir === activeDir.value)
-      if (row && current.value && current.value.dir === row.dir) {
-        current.value = row.id ? await api.runDetailById(row.id) : await api.runDetail(row.dir)
-      }
+    // 数据整体替换后 el-table 的高亮会丢，重新选回当前行
+    await nextTick()
+    restoreCurrentRow()
+    if (activeId.value !== null) {
+      // 按 id 定位：同一天可能有多次运行（dir 相同），按 dir 找会串到同日的另一条记录，
+      // 表现为「翻页后过一会儿明细自己跳到别的运行」
+      const row = r.dates.find((d) => d.id === activeId.value)
+      if (row?.id != null) current.value = await api.runDetailById(row.id)
+    } else if (activeDir.value) {
+      // 日志回退记录（无 id）：按 dir 定位，且必须同样是没有 id 的那条
+      const row = r.dates.find((d) => d.dir === activeDir.value && d.id == null)
+      if (row) current.value = await api.runDetail(row.dir)
     }
   } catch {
     /* 单次轮询失败忽略，下轮自动重试 */
@@ -97,10 +128,15 @@ async function loadList() {
     localProxyDefault.value = r.local_proxy_default
     activePid.value = r.active_pid
     clampPage()
+    await nextTick()
+    restoreCurrentRow()
     if (r.dates.length && !activeDir.value) {
       await showDetail(r.dates[0])
     } else if (activeDir.value) {
-      await showDetail(r.dates.find((d) => d.dir === activeDir.value) ?? r.dates[0])
+      const row = r.dates.find((d) =>
+        activeId.value !== null ? d.id === activeId.value : d.dir === activeDir.value && d.id == null,
+      )
+      await showDetail(row ?? r.dates[0])
     }
   } catch (e) {
     if (isAborted(e)) return
@@ -112,6 +148,7 @@ async function loadList() {
 
 async function showDetail(row: RunSummary) {
   activeDir.value = row.dir
+  activeId.value = row.id ?? null
   detailLoading.value = true
   try {
     // 数据库记录按运行 ID 查明细（每次运行一条）；日志回退项按日期查
@@ -315,7 +352,7 @@ watch(logSource, () => void fetchLog())
 /** 明细表格里点某个版块的「日志」：沿用当前详情对应的运行记录，日志源切到该版块 */
 async function openSectionLog(sec: RunSection) {
   const row =
-    dates.value.find((d) => d.id != null && d.id === current.value?.id) ??
+    dates.value.find((d) => d.id === activeId.value) ??
     dates.value.find((d) => d.dir === activeDir.value)
   if (!row) return
   await openLogDrawer(row, sec.fid)
@@ -341,6 +378,7 @@ async function confirmDelete(row: RunSummary) {
     if (current.value?.id === row.id) {
       current.value = null
       activeDir.value = ''
+      activeId.value = null
     }
   } catch (e) {
     if (isAborted(e)) return
@@ -426,7 +464,14 @@ onBeforeUnmount(() => {
         </el-tooltip>
       </div>
 
-      <el-table :data="pagedDates" highlight-current-row style="width: 100%" @current-change="onCurrentChange">
+      <el-table
+        ref="tableRef"
+        :data="pagedDates"
+        :row-key="rowKey"
+        highlight-current-row
+        style="width: 100%"
+        @current-change="onCurrentChange"
+      >
         <el-table-column label="日期时间" :min-width="130">
           <template #default="{ row }">
             <span class="date-cell">{{ row.date }}</span>
@@ -457,9 +502,9 @@ onBeforeUnmount(() => {
             <span v-else class="text-muted">—</span>
           </template>
         </el-table-column>
-        <el-table-column label="版块" :min-width="104" align="center">
+        <el-table-column label="版块" :min-width="88" align="center">
           <template #header>
-            <el-tooltip content="本次运行纳入的版块总数（括注：成功 / 失败 / 未执行）" placement="top">
+            <el-tooltip content="各版块抓取结果：成功 / 失败 / 未执行" placement="top">
               <span class="th-tip">
                 版块
                 <el-icon><InfoFilled /></el-icon>
@@ -468,24 +513,41 @@ onBeforeUnmount(() => {
           </template>
           <template #default="{ row }">
             <el-tooltip
-              :content="`共 ${row.ok + row.fail + row.skip} 个版块：成功 ${row.ok} / 失败 ${row.fail} / 未执行 ${row.skip}`"
+              :content="`成功 ${row.ok} 个版块 / 失败 ${row.fail} 个 / 未执行 ${row.skip} 个`"
               placement="top"
             >
               <span class="stat">
-                <span class="s-total">{{ row.ok + row.fail + row.skip }}</span>
-                <span class="s-sub">
-                  <span class="s-ok">{{ row.ok }}</span>
-                  <span class="s-sep">/</span>
-                  <span :class="row.fail ? 's-fail' : 's-muted'">{{ row.fail }}</span>
-                  <span class="s-sep">/</span>
-                  <span class="s-muted">{{ row.skip }}</span>
-                </span>
+                <span class="s-ok">{{ row.ok }}</span>
+                <span class="s-sep">/</span>
+                <span :class="row.fail ? 's-fail' : 's-muted'">{{ row.fail }}</span>
+                <span class="s-sep">/</span>
+                <span class="s-muted">{{ row.skip }}</span>
               </span>
             </el-tooltip>
           </template>
         </el-table-column>
-        <el-table-column prop="csv" label="CSV 条数" :min-width="75" show-overflow-tooltip />
-        <el-table-column prop="sqlite" label="SQLite 条数" :min-width="80" show-overflow-tooltip />
+        <el-table-column label="数据量" :min-width="118" align="center">
+          <template #header>
+            <el-tooltip content="本次运行的数据条数：CSV 导出 / SQLite 入库" placement="top">
+              <span class="th-tip">
+                数据量
+                <el-icon><InfoFilled /></el-icon>
+              </span>
+            </el-tooltip>
+          </template>
+          <template #default="{ row }">
+            <el-tooltip
+              :content="`CSV 导出 ${row.csv} 条 / SQLite 入库 ${row.sqlite} 条`"
+              placement="top"
+            >
+              <span class="stat">
+                <span class="s-total">{{ row.csv.toLocaleString() }}</span>
+                <span class="s-sep">/</span>
+                <span class="s-muted">{{ row.sqlite.toLocaleString() }}</span>
+              </span>
+            </el-tooltip>
+          </template>
+        </el-table-column>
         <el-table-column label="耗时" :min-width="65">
           <template #default="{ row }">{{ formatDuration(row.duration) }}</template>
         </el-table-column>
@@ -743,14 +805,10 @@ onBeforeUnmount(() => {
   font-variant-numeric: tabular-nums;
 }
 
-/* 版块总数为主数字，成功/失败/未执行作次要信息括在后面 */
+/* 数据量列：CSV 为主数字，SQLite 入库为次要 */
 .s-total {
   font-weight: 600;
   color: #1f2d3d;
-}
-
-.s-sub {
-  font-size: 12px;
 }
 
 .s-ok {
