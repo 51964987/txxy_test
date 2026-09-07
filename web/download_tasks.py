@@ -401,13 +401,33 @@ class DownloadTaskManager:
         }
 
     def cancel(self, tid: str) -> bool:
-        """取消未完成任务（pending/running）：标记取消标志，worker 会在下一个 URL 前收手。"""
+        """取消未完成任务（pending/running）。
+
+        - running：标记取消标志，worker 在下一个 URL 前收手（正在下载的链接收尾后保留结果）；
+        - pending（排队中）：任务尚未开始，立即置为 cancelled 终态并使队列令牌失效。
+          若只设标志等 worker 消费到才收尾，排队期间用户会一直看到「排队中」，
+          误以为取消没生效（且收尾前还会打一条无意义的「任务开始执行」日志）。
+        """
         with self._lock:
             t = self._tasks.get(tid)
             if not t or t["status"] in _TERMINAL:
                 return False
-            t["cancel_requested"] = True
-            _log(t, "已请求取消")
+            if t["status"] == "pending":
+                # 排队中尚未开始：未跑链接直接置为已取消，立即进入终态
+                for item in t["items"]:
+                    if item.get("status") == "pending":
+                        item["status"] = "cancelled"
+                t["status"] = "cancelled"
+                t["finished_at"] = self._now()
+                # 使队列中等待消费的旧元素失效（与 prioritize 同一失效机制：
+                # worker 校验 not _queued / _ticket 不符即跳过，不会再次执行）
+                self._seq += 1
+                t["_ticket"] = self._seq
+                t["_queued"] = False
+                _log(t, "任务已取消（排队中，未开始下载）")
+            else:
+                t["cancel_requested"] = True
+                _log(t, "已请求取消")
             self._persist_locked()
             return True
 
@@ -425,30 +445,92 @@ class DownloadTaskManager:
             return True
 
     def retry(self, tid: str) -> int | None:
-        """重跑失败任务（D1）：收集原任务中未成功项生成新任务，原任务记录保留。
+        """在**原任务内**重跑未成功项（D1）：把 fail / cancelled（含服务重启由 pending
+        转来）与遗留 running 的项重置为 pending，重新调度原任务，进度在原任务上更新，
+        不再生成新任务（与单链接重下 retry_url 同一机制的多链接版）。
 
-        重跑范围：status 为 fail / cancelled（含服务重启由 pending 转来）与遗留 running 的项；
         已成功（ok）与已存在跳过（skip）的项不重复下载。
-        返回重跑链接数；任务不存在返回 None，无可重试项返回 0。
+        返回重跑链接数；任务不存在返回 None；任务进行中或无可重试项返回 0
+        （进行中任务禁止重试：reset 正在执行的任务会导致两个线程并发跑同一任务）。
+        """
+        with self._lock:
+            t = self._tasks.get(tid)
+            if not t or t["status"] not in _TERMINAL:
+                return 0 if t else None
+            retried = 0
+            for it in t["items"]:
+                if it.get("status") not in ("fail", "cancelled", "running"):
+                    continue
+                # 重置该链接，准备重跑（清空旧结果，让 download_files 重新落盘）
+                it["status"] = "pending"
+                it["stats"] = {}
+                it["error"] = None
+                it["saved_dir"] = None
+                it["elapsed"] = None
+                retried += 1
+            if not retried:
+                return 0
+            # 任务重置为可调度状态；done 仅计真正成功/跳过（ok+skip），与 retry_url 同口径
+            t["cancel_requested"] = False
+            t["done"] = sum(1 for it in t["items"] if it.get("status") in ("ok", "skip"))
+            t["status"] = "pending"
+            t["started_at"] = None
+            t["finished_at"] = None
+            # 重新入队：抬高 seq 令牌、置 _queued，交给 worker 再跑一遍（只跑 pending 项）
+            self._seq += 1
+            t["_ticket"] = self._seq
+            t["_queued"] = True
+            self._queue.put((1, self._seq, tid))
+            _log(t, f"已请求重跑 {retried} 个未成功链接（将在原任务内重跑）")
+            self._persist_locked()
+        # 锁外启动 worker：start() 内部也会加 self._lock，threading.Lock 不可重入，
+        # 持锁调用会死锁（与 submit / retry_url 同一约定）
+        self.start()
+        return retried
+
+    def retry_url(self, tid: str, url: str) -> bool:
+        """就地重新下载任务中的**单个链接**：把该链接重置为 pending 并重新调度**原任务**，
+        只重跑这一条（不生成新任务），结果仍显示在原任务详情里。
+
+        与 retry（重跑全部未成功项，同为原任务内重跑）的区别：这里只针对用户指定的
+        一条链接。任务不存在 / URL 不属于该任务 /
+        该链接正在跑（running/pending）则返回 False。
         """
         with self._lock:
             t = self._tasks.get(tid)
             if not t:
-                return None
-            urls = [
-                it["url"]
-                for it in t["items"]
-                if it.get("status") in ("fail", "cancelled", "running")
-            ]
-        if not urls:
-            return 0
-        new_id = self.submit(urls)
-        with self._lock:
-            t = self._tasks.get(tid)
-            if t:
-                _log(t, f"已重试 {len(urls)} 个未成功链接（新任务 {new_id}）")
-                self._persist_locked()
-        return len(urls)
+                return False
+            item = next((it for it in t["items"] if it["url"] == url), None)
+            if not item:
+                return False
+            # running/pending 正在跑或排队中，无需重复提交
+            if item.get("status") in ("running", "pending"):
+                return False
+            # 重置该链接，准备重跑（清空旧结果，让 download_files 重新落盘）
+            item["status"] = "pending"
+            item["stats"] = {}
+            item["error"] = None
+            item["saved_dir"] = None
+            item["elapsed"] = None
+            # 重置任务整体为可调度状态（若已终态）；done 仅计真正成功/跳过（ok+skip），
+            # 失败/取消不计入，否则与进度条口径矛盾（进度 50/50 却全失败/取消）
+            t["cancel_requested"] = False
+            t["done"] = sum(1 for it in t["items"] if it.get("status") in ("ok", "skip"))
+            t["status"] = "pending"
+            t["started_at"] = None
+            t["finished_at"] = None
+            # 重新入队：抬高 seq 令牌、置 _queued，交给 worker 再跑一遍（只跑 pending 项）
+            self._seq += 1
+            t["_ticket"] = self._seq
+            t["_queued"] = True
+            self._queue.put((1, self._seq, tid))
+            _log(t, f"已请求重新下载 1 个链接（将在原任务内重跑）：{url}")
+            self._persist_locked()
+        # 锁外启动 worker：start() 内部也会加 self._lock，必须在持锁块外调用，
+        # 否则 threading.Lock 不可重入会死锁（整个下载线程卡死、所有接口超时）。
+        # 这与 submit() 保持一致（submit 同样是先 start() 再在锁内 put）。
+        self.start()
+        return True
 
     def prioritize(self, tid: str) -> bool:
         """排队任务插队（D5）：仅 pending 且仍在队列中的任务有效。
@@ -468,10 +550,14 @@ class DownloadTaskManager:
             self._persist_locked()
             return True
 
-    def clear_finished(self) -> int:
-        """清空全部终态任务记录（D9）：done / failed / cancelled 一并删除，返回删除数。"""
+    def clear_done(self) -> int:
+        """清空「已完成」（done）任务记录：failed / cancelled 保留，返回删除数。
+
+        口径（2026-09-07 经用户确认变更，原为清全部终态）：手动清空只删已完成任务；
+        自动轮转 _prune_locked 仍按全部终态裁剪（防持久化 JSON 膨胀），两者用途不同。
+        """
         with self._lock:
-            stale = [tid for tid, t in self._tasks.items() if t["status"] in _TERMINAL]
+            stale = [tid for tid, t in self._tasks.items() if t["status"] == "done"]
             for tid in stale:
                 _ = self._tasks.pop(tid, None)
             if stale:
@@ -482,36 +568,54 @@ class DownloadTaskManager:
 
     @staticmethod
     def _public(t: dict[str, Any]) -> dict[str, Any]:
-        """剔除下划线开头的内部字段（队列令牌等），避免泄漏到 API 与持久化展示。"""
-        return {k: v for k, v in t.items() if not k.startswith("_")}
+        """剔除下划线开头的内部字段（避免泄漏到 API 与持久化展示）；
+        队列令牌以 ticket 名义单独暴露：前端任务列表「排队中」按它升序展示，
+        才能与实际执行顺序（PriorityQueue 按 (priority, seq) 出队）保持一致。"""
+        out = {k: v for k, v in t.items() if not k.startswith("_")}
+        if "_ticket" in t:
+            out["ticket"] = t["_ticket"]
+        return out
 
     def _execute(self, task: dict[str, Any]) -> None:
-        """执行单个任务：线程池按并发数并行处理 URL，逐个记录结果并落盘。"""
+        """执行单个任务：线程池按并发数并行处理 URL，逐个记录结果并落盘。
+
+        只处理 status 为 pending 的链接；已 ok/skip/fail/cancelled 的不再重跑。
+        这样「重新下载单条链接」（retry_url）只需把目标项重置为 pending 并重新入队，
+        即可就地补下，而不必把整批重跑一遍（否则会重复下载已成功的链接）。
+        """
         task["status"] = "running"
         task["started_at"] = self._now()
-        _log(task, "任务开始执行")
-        self._save()
         items: list[dict[str, Any]] = task["items"]
-        concurrency = max(1, min(config.DOWNLOAD_CONCURRENCY, task["total"]))
-        next_idx = 0
+        total = task["total"]
+        # 仅提交 pending 的链接；其余状态保持原状
+        pending_idx = [i for i, it in enumerate(items) if it.get("status") == "pending"]
+        _log(task, f"任务开始执行（待跑 {len(pending_idx)}/{total} 个链接）")
+        self._save()
+        if not pending_idx:
+            # 没有待跑项（理论上不会发生）：直接收尾，避免空线程池
+            task["finished_at"] = self._now()
+            self._save()
+            return
+        concurrency = max(1, min(config.DOWNLOAD_CONCURRENCY, len(pending_idx)))
+        next_pos = 0
         futures: "dict[cf.Future[tuple[dict[str, int], str | None, str | None, float]], int]" = {}
         with cf.ThreadPoolExecutor(
             max_workers=concurrency, thread_name_prefix="download-url"
         ) as pool:
             # 初始铺满并发槽位
             while (
-                next_idx < task["total"]
+                next_pos < len(pending_idx)
                 and not task["cancel_requested"]
                 and len(futures) < concurrency
             ):
-                i = next_idx
-                next_idx += 1
+                i = pending_idx[next_pos]
+                next_pos += 1
                 futures[
                     pool.submit(
                         _run_one,
                         items[i]["url"],
                         # sink 携带 [i/N] 归属前缀（i 为 items 下标，稳定且并发安全）
-                        _TaskLogSink(task, i + 1, task["total"]),
+                        _TaskLogSink(task, i + 1, total),
                     )
                 ] = i
             while futures:
@@ -522,18 +626,18 @@ class DownloadTaskManager:
                     self._record_result(task, i, stats, saved_dir, error, elapsed)
                 # 每完成一个补提交一个，直到全部提交或已请求取消
                 while (
-                    next_idx < task["total"]
+                    next_pos < len(pending_idx)
                     and not task["cancel_requested"]
                     and len(futures) < concurrency
                 ):
-                    i = next_idx
-                    next_idx += 1
+                    i = pending_idx[next_pos]
+                    next_pos += 1
                     futures[
                     pool.submit(
                         _run_one,
                         items[i]["url"],
                         # sink 携带 [i/N] 归属前缀（i 为 items 下标，稳定且并发安全）
-                        _TaskLogSink(task, i + 1, task["total"]),
+                        _TaskLogSink(task, i + 1, total),
                     )
                 ] = i
         if task["cancel_requested"]:
@@ -543,17 +647,25 @@ class DownloadTaskManager:
             task["status"] = "cancelled"
             _log(task, f"任务已取消（已完成 {task['done']}/{task['total']}）")
         else:
-            # 终态按 URL 结果判定：存在失败项即为 failed（列表可「重试」重跑失败项），
-            # 否则 done。此前一律标 done——外面显示「已完成」（绿色），
-            # 点开详情全是失败，严重误导。
+            # 终态按各链接结果判定。关键：含「已取消」链接（无真正失败）时绝不能标 done，
+            # 否则会出现「任务成功、明细全已取消」的数据矛盾（典型场景：单链接重下把任务
+            # reset 为 pending 重跑，其余旧链接仍是 cancelled，收尾 fail_count=0 误判成功）。
+            # 故交由 _finalize_status 统一判定：有失败→failed；有已取消→cancelled；全成功→done。
             fail_count = sum(1 for it in items if it["status"] == "fail")
             ok_count = sum(1 for it in items if it["status"] in ("ok", "skip"))
-            task["status"] = "failed" if fail_count else "done"
-            if fail_count:
+            cancelled_count = sum(1 for it in items if it["status"] == "cancelled")
+            task["status"] = self._finalize_status(task)
+            if task["status"] == "failed":
                 _log(
                     task,
                     f"任务结束：成功 {ok_count} / 失败 {fail_count}"
                     + f"（共 {task['total']}）——可在列表对该任务「重试」重跑失败链接",
+                )
+            elif task["status"] == "cancelled":
+                _log(
+                    task,
+                    f"任务结束：成功 {ok_count} / 已取消 {cancelled_count}"
+                    + f"（共 {task['total']}）——可在列表对该任务「重试」或逐条「重新下载」补下",
                 )
             else:
                 _log(task, f"任务全部完成（共 {task['total']} 个链接）")
@@ -589,7 +701,8 @@ class DownloadTaskManager:
             item["status"] = "skip"
         else:
             item["status"] = "fail"
-        task["done"] += 1
+        if item["status"] in ("ok", "skip"):
+            task["done"] += 1
         label = item["url"] if len(item["url"]) <= 60 else item["url"][:57] + "..."
         if item["status"] == "ok":
             parts = [f"{k} {v}" for k, v in stats.items() if k not in ("跳过", "失败")]
@@ -658,20 +771,62 @@ class DownloadTaskManager:
             # isinstance 只能收窄到 dict[Unknown, Unknown]，用 cast 明确为
             # dict[str, Any]，否则下游每个 t.get(...) 都会被判为 Unknown 并告警
             t = cast("dict[str, Any]", raw_item)
-            if t.get("status") in _TERMINAL:
-                self._tasks[tid] = t
-                continue
-            t["status"] = "failed"
-            t["cancel_requested"] = False
-            t["finished_at"] = now
-            t.setdefault("logs", [])
-            _log(t, "服务重启导致任务中断")
-            for item in t.get("items", []):
-                if item.get("status") == "pending":
-                    item["status"] = "cancelled"
+            if t.get("status") not in _TERMINAL:
+                # 非终态（重启中断的 running/pending）：标记为失败，未跑项置为已取消
+                t["status"] = "failed"
+                t["cancel_requested"] = False
+                t["finished_at"] = now
+                t.setdefault("logs", [])
+                _log(t, "服务重启导致任务中断")
+                for item in t.get("items", []):
+                    # running 一并置为已取消：进程已崩溃，正在下载的链接不可能继续，
+                    # 不处理会永远停留在「正在下载」（任务已 failed 却存在 running 项）
+                    if item.get("status") in ("pending", "running"):
+                        item["status"] = "cancelled"
+            else:
+                # 终态自愈：历史任务可能存在「终态与链接明细不一致」的脏数据
+                # （典型：含已取消链接却标 done）。加载即按最新规则重新校准，
+                # 使「任务状态」与「链接明细」重新自洽，无需手动修数据。
+                correct = self._finalize_status(t)
+                if correct != t.get("status"):
+                    t["status"] = correct
+                    _log(t, f"加载时发现终态与明细不一致，已校准为 {correct}")
+            # 统一重算 done = 成功+跳过数（ok+skip）：根治「done 计数与明细成功数
+            # 不一致」的脏数据（此前 fail、cancelled 曾被错误计入 done，导致进度
+            # 50/50 却全失败/取消）。正常数据重算结果一致，仅修正历史虚高。
+            done_correct = sum(
+                1 for it in t.get("items", []) if it.get("status") in ("ok", "skip")
+            )
+            if done_correct != t.get("done"):
+                t["done"] = done_correct
+                _log(t, f"加载时重算 done 计数为 {done_correct}（按明细 ok+skip）")
             self._tasks[tid] = t
         if self._tasks:
             self._persist_locked()
+
+    @staticmethod
+    def _finalize_status(task: dict[str, Any]) -> str:
+        """按各链接结果判定任务终态，是「任务状态」与「链接明细」一致性的唯一权威入口。
+
+        规则：
+        - 用户主动取消（cancel_requested）或被取消链接未真正下载成功 → cancelled；
+        - 存在失败链接 → failed；
+        - 全部成功/跳过 → done。
+
+        关键不变量：只要存在「已取消」链接（且无真正失败），任务**绝不**标 done——
+        否则会产生「任务显示成功、点开明细全是已取消」的数据矛盾。该矛盾此前真实发生过
+        （单链接重下把任务 reset 为 pending 重跑，其余旧链接仍 cancelled，收尾 fail_count=0 误判成功）。
+        """
+        items = task.get("items", [])
+        if task.get("cancel_requested"):
+            return "cancelled"
+        fail_count = sum(1 for it in items if it.get("status") == "fail")
+        if fail_count:
+            return "failed"
+        cancelled_count = sum(1 for it in items if it.get("status") == "cancelled")
+        if cancelled_count:
+            return "cancelled"
+        return "done"
 
     @staticmethod
     def _now() -> str:

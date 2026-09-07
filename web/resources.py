@@ -354,6 +354,26 @@ def move_to_trash(rel: str, is_dir: bool) -> dict[str, Any]:
     return {"ok": True, "id": item_id, "rel": rel, "size": size}
 
 
+def delete_permanent(rel: str, is_dir: bool) -> dict[str, Any]:
+    """直接删除 downloads/ 下的文件或目录（不进回收站，不可恢复）"""
+    rel = (rel or "").strip().replace("\\", "/").strip("/")
+    target = resolve_safe_dir(rel) if is_dir else resolve_safe(rel)
+    root = config.DOWNLOADS_DIR.resolve()
+    if target is None:
+        return {"ok": False, "reason": "路径不存在或越界"}
+    if target == root:
+        return {"ok": False, "reason": "不允许删除 downloads 根目录"}
+    try:
+        if is_dir:
+            shutil.rmtree(str(target))
+        else:
+            target.unlink()
+    except OSError as e:
+        return {"ok": False, "reason": f"删除失败，文件可能被占用: {e}"}
+    invalidate_cache()
+    return {"ok": True, "rel": rel}
+
+
 def list_trash() -> dict[str, Any]:
     """回收站清单：含每项是否已过期与剩余保留天数"""
     keep = config.TRASH_KEEP_DAYS

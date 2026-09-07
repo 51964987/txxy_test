@@ -17,6 +17,7 @@ from atomicfile import write_json_atomic
 import config
 import db
 import download_tasks
+import query_builder
 import ratelimit
 import resources
 import runs
@@ -184,16 +185,23 @@ class PostsPageResp(BaseModel):
     items: list[PostResp]
 
 
+# 点赞 / 回复的数值表达式：likes 存的是站点原始文本（'赞 9'、'3.4K'、'原創'），
+# 必须经 db.numeric_expr 解析，直接 CAST 会把「赞 N」算成 0、「3.4K」算成 3。
+# 排序与高级查询共用同一表达式（db.numeric_expr），保证口径一致。
+_N_LIKES = db.numeric_expr("likes")
+_N_REPLIES = db.numeric_expr("replies")
+_N_ENGAGE = f"({_N_LIKES} + {_N_REPLIES})"
+
 _SORTS = {
     "date_desc": "date DESC, created_at DESC",
     "date_asc": "date ASC, created_at ASC",
     "created_at_desc": "created_at DESC",
     "created_at_asc": "created_at ASC",
-    "likes_desc": "CAST(likes AS INTEGER) DESC, date DESC",
-    "replies_desc": "CAST(replies AS INTEGER) DESC, date DESC",
+    "likes_desc": f"{_N_LIKES} DESC, date DESC",
+    "replies_desc": f"{_N_REPLIES} DESC, date DESC",
     # 互动量（点赞+回复综合）。排序表达式与热门榜「最新最热 / 本月最热」完全一致，
     # 保证从榜单下钻到帖子页后，列表顺序与榜单顺序相同（口径一致）。
-    "engagement_desc": "(CAST(likes AS INTEGER) + CAST(replies AS INTEGER)) DESC, date DESC",
+    "engagement_desc": f"{_N_ENGAGE} DESC, date DESC",
     # 时间衰减热度（HN 式）。参照日用子查询取数据最新日，与榜单 hot 口径共用 db._hot_score，
     # 保证从榜单下钻后列表顺序与榜单一致。
     "hot_desc": "hot_score(likes, replies, date, (SELECT MAX(date) FROM posts)) DESC, date DESC",
@@ -213,11 +221,11 @@ _SORT_FIELDS: dict[str, dict[str, str]] = {
         "asc": "CAST(fid AS INTEGER) ASC, date DESC",
         "desc": "CAST(fid AS INTEGER) DESC, date DESC",
     },
-    "likes": {"asc": "CAST(likes AS INTEGER) ASC, date DESC", "desc": "CAST(likes AS INTEGER) DESC, date DESC"},
-    "replies": {"asc": "CAST(replies AS INTEGER) ASC, date DESC", "desc": "CAST(replies AS INTEGER) DESC, date DESC"},
+    "likes": {"asc": f"{_N_LIKES} ASC, date DESC", "desc": f"{_N_LIKES} DESC, date DESC"},
+    "replies": {"asc": f"{_N_REPLIES} ASC, date DESC", "desc": f"{_N_REPLIES} DESC, date DESC"},
     "engagement": {
-        "asc": "(CAST(likes AS INTEGER) + CAST(replies AS INTEGER)) ASC, date DESC",
-        "desc": "(CAST(likes AS INTEGER) + CAST(replies AS INTEGER)) DESC, date DESC",
+        "asc": f"{_N_ENGAGE} ASC, date DESC",
+        "desc": f"{_N_ENGAGE} DESC, date DESC",
     },
     "hot": {
         "asc": "hot_score(likes, replies, date, (SELECT MAX(date) FROM posts)) ASC, date DESC",
@@ -240,9 +248,9 @@ def _resolve_order(sort: str, sort_by: str | None, sort_order: str | None) -> st
 # 热门榜「最新最热 / 本月最热」的排序维度切换。
 # 注意 hot 用子查询取参照日而非传参，使 ORDER BY 片段保持无参数，SQL 参数位序才不会错乱。
 _BOARD_SORTS = {
-    "engagement": "(CAST(likes AS INTEGER) + CAST(replies AS INTEGER)) DESC, created_at DESC",
-    "likes": "CAST(likes AS INTEGER) DESC, created_at DESC",
-    "replies": "CAST(replies AS INTEGER) DESC, created_at DESC",
+    "engagement": f"{_N_ENGAGE} DESC, created_at DESC",
+    "likes": f"{_N_LIKES} DESC, created_at DESC",
+    "replies": f"{_N_REPLIES} DESC, created_at DESC",
     "hot": "hot_score(likes, replies, date, (SELECT MAX(date) FROM posts)) DESC, created_at DESC",
 }
 
@@ -675,7 +683,7 @@ def stats_month_top(
             daily = [
                 {"date": r["date"], "value": _as_int(r["v"])}
                 for r in conn.execute(
-                    "SELECT date, SUM(CAST(likes AS INTEGER) + CAST(replies AS INTEGER)) AS v" +
+                    f"SELECT date, SUM({_N_ENGAGE}) AS v" +
                     " FROM posts WHERE substr(date, 1, 7) = ? GROUP BY date ORDER BY date",
                     (month,),
                 )
@@ -853,9 +861,23 @@ def posts_list(
     sort: Annotated[str, Query()] = "date_desc",
     sort_by: Annotated[str | None, Query()] = None,
     sort_order: Annotated[str | None, Query(pattern="^(asc|desc)$")] = None,
-) -> dict[str, Any]:
+    adv: Annotated[str | None, Query()] = None,
+    ) -> dict[str, Any]:
+    """帖子列表。
+
+    adv 为高级查询条件：可以是条件树 JSON（可视化构建器）或类 SQL 表达式（高级模式），
+    与基础筛选（fid / 日期 / 关键字 / 作者）按 AND 合并——基础筛选管「范围」，
+    高级条件管「细筛」。条件不合法返回 400 并说明原因。
+    """
     order = _resolve_order(sort, sort_by, sort_order)
     clause, params = _build_filters(fid, date_from, date_to, q, author)
+    if adv:
+        try:
+            adv_sql, adv_params = query_builder.compile_adv(adv)
+        except query_builder.QueryError as e:
+            raise HTTPException(400, f"高级查询条件有误：{e}") from e
+        clause = f"({clause}) AND {adv_sql}"
+        params = params + adv_params
     offset = (page - 1) * page_size
     # COUNT 与列表在单连接内完成，省一次连接开/关
     conn = db.open_conn()
@@ -1146,10 +1168,12 @@ def resources_video(_: VideoRateLimit, path: str) -> FileResponse:
 
 
 class ResourceDeleteReq(BaseModel):
-    """删除请求体：path 为 downloads/ 内相对路径，is_dir 区分文件与目录。"""
+    """删除请求体：path 为 downloads/ 内相对路径，is_dir 区分文件与目录；
+    permanent=True 直接删除（不进回收站，不可恢复）。"""
 
     path: str
     is_dir: bool = False
+    permanent: bool = False
 
 
 class ResourceIdReq(BaseModel):
@@ -1160,8 +1184,12 @@ class ResourceIdReq(BaseModel):
 
 @router.post("/resources/delete")
 def resources_delete(_: DeleteRateLimit, req: ResourceDeleteReq) -> dict[str, Any]:
-    """软删除：移入 outputs/trash/ 保留 TRASH_KEEP_DAYS 天，可在回收站内恢复或彻底删除。"""
-    r = resources.move_to_trash(req.path, req.is_dir)
+    """删除资源：默认软删除（移入回收站，可恢复）；permanent=True 直接删除（不可恢复）。"""
+    r = (
+        resources.delete_permanent(req.path, req.is_dir)
+        if req.permanent
+        else resources.move_to_trash(req.path, req.is_dir)
+    )
     if not r["ok"]:
         raise HTTPException(400, str(r["reason"]))
     return r
@@ -1303,7 +1331,7 @@ def downloads_cancel(tid: str) -> dict[str, Any]:
 
 @router.post("/downloads/{tid}/retry")
 def downloads_retry(tid: str) -> dict[str, Any]:
-    """重跑失败任务（D1）：收集原任务未成功项生成新任务，返回重跑链接数。"""
+    """重跑失败任务（D1）：在原任务内重跑未成功项（不另开任务，进度在原任务更新）。"""
     count = download_tasks.manager.retry(tid)
     if count is None:
         raise HTTPException(404, f"未找到下载任务 {tid}")
@@ -1320,10 +1348,31 @@ def downloads_prioritize(tid: str) -> dict[str, Any]:
     return {"id": tid}
 
 
+class DownloadRetryUrlReq(BaseModel):
+    """重新下载任务中的单个链接（就地重跑，不另开任务）。"""
+
+    url: str
+
+
+@router.post("/downloads/{tid}/retry-url")
+def downloads_retry_url(tid: str, req: DownloadRetryUrlReq) -> dict[str, Any]:
+    """重新下载任务里指定的单个链接：把该链接重置为 pending 并重新调度**原任务**，
+    只重跑这一条，结果仍显示在原任务详情里（不生成新任务）。
+
+    用于「整批只有个别链接失败 / 被取消」时补下，不必重跑其它已成功的链接；
+    与 /retry（在原任务内重跑该任务全部未成功项）互补。
+    404 = 任务不存在或 URL 不属于该任务（或该链接正在下载中）。
+    """
+    ok = download_tasks.manager.retry_url(tid, req.url.strip())
+    if not ok:
+        raise HTTPException(404, f"任务 {tid} 中未找到该链接，或该链接正在下载中")
+    return {"id": tid, "url": req.url}
+
+
 @router.post("/downloads/clear")
 def downloads_clear() -> dict[str, Any]:
-    """清空全部终态任务记录（D9）：done / failed / cancelled 一并删除。"""
-    cleared = download_tasks.manager.clear_finished()
+    """清空「已完成」（done）任务记录：failed / cancelled 保留，返回删除数。"""
+    cleared = download_tasks.manager.clear_done()
     return {"cleared": cleared}
 
 

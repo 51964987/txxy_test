@@ -14,6 +14,51 @@ from typing import Any, Callable, Iterator
 import config
 
 
+def numeric_expr(col: str) -> str:
+    """数值字段（likes / replies）的 SQL 表达式：把站点原始文本解析为可比较的数字。
+
+    posts.likes 存的是抓取到的原始文本，形态混杂：
+        纯数字 '507'          → 507
+        带前缀 '赞 9' / '赞12' → 9 / 12
+        带单位 '3.4K'         → 3400（直接 CAST 只会得到 3）
+        纯标签 '原創'/'新作'/'.::' → 0（无点赞数据，语义正确）
+
+    此前各处直接写 CAST(likes AS INTEGER)，导致「赞 N」「3.4K」被算成 0 或 3，
+    数值筛选与排序失真——例如 fid=2 中仅 660 条被识别为有点赞，其余全按 0 计。
+    全项目统一用此表达式（供排序与高级查询共用），避免各写一份。
+
+    用 SQLite 内置函数链而非注册 Python UDF：14 万行逐行回调会明显拖慢查询。
+    """
+    # 外层必须再包一层 CAST：CASE 表达式本身没有类型亲和性，
+    # 与参数比较时（如 > ? 传 '100' 文本）会按 SQLite 比较规则「数字 < 文本」全部落空。
+    # 保持与旧写法 CAST(likes AS INTEGER) 相同的外层形态，排序与筛选口径才一致。
+    t = f"TRIM({col})"
+    return (
+        "CAST(CASE WHEN "
+        f"{col} LIKE '%K' THEN CAST(CAST(REPLACE({t}, 'K', '') AS REAL) * 1000 AS INTEGER)"
+        f" ELSE CAST(REPLACE(REPLACE(REPLACE({t}, '赞', ''), ' ', ''), ',', '') AS INTEGER)"
+        " END AS INTEGER)"
+    )
+
+
+def parse_count(value: Any) -> int:
+    """numeric_expr 的 Python 等价实现（供 Python 侧计算，如 hot_score）。
+
+    与 SQL 表达式保持同一口径：'赞 9' → 9、'3.4K' → 3400、'原創' → 0。
+    """
+    text = "" if value is None else str(value).strip()
+    if not text:
+        return 0
+    upper = text.upper()
+    if upper.endswith("K"):
+        try:
+            return int(float(upper[:-1]) * 1000)
+        except ValueError:
+            return 0
+    digits = "".join(ch for ch in text if ch.isdigit())
+    return int(digits) if digits else 0
+
+
 def _hot_score(likes: Any, replies: Any, post_date: Any, ref_date: Any) -> float:
     """HN 式时间衰减热度：(score - 1) / (age_days + 2) ** 1.8。
 
@@ -24,7 +69,8 @@ def _hot_score(likes: Any, replies: Any, post_date: Any, ref_date: Any) -> float
     保证从榜单下钻后列表顺序与榜单一致——见 api.py 的 _SORTS["hot_desc"]。
     """
     try:
-        score = int(likes or 0) + int(replies or 0)
+        # 用 parse_count 而非 int()：likes 可能是 '赞 9' / '3.4K' 这类原始文本
+        score = parse_count(likes) + parse_count(replies)
     except (TypeError, ValueError):
         return 0.0
     try:

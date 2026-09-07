@@ -19,6 +19,7 @@ import {
 import { useAppStore } from '../stores/app'
 import { useTrash } from '../composables/useTrash'
 import { formatMinuteTime } from '../utils/time'
+import { legacyCopy } from '../utils/clipboard'
 
 const router = useRouter()
 // 移动端形态沿用布局层的统一断点（<768px），页面不自建第二套判定
@@ -66,11 +67,40 @@ const sortState = ref<{ key: string; order: 'asc' | 'desc' | null }>({ key: '', 
 // B3 目录排序：按下载时间（目录 mtime）最新优先 / 按名称
 const folderSort = ref<'time' | 'name'>('time')
 
+// 目录列表分页：145+ 个目录一次全渲染既长又慢（每个 header 还要聚合类型构成）。
+// 业界网盘（百度/Google Drive）的标准做法是分页展示，故这里按页切片。
+const folderPage = ref(1)
+const folderPageSize = ref(30)
+/** 当前页要渲染的目录（sortedFolders 的切片）；-1 表示不分页（全部） */
+const pagedFolders = computed<ResourceItem[]>(() => {
+  const all = sortedFolders.value
+  if (folderPageSize.value < 0) return all
+  const start = (folderPage.value - 1) * folderPageSize.value
+  return all.slice(start, start + folderPageSize.value)
+})
+/** 排序/搜索口径变化时回到第一页，避免停留在空白页 */
+function resetFolderPage() {
+  folderPage.value = 1
+}
+function onFolderPage(p: number) {
+  folderPage.value = p
+}
+function onFolderPageSize(s: number) {
+  folderPageSize.value = s
+  folderPage.value = 1
+}
+/** 「显示全部」：关闭分页（folderPageSize = -1，pagedFolders 返回全部） */
+function showAllFolders() {
+  folderPageSize.value = -1
+}
+/** 「分页显示」：从「全部」切回分页（默认每页 30） */
+function resetToPaged() {
+  folderPageSize.value = 30
+  folderPage.value = 1
+}
+
 // B1 来源回溯缓存：目录名 -> 来源帖信息（会话内不重复请求）
 const sourceMap = ref<Record<string, ResourceSource>>({})
-
-// B7 下载任务关联缓存：目录名 -> 任务摘要（saved_dir 回填后按目录聚合）
-const taskMap = ref<Record<string, { id: string; status: string }>>({})
 
 // B5 图片预览查看器状态
 const viewerVisible = ref(false)
@@ -82,9 +112,8 @@ async function load() {
   loadError.value = ''
   try {
     data.value = await api.resources()
-    // 加载完成后并行补齐目录级信息：来源帖（B1）与下载任务关联（B7）；回收站数量用于工具栏角标
+    // 加载完成后并行补齐目录级信息：来源帖（B1）；回收站数量用于工具栏角标
     void loadSources((data.value?.items ?? []).map((i) => i.name))
-    void loadTasks()
     void loadTrash()
   } catch (e) {
     if (isAborted(e)) return
@@ -109,24 +138,6 @@ async function loadSources(names: string[]) {
       }
     }),
   )
-}
-
-async function loadTasks() {
-  try {
-    const r = await api.downloadTasks()
-    const map: Record<string, { id: string; status: string }> = {}
-    for (const t of r.tasks) {
-      // R1 起任务列表为概要视图，saved_dirs 为该任务已保存目录的去重集合
-      for (const dir0 of t.saved_dirs ?? []) {
-        // saved_dir 统一取顶层目录名（与资源目录 name 同口径）
-        const dir = dir0.replace(/\\/g, '/').replace(/\/+$/, '').split('/')[0]
-        if (dir && !map[dir]) map[dir] = { id: t.id, status: t.status }
-      }
-    }
-    taskMap.value = map
-  } catch {
-    /* 下载中心不可用时不影响资源页主流程 */
-  }
 }
 
 function toggle(name: string) {
@@ -159,41 +170,9 @@ function fileDir(file: ResourceFile): string {
 }
 
 // B7 跳转下载中心查看产生该目录的任务
-function goDownloads() {
-  void router.push('/downloads')
-}
 
-function taskOf(name: string) {
-  return taskMap.value[name]
-}
-
-/** 复制文本到剪贴板（带 execCommand 降级）；当前仅用于复制种子磁链 */
-function copyText(text: string, successMsg: string) {
-  // 兼容非 HTTPS / 非 localhost 下 clipboard API 不可用，降级用 execCommand
-  const fallback = () => {
-    try {
-      const ta = document.createElement('textarea')
-      ta.value = text
-      ta.style.position = 'fixed'
-      ta.style.opacity = '0'
-      document.body.appendChild(ta)
-      ta.select()
-      document.execCommand('copy')
-      document.body.removeChild(ta)
-      ElMessage.success(successMsg)
-    } catch {
-      ElMessage.error('复制失败，请手动复制')
-    }
-  }
-  if (navigator.clipboard?.writeText) {
-    navigator.clipboard
-      .writeText(text)
-      .then(() => ElMessage.success(successMsg))
-      .catch(fallback)
-  } else {
-    fallback()
-  }
-}
+// 复制实现统一走 utils/clipboard（与帖子浏览「复制链接」共用，含 execCommand 降级
+// 与返回值校验），本页不再自留一份
 
 // 时间展示统一走 utils/time：本文件曾自带一份补零与拼接，与 utils/time 重复
 
@@ -493,8 +472,38 @@ async function showTorrent(file: ResourceFile) {
   }
 }
 
-function copyMagnet(magnet: string) {
-  copyText(magnet, '磁链已复制，可粘贴到下载工具')
+const magnetInputRef = ref<{ $el: HTMLDivElement } | null>(null)
+
+async function copyMagnet(magnet: string) {
+  const okMsg = () => ElMessage.success('磁链已复制，可粘贴到下载工具')
+  // 1) 安全上下文（HTTPS / localhost）走 Clipboard API
+  if (navigator.clipboard?.writeText && window.isSecureContext) {
+    try {
+      await navigator.clipboard.writeText(magnet)
+      okMsg()
+      return
+    } catch {
+      /* 落到可见输入框方案 */
+    }
+  }
+  // 2) 非安全上下文（手机 http 访问）：选中弹窗内「可见」的磁链输入框后复制。
+  //    部分移动浏览器会拒绝复制 opacity:0 隐藏元素的内容（execCommand 返回 true
+  //    但剪贴板为空，即「提示成功、粘贴为空」的根因），对可见元素复制最可靠。
+  const input = magnetInputRef.value?.$el?.querySelector('input') as HTMLInputElement | null
+  if (input) {
+    input.focus()
+    input.select()
+    if (document.execCommand('copy')) {
+      okMsg()
+      return
+    }
+  }
+  // 3) 隐藏 textarea 兜底
+  if (legacyCopy(magnet)) {
+    okMsg()
+    return
+  }
+  ElMessage.error('复制失败，请在上方输入框长按磁链手动复制')
 }
 
 /** 用系统默认程序打开文件（路径校验在后端；非 Windows 返回 501） */
@@ -507,20 +516,190 @@ async function openFileLocal(file: ResourceFile) {
   }
 }
 
-// ===== 删除（软删除：移入回收站，保留期内可恢复）=====
-async function removeFile(file: ResourceFile) {
-  try {
-    await ElMessageBox.confirm(
-      `确定删除文件「${file.name}」（${formatSize(Number(file.size))}）？\n移入回收站后 ${trashKeepDays.value} 天内可恢复。`,
-      '删除确认',
-      { type: 'warning', confirmButtonText: '移入回收站', cancelButtonText: '取消' },
-    )
-  } catch {
+// ===== 统一查看入口：一次点击兼容所有类型 =====
+// 图片→大图查看器（同列表连看）、视频→播放弹窗（同列表连播）、文本→文本查看、
+// 种子→种子信息、其他→系统默认程序打开。此前预览/播放/查看/种子信息四套按钮
+// 分散在 5 处模板里按类型 if/else 重复，点击语义不统一。
+function openResource(file: ResourceFile, list: ResourceFile[]) {
+  if (file.category === 'image') previewImage(file, list)
+  else if (file.category === 'video') playVideo(file, list)
+  else if (file.category === 'text') viewText(file)
+  else if (file.category === 'torrent') showTorrent(file)
+  else openFileLocal(file)
+}
+
+// ===== 目录级浏览：不展开目录即可浏览该目录全部资源 =====
+const browserVisible = ref(false)
+const browserFolder = ref<ResourceItem | null>(null)
+// 浏览抽屉固定排序：先按类型（图→视频→种子→文本→其他，与筛选选项同序）再按文件名。
+// 不跟随表格列排序状态——浏览是「按类型聚类浏览」场景，同类文件相邻更符合直觉；
+// 文件名用 zh-Hans-CN locale（与目录排序一致），中文按拼音序
+const CATEGORY_ORDER: Record<string, number> = { image: 0, video: 1, torrent: 2, text: 3, other: 4 }
+const browserFiles = computed<ResourceFile[]>(() => {
+  const list = [...(browserFolder.value?.files ?? [])]
+  list.sort((a, b) => {
+    const ca = CATEGORY_ORDER[a.category] ?? 9
+    const cb = CATEGORY_ORDER[b.category] ?? 9
+    if (ca !== cb) return ca - cb
+    return a.name.localeCompare(b.name, 'zh-Hans-CN')
+  })
+  return list
+})
+
+// 资源过多时的展示优化（业界集合浏览通行做法：类型筛选 + 名称过滤 + 前端分页；
+// 与目录列表分页、任务列表分页同一模式。图片懒加载保留，每页数量有限天然不触限流）：
+// 移动端每页 30（缩略图流量与滚动负担更小），桌面 60；与切片、分页条共用
+const browserPageSize = computed(() => (isMobile.value ? 30 : 60))
+const browserTypeFilter = ref<'all' | 'image' | 'video' | 'torrent' | 'text' | 'other'>('all')
+const browserKeyword = ref('')
+const browserPage = ref(1)
+
+const browserFiltered = computed<ResourceFile[]>(() => {
+  let list = browserFiles.value
+  if (browserTypeFilter.value !== 'all') {
+    list = list.filter((f) => f.category === browserTypeFilter.value)
+  }
+  const kw = browserKeyword.value.trim().toLowerCase()
+  if (kw) list = list.filter((f) => f.name.toLowerCase().includes(kw))
+  return list
+})
+const browserPaged = computed(() =>
+  browserFiltered.value.slice(
+    (browserPage.value - 1) * browserPageSize.value,
+    browserPage.value * browserPageSize.value,
+  ),
+)
+// 筛选/过滤变化回到第一页，避免停留在超出范围的页码
+watch([browserTypeFilter, browserKeyword], () => {
+  browserPage.value = 1
+})
+
+function openBrowser(item: ResourceItem) {
+  if (!item.files.length) {
+    ElMessage.info('该目录没有文件')
     return
   }
+  browserFolder.value = item
+  // 每次打开从干净状态开始，避免上一次的筛选残留在新目录上
+  browserTypeFilter.value = 'all'
+  browserKeyword.value = ''
+  browserPage.value = 1
+  browserVisible.value = true
+}
+
+// ===== 视频首帧预览：浏览器内 canvas 抓帧（零后端依赖）=====
+// 后端生成缩略图需引入 ffmpeg——8.2.2 已评估「依赖 ffmpeg，建议不做」；
+// 改为前端抓首帧：只 seek 到 0.1s，Range 仅拉取少量数据；视频接口同源，canvas 不会被污染。
+const videoPosters = ref<Record<string, string>>({})
+// 缓存含「失败标记空串」，避免反复重试浪费带宽与限流额度
+const posterCache = new Map<string, string>()
+
+function captureVideoFrame(url: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const v = document.createElement('video')
+    v.preload = 'metadata'
+    v.muted = true
+    v.playsInline = true
+    v.src = url
+    const cleanup = () => {
+      v.removeAttribute('src')
+      v.load()
+    }
+    v.onloadedmetadata = () => {
+      v.currentTime = Math.min(0.1, (v.duration || 1) * 0.1)
+    }
+    v.onseeked = () => {
+      try {
+        const c = document.createElement('canvas')
+        c.width = v.videoWidth || 160
+        c.height = v.videoHeight || 100
+        const ctx = c.getContext('2d')
+        if (ctx) {
+          ctx.drawImage(v, 0, 0, c.width, c.height)
+          resolve(c.toDataURL('image/jpeg', 0.6))
+        } else reject(new Error('canvas 不可用'))
+      } catch (e) {
+        reject(e)
+      } finally {
+        cleanup()
+      }
+    }
+    v.onerror = () => {
+      cleanup()
+      reject(new Error('视频加载失败'))
+    }
+  })
+}
+
+/** 只为「进入视口」的视频占位块抓帧（IntersectionObserver 懒触发）：
+ *  一页最多 60 个视频，全量抓会浪费带宽且逼近视频接口 300 次/分限流 */
+let posterObserver: IntersectionObserver | null = null
+function bindVideoPosters() {
+  posterObserver?.disconnect()
+  const cells = document.querySelectorAll<HTMLElement>('.browser-video-ph')
+  if (!cells.length) return
+  posterObserver = new IntersectionObserver((entries) => {
+    for (const e of entries) {
+      if (!e.isIntersecting) continue
+      const el = e.target as HTMLElement
+      posterObserver?.unobserve(el)
+      const rel = el.dataset.rel
+      if (!rel || posterCache.has(rel)) continue
+      posterCache.set(rel, '') // 先占位，防止并发重复发起
+      void captureVideoFrame(resourceVideoUrl(rel))
+        .then((data) => {
+          posterCache.set(rel, data)
+          videoPosters.value = { ...videoPosters.value, [rel]: data }
+        })
+        .catch(() => {
+          /* 失败保持类型文字占位 */
+        })
+    }
+  })
+  cells.forEach((el) => posterObserver?.observe(el))
+}
+watch([browserVisible, browserPaged], () => {
+  void nextTick(bindVideoPosters)
+})
+onBeforeUnmount(() => posterObserver?.disconnect())
+
+/** 首帧作为占位块背景：未抓到前保持类型文字 */
+function posterStyle(rel: string): Record<string, string> {
+  const data = videoPosters.value[rel]
+  return data
+    ? { backgroundImage: `url(${data})`, backgroundSize: 'cover', backgroundPosition: 'center' }
+    : {}
+}
+
+// ===== 删除（软删除：移入回收站，保留期内可恢复）=====
+/** 删除确认（三选）：确认=直接删除（不可恢复），取消按钮=移入回收站，右上角 X=放弃。
+ *  EP 的 resolve 可能是 action 字符串或 { action } 对象（版本差异），做兼容处理 */
+function askDeleteAction(title: string, message: string): Promise<'confirm' | 'cancel' | 'close'> {
+  return ElMessageBox.confirm(message, title, {
+    type: 'warning',
+    distinguishCancelAndClose: true,
+    confirmButtonText: '直接删除',
+    cancelButtonText: '移入回收站',
+  }).then(
+    (r) =>
+      (typeof r === 'string' ? r : ((r as { action?: string })?.action ?? 'confirm')) as
+        | 'confirm'
+        | 'cancel'
+        | 'close',
+    () => 'close' as const, // 右上角 X / ESC / 点击遮罩：不操作
+  )
+}
+
+async function removeFile(file: ResourceFile) {
+  const action = await askDeleteAction(
+    '删除确认',
+    `删除文件「${file.name}」（${formatSize(Number(file.size))}）——「直接删除」不可恢复；「移入回收站」可保留 ${trashKeepDays.value} 天。`,
+  )
+  if (action === 'close') return
+  const permanent = action === 'confirm'
   try {
-    await api.deleteResource(file.rel_path, false)
-    ElMessage.success('已移入回收站')
+    await api.deleteResource(file.rel_path, false, permanent)
+    ElMessage.success(permanent ? '已直接删除' : `已移入回收站，${trashKeepDays.value} 天内可恢复`)
     await load()
   } catch (e) {
     if (isAborted(e)) return
@@ -529,18 +708,15 @@ async function removeFile(file: ResourceFile) {
 }
 
 async function removeFolder(item: ResourceItem) {
+  const action = await askDeleteAction(
+    '删除目录确认',
+    `删除目录「${item.name}」及其 ${item.file_count} 个文件（${formatSize(item.total_size)}）——「直接删除」不可恢复；「移入回收站」可保留 ${trashKeepDays.value} 天。`,
+  )
+  if (action === 'close') return
+  const permanent = action === 'confirm'
   try {
-    await ElMessageBox.confirm(
-      `确定删除目录「${item.name}」及其 ${item.file_count} 个文件（${formatSize(item.total_size)}）？\n移入回收站后 ${trashKeepDays.value} 天内可恢复。`,
-      '删除目录确认',
-      { type: 'warning', confirmButtonText: '移入回收站', cancelButtonText: '取消' },
-    )
-  } catch {
-    return
-  }
-  try {
-    await api.deleteResource(item.name, true)
-    ElMessage.success('目录已移入回收站')
+    await api.deleteResource(item.name, true, permanent)
+    ElMessage.success(permanent ? '目录已直接删除' : '目录已移入回收站')
     if (active.value === item.name) active.value = ''
     await load()
   } catch (e) {
@@ -577,7 +753,7 @@ async function clearFiltersAndExpand(name: string) {
   await scrollToFolder(name)
 }
 
-/** 目录行元素表（供「最大目录 / 命中目录」点击后滚动定位） */
+/** 目录行元素表（供「Top10 目录 / 命中目录」点击后滚动定位） */
 const folderRefs = new Map<string, HTMLElement>()
 
 function setFolderRef(el: unknown, name: string) {
@@ -602,7 +778,7 @@ async function scrollToFolder(name: string) {
   el.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'center' })
 }
 
-// B6 容量洞察：类型分布（按大小）、最大目录、Top 大文件
+// B6 容量洞察：类型分布（按大小）、Top10 目录、Top10 大文件
 const categorySegments = computed(() => {
   const agg: Record<string, { count: number; size: number }> = {}
   for (const f of allFiles.value) {
@@ -624,8 +800,9 @@ const categorySegments = computed(() => {
     .sort((a, b) => b.size - a.size)
 })
 
+// Top10 目录：与「Top10 大文件」对标对齐（同为 Top10、同为按大小取前 10）
 const topFolders = computed<ResourceItem[]>(() =>
-  [...(data.value?.items ?? [])].sort((a, b) => b.total_size - a.total_size).slice(0, 3),
+  [...(data.value?.items ?? [])].sort((a, b) => b.total_size - a.total_size).slice(0, 10),
 )
 
 const topFiles = computed<ResourceFile[]>(() =>
@@ -680,35 +857,14 @@ const columns: Columns<ResourceFile> = [
           () => '删除',
         ),
       ]
-      if (rowData.category === 'image') {
-        btns.unshift(
-          h(
-            ElButton,
-            { link: true, type: 'primary', onClick: () => previewImage(rowData, activeFiles.value) },
-            () => '预览',
-          ),
-        )
-      } else if (rowData.category === 'video') {
-        btns.unshift(
-          h(
-            ElButton,
-            { link: true, type: 'primary', onClick: () => playVideo(rowData, activeFiles.value) },
-            () => '播放',
-          ),
-        )
-      } else if (rowData.category === 'text') {
-        btns.unshift(
-          h(ElButton, { link: true, type: 'primary', onClick: () => viewText(rowData) }, () => '查看'),
-        )
-      } else if (rowData.category === 'torrent') {
-        btns.unshift(
-          h(
-            ElButton,
-            { link: true, type: 'primary', onClick: () => showTorrent(rowData) },
-            () => '种子信息',
-          ),
-        )
-      }
+      // 统一查看入口：按类型自动分派（大图查看器 / 播放弹窗 / 文本 / 种子信息 / 系统打开）
+      btns.unshift(
+        h(
+          ElButton,
+          { link: true, type: 'primary', onClick: () => openResource(rowData, activeFiles.value) },
+          () => '查看',
+        ),
+      )
       // 所有类型都可用系统默认程序打开（压缩包、种子等本地处理更直接）
       btns.unshift(h(ElButton, { link: true, onClick: () => openFileLocal(rowData) }, () => '打开'))
       return h('div', { class: 'row-actions' }, btns)
@@ -768,35 +924,14 @@ const globalColumns: Columns<ResourceFile> = [
           () => '删除',
         ),
       ]
-      if (rowData.category === 'image') {
-        btns.unshift(
-          h(
-            ElButton,
-            { link: true, type: 'primary', onClick: () => previewImage(rowData, globalFiles.value) },
-            () => '预览',
-          ),
-        )
-      } else if (rowData.category === 'video') {
-        btns.unshift(
-          h(
-            ElButton,
-            { link: true, type: 'primary', onClick: () => playVideo(rowData, globalFiles.value) },
-            () => '播放',
-          ),
-        )
-      } else if (rowData.category === 'text') {
-        btns.unshift(
-          h(ElButton, { link: true, type: 'primary', onClick: () => viewText(rowData) }, () => '查看'),
-        )
-      } else if (rowData.category === 'torrent') {
-        btns.unshift(
-          h(
-            ElButton,
-            { link: true, type: 'primary', onClick: () => showTorrent(rowData) },
-            () => '种子信息',
-          ),
-        )
-      }
+      // 统一查看入口：按类型自动分派（与目录模式同一交互）
+      btns.unshift(
+        h(
+          ElButton,
+          { link: true, type: 'primary', onClick: () => openResource(rowData, globalFiles.value) },
+          () => '查看',
+        ),
+      )
       btns.unshift(h(ElButton, { link: true, onClick: () => openFileLocal(rowData) }, () => '打开'))
       return h('div', { class: 'row-actions' }, btns)
     },
@@ -894,16 +1029,53 @@ onBeforeUnmount(() => {
         </div>
       </div>
       <div class="insight-block">
-        <div class="insight-title">最大目录（点击展开）</div>
+        <div class="insight-title">Top10 目录</div>
         <div
           v-for="f in topFolders"
           :key="f.name"
           class="insight-line"
-          :title="f.name"
+          :title="`${f.name}（点击行展开并定位到列表）`"
           @click="clearFiltersAndExpand(f.name)"
         >
           <span class="insight-name">{{ f.name }}</span>
-          <span class="text-muted">{{ formatSize(f.total_size) }}</span>
+          <!-- 与 Top10 大文件行平行：元信息（文件数 · 大小）+ 类型化操作 -->
+          <span class="text-muted insight-meta">{{ f.file_count }} 个文件 · {{ formatSize(f.total_size) }}</span>
+          <span class="insight-ops">
+            <!-- 浏览与列表目录头的「浏览」为同一功能（openBrowser 抽屉网格）；
+                 移动端三个按钮挤掉目录名，收敛为一个「更多」菜单（与目录头同一模式） -->
+            <template v-if="!isMobile">
+              <el-button link type="primary" size="small" @click.stop="openBrowser(f)">
+                浏览
+              </el-button>
+              <el-button
+                v-if="sourceOf(f.name)?.matched"
+                link
+                type="primary"
+                size="small"
+                @click.stop="openSourceUrl(f.name)"
+              >
+                原帖
+              </el-button>
+              <el-button link type="danger" size="small" @click.stop="removeFolder(f)">
+                删除
+              </el-button>
+            </template>
+            <el-dropdown v-else trigger="click">
+              <el-button link size="small" class="insight-more" @click.stop>更多</el-button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item @click="openBrowser(f)">浏览</el-dropdown-item>
+                  <el-dropdown-item
+                    v-if="sourceOf(f.name)?.matched"
+                    @click="openSourceUrl(f.name)"
+                  >
+                    原帖
+                  </el-dropdown-item>
+                  <el-dropdown-item divided @click="removeFolder(f)">删除</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
+          </span>
         </div>
       </div>
       <div class="insight-block">
@@ -914,54 +1086,40 @@ onBeforeUnmount(() => {
           <span class="insight-dir text-muted" :title="fileDir(f)">{{ fileDir(f) }}</span>
           <span class="text-muted">{{ formatSize(Number(f.size)) }}</span>
           <span class="insight-ops">
-            <el-button
-              v-if="f.category === 'image'"
-              link
-              type="primary"
-              size="small"
-              @click.stop="previewImage(f, topFiles)"
-            >
-              预览
-            </el-button>
-            <el-button
-              v-else-if="f.category === 'video'"
-              link
-              type="primary"
-              size="small"
-              @click.stop="playVideo(f, topFiles)"
-            >
-              播放
-            </el-button>
-            <el-button
-              v-else-if="f.category === 'text'"
-              link
-              type="primary"
-              size="small"
-              @click.stop="viewText(f)"
-            >
-              查看
-            </el-button>
-            <el-button
-              v-else-if="f.category === 'torrent'"
-              link
-              type="primary"
-              size="small"
-              @click.stop="showTorrent(f)"
-            >
-              种子信息
-            </el-button>
-            <el-button
-              v-if="sourceOf(fileDir(f))?.matched"
-              link
-              type="primary"
-              size="small"
-              @click.stop="openFileSource(f)"
-            >
-              原帖
-            </el-button>
-            <el-button link type="danger" size="small" @click.stop="removeFile(f)">
-              删除
-            </el-button>
+            <!-- 统一查看入口：按类型自动分派；
+                 移动端收敛为一个「更多」菜单（名称占满行宽） -->
+            <template v-if="!isMobile">
+              <el-button link type="primary" size="small" @click.stop="openResource(f, topFiles)">
+                查看
+              </el-button>
+              <el-button
+                v-if="sourceOf(fileDir(f))?.matched"
+                link
+                type="primary"
+                size="small"
+                @click.stop="openFileSource(f)"
+              >
+                原帖
+              </el-button>
+              <el-button link type="danger" size="small" @click.stop="removeFile(f)">
+                删除
+              </el-button>
+            </template>
+            <el-dropdown v-else trigger="click">
+              <el-button link size="small" class="insight-more" @click.stop>更多</el-button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item @click="openResource(f, topFiles)">查看</el-dropdown-item>
+                  <el-dropdown-item
+                    v-if="sourceOf(fileDir(f))?.matched"
+                    @click="openFileSource(f)"
+                  >
+                    原帖
+                  </el-dropdown-item>
+                  <el-dropdown-item divided @click="removeFile(f)">删除</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
           </span>
         </div>
       </div>
@@ -999,6 +1157,7 @@ onBeforeUnmount(() => {
             v-model="folderSort"
             class="folder-sort"
             size="default"
+            @change="resetFolderPage"
           >
             <el-option label="目录：按时间排序" value="time" />
             <el-option label="目录：按名称排序" value="name" />
@@ -1075,41 +1234,9 @@ onBeforeUnmount(() => {
                   </div>
                 </div>
                 <div class="fc-ops">
-                  <el-button
-                    v-if="f.category === 'image'"
-                    size="small"
-                    type="primary"
-                    link
-                    @click="previewImage(f, globalFiles)"
-                  >
-                    预览
-                  </el-button>
-                  <el-button
-                    v-else-if="f.category === 'video'"
-                    size="small"
-                    type="primary"
-                    link
-                    @click="playVideo(f, globalFiles)"
-                  >
-                    播放
-                  </el-button>
-                  <el-button
-                    v-else-if="f.category === 'text'"
-                    size="small"
-                    type="primary"
-                    link
-                    @click="viewText(f)"
-                  >
+                  <!-- 统一查看入口：按类型自动分派 -->
+                  <el-button size="small" type="primary" link @click="openResource(f, globalFiles)">
                     查看
-                  </el-button>
-                  <el-button
-                    v-else-if="f.category === 'torrent'"
-                    size="small"
-                    type="primary"
-                    link
-                    @click="showTorrent(f)"
-                  >
-                    种子信息
                   </el-button>
                   <el-dropdown trigger="click">
                     <el-button size="small" link>更多</el-button>
@@ -1130,7 +1257,7 @@ onBeforeUnmount(() => {
         <!-- 目录模式（默认）：目录折叠列表 -->
         <template v-else>
           <div
-            v-for="item in sortedFolders"
+            v-for="item in pagedFolders"
             :key="item.name"
             class="folder"
             :ref="(el) => setFolderRef(el, item.name)"
@@ -1141,12 +1268,10 @@ onBeforeUnmount(() => {
               </el-icon>
               <el-icon class="folder-icon"><Folder /></el-icon>
               <div class="folder-main">
-                <div class="folder-line1">
+                <!-- 单行形态（参考 Top10 行）：名称省略 + 元信息/摘要/标记，不再分三行，
+                     145+ 个目录的列表更紧凑；来源文字行并入操作区（原帖/看帖子按钮） -->
+                <div class="folder-main">
                   <span class="folder-name" :title="item.name">{{ item.name }}</span>
-                  <!-- B9 空壳目录标记：只有磁力/云盘清单、无媒体文件 -->
-                  <el-tag v-if="isMedialess(item)" size="small" type="warning">未下载到媒体</el-tag>
-                </div>
-                <div class="folder-line2">
                   <span class="text-muted folder-meta">
                     {{ item.file_count }} 个文件 · {{ formatSize(item.total_size) }} · {{ formatMinuteTime(item.mtime) }}
                   </span>
@@ -1157,45 +1282,59 @@ onBeforeUnmount(() => {
                       <span>{{ m.label }} {{ m.count }}</span>
                     </template>
                   </span>
-                  <!-- B7 下载任务关联 -->
-                  <el-tag
-                    v-if="taskOf(item.name)"
-                    size="small"
-                    type="success"
-                    class="task-tag"
-                    title="该目录由下载中心任务产生，点击查看"
-                    @click.stop="goDownloads"
-                  >
-                    下载任务
-                  </el-tag>
-                </div>
-                <!-- B1 来源回溯独立一行：与基础属性分行，避免目录头信息密度过高难以扫读 -->
-                <div v-if="sourceOf(item.name)?.matched" class="folder-line3">
-                  <span class="folder-source">
-                    来源：{{ sourceOf(item.name)?.author || '未知作者'
-                    }}<template v-if="sourceOf(item.name)?.date"> · {{ sourceOf(item.name)?.date }}</template>
-                  </span>
-                  <el-button link type="primary" class="src-btn" @click.stop="openSourceUrl(item.name)">
-                    原帖
-                  </el-button>
-                  <el-button link type="primary" class="src-btn" @click.stop="goSourcePosts(item.name)">
-                    看帖子
-                  </el-button>
+                  <!-- B9 空壳目录标记：只有磁力/云盘清单、无媒体文件 -->
+                  <el-tag v-if="isMedialess(item)" size="small" type="warning">未下载到媒体</el-tag>
+                  <!-- B7 下载任务关联标记已按用户要求移除（2026-09-08） -->
                 </div>
               </div>
-              <!-- 桌面端：操作平铺（横向空间充足） -->
+              <!-- 桌面端：操作平铺（横向空间充足）；
+                   「浏览」= 不展开目录直接浏览该目录全部资源（统一查看入口）；
+                   「原帖 / 看帖子」= 来源回溯（B1），仅在命中来源时显示 -->
               <template v-if="!isMobile">
+                <el-button link type="primary" class="del-btn" @click.stop="openBrowser(item)">
+                  浏览
+                </el-button>
+                <el-button
+                  v-if="sourceOf(item.name)?.matched"
+                  link
+                  type="primary"
+                  class="del-btn"
+                  @click.stop="openSourceUrl(item.name)"
+                >
+                  原帖
+                </el-button>
+                <el-button
+                  v-if="sourceOf(item.name)?.matched"
+                  link
+                  type="primary"
+                  class="del-btn"
+                  @click.stop="goSourcePosts(item.name)"
+                >
+                  看帖子
+                </el-button>
                 <el-button link type="danger" class="del-btn" @click.stop="removeFolder(item)">
                   删除目录
                 </el-button>
               </template>
-              <!-- 移动端：三个按钮平铺会占掉约 200px，把目录名挤成十来个字；
-                   收进「更多」菜单（网盘移动端通行做法），把宽度让给标题 -->
+              <!-- 移动端：操作收进「更多」菜单（网盘移动端通行做法），把宽度让给目录名 -->
               <el-dropdown v-else trigger="click">
                 <el-button link class="folder-more" @click.stop>更多</el-button>
                 <template #dropdown>
                   <el-dropdown-menu>
-                    <el-dropdown-item @click="removeFolder(item)">删除目录</el-dropdown-item>
+                    <el-dropdown-item @click="openBrowser(item)">浏览</el-dropdown-item>
+                    <el-dropdown-item
+                      v-if="sourceOf(item.name)?.matched"
+                      @click="openSourceUrl(item.name)"
+                    >
+                      原帖
+                    </el-dropdown-item>
+                    <el-dropdown-item
+                      v-if="sourceOf(item.name)?.matched"
+                      @click="goSourcePosts(item.name)"
+                    >
+                      看帖子
+                    </el-dropdown-item>
+                    <el-dropdown-item divided @click="removeFolder(item)">删除目录</el-dropdown-item>
                   </el-dropdown-menu>
                 </template>
               </el-dropdown>
@@ -1238,41 +1377,9 @@ onBeforeUnmount(() => {
                         </div>
                       </div>
                       <div class="fc-ops">
-                        <el-button
-                          v-if="f.category === 'image'"
-                          size="small"
-                          type="primary"
-                          link
-                          @click="previewImage(f, activeFiles)"
-                        >
-                          预览
-                        </el-button>
-                        <el-button
-                          v-else-if="f.category === 'video'"
-                          size="small"
-                          type="primary"
-                          link
-                          @click="playVideo(f, activeFiles)"
-                        >
-                          播放
-                        </el-button>
-                        <el-button
-                          v-else-if="f.category === 'text'"
-                          size="small"
-                          type="primary"
-                          link
-                          @click="viewText(f)"
-                        >
+                        <!-- 统一查看入口：按类型自动分派 -->
+                        <el-button size="small" type="primary" link @click="openResource(f, activeFiles)">
                           查看
-                        </el-button>
-                        <el-button
-                          v-else-if="f.category === 'torrent'"
-                          size="small"
-                          type="primary"
-                          link
-                          @click="showTorrent(f)"
-                        >
-                          种子信息
                         </el-button>
                         <el-dropdown trigger="click">
                           <el-button size="small" link>更多</el-button>
@@ -1297,9 +1404,130 @@ onBeforeUnmount(() => {
               </div>
             </el-collapse-transition>
           </div>
+          <!-- 目录分页：145+ 个目录不一次性铺开，按页展示（业界网盘做法） -->
+          <div class="folder-pager">
+            <el-pagination
+              v-if="folderPageSize !== -1"
+              layout="total, sizes, prev, pager, next, jumper"
+              :total="sortedFolders.length"
+              :page-size="folderPageSize"
+              :current-page="folderPage"
+              :page-sizes="[30, 50, 100]"
+              small
+              background
+              @current-change="onFolderPage"
+              @size-change="onFolderPageSize"
+            />
+            <el-button
+              v-if="folderPageSize !== -1"
+              text
+              type="primary"
+              size="small"
+              class="pager-all"
+              @click="showAllFolders"
+            >
+              显示全部 {{ sortedFolders.length }}
+            </el-button>
+            <el-button
+              v-else
+              text
+              type="primary"
+              size="small"
+              @click="resetToPaged"
+            >
+              分页显示
+            </el-button>
+          </div>
         </template>
       </template>
     </div>
+
+    <!-- 目录资源浏览抽屉：不展开目录即可浏览该目录全部资源。
+         图片直接出缩略图（el-image lazy 懒加载，滚动到可视区才请求受控预览接口，
+         避免一次几十张触发 60 次/分限流）；视频/文本/种子/其他显示类型占位块。
+         点击任意卡片走统一查看入口 openResource 打开对应查看器（叠在抽屉之上）。 -->
+    <!-- 手机端全屏：size 固定 720px 会超出手机视口，内容被截断错位 -->
+    <el-drawer
+      v-model="browserVisible"
+      :title="browserFolder ? `浏览目录：${browserFolder.name}` : '浏览目录'"
+      :size="isMobile ? '100%' : '720px'"
+    >
+      <template v-if="browserFolder">
+        <div class="browser-summary text-muted">
+          共 {{ browserFiles.length }} 个文件
+          <template v-for="(m, i) in folderMix(browserFolder)" :key="m.label">
+            <span v-if="i">·</span>
+            <span>{{ m.label }} {{ m.count }}</span>
+          </template>
+        </div>
+        <!-- 类型筛选 + 名称过滤：资源过多时先收敛范围再浏览 -->
+        <div class="browser-toolbar">
+          <el-segmented v-model="browserTypeFilter" :options="categoryOptions" size="small" />
+          <el-input
+            v-model="browserKeyword"
+            class="browser-search"
+            placeholder="按文件名过滤"
+            clearable
+            size="small"
+            :prefix-icon="'Search'"
+          />
+        </div>
+        <div class="browser-grid">
+          <div
+            v-for="f in browserPaged"
+            :key="f.rel_path"
+            class="browser-cell"
+            :title="f.name"
+            @click="openResource(f, browserFiltered)"
+          >
+            <el-image
+              v-if="f.category === 'image'"
+              :src="resourceFileUrl(f.rel_path)"
+              fit="cover"
+              lazy
+              class="browser-thumb"
+            >
+              <!-- 懒加载未进入视口 / 加载中显示占位块，避免出现空白错位 -->
+              <template #placeholder>
+                <div class="browser-ph">加载中</div>
+              </template>
+              <template #error>
+                <div class="browser-ph">加载失败</div>
+              </template>
+            </el-image>
+            <!-- 视频：显示抓到的首帧预览图；抓到前（或失败）显示类型文字 -->
+            <div
+              v-else-if="f.category === 'video'"
+              class="browser-ph ph-video browser-video-ph"
+              :data-rel="f.rel_path"
+              :style="posterStyle(f.rel_path)"
+            >
+              <span v-if="!videoPosters[f.rel_path]">{{ categoryLabel(f.category) }}</span>
+            </div>
+            <div v-else class="browser-ph" :class="'ph-' + f.category">
+              {{ categoryLabel(f.category) }}
+            </div>
+            <div class="browser-name">{{ f.name }}</div>
+            <div class="text-muted browser-size">{{ formatSize(Number(f.size)) }}</div>
+          </div>
+        </div>
+        <el-empty
+          v-if="!browserFiltered.length"
+          :image-size="64"
+          description="无匹配文件"
+        />
+        <!-- 前端切片分页：仅超过一页时显示（与任务列表/目录列表同一模式） -->
+        <el-pagination
+          v-if="browserFiltered.length > browserPageSize"
+          v-model:current-page="browserPage"
+          :page-size="browserPageSize"
+          :total="browserFiltered.length"
+          layout="total, prev, pager, next"
+          size="small"
+          class="browser-pager"
+        />
+      </template>
+    </el-drawer>
 
     <!-- B5 图片大图预览（点击「预览」打开，Esc / 关闭按钮退出） -->
     <el-image-viewer
@@ -1311,11 +1539,13 @@ onBeforeUnmount(() => {
     />
 
     <!-- 视频播放弹窗：同一列表内可连续播放，播放结束自动下一个 -->
+    <!-- 居中 + 最大化展示：移动端全屏，桌面端 92% 宽并垂直居中（align-center） -->
     <el-dialog
       v-model="videoVisible"
       :title="videoTitle"
-      width="70%"
-      top="6vh"
+      :width="isMobile ? '100%' : '92%'"
+      :fullscreen="isMobile"
+      align-center
       destroy-on-close
       @close="closeVideo"
     >
@@ -1348,7 +1578,12 @@ onBeforeUnmount(() => {
     </el-dialog>
 
     <!-- 文本查看：受控读取 .txt/.md/.log，编码兜底，超大文件截断 -->
-    <el-dialog v-model="textVisible" :title="`查看文本 · ${textName}`" width="60%" top="8vh">
+    <el-dialog
+      v-model="textVisible"
+      :title="`查看文本 · ${textName}`"
+      :width="isMobile ? '92%' : '60%'"
+      top="8vh"
+    >
       <el-skeleton v-if="textLoading" :rows="6" animated />
       <template v-else-if="textData">
         <div class="text-meta text-muted">
@@ -1361,7 +1596,12 @@ onBeforeUnmount(() => {
     </el-dialog>
 
     <!-- 种子信息：解析 .torrent，给出文件清单与磁链（本地打开/下载用） -->
-    <el-dialog v-model="torrentVisible" title="种子信息" width="60%" top="8vh">
+    <el-dialog
+      v-model="torrentVisible"
+      title="种子信息"
+      :width="isMobile ? '92%' : '60%'"
+      top="8vh"
+    >
       <el-skeleton v-if="torrentLoading" :rows="6" animated />
       <template v-else-if="torrentData">
         <div class="torrent-head">
@@ -1371,7 +1611,13 @@ onBeforeUnmount(() => {
           </div>
         </div>
         <div class="magnet-row">
-          <el-input :model-value="torrentData.magnet" readonly size="small" class="magnet-input" />
+          <el-input
+            ref="magnetInputRef"
+            :model-value="torrentData.magnet"
+            readonly
+            size="small"
+            class="magnet-input"
+          />
           <el-button type="primary" size="small" @click="copyMagnet(torrentData.magnet)">
             复制磁链
           </el-button>
@@ -1391,7 +1637,8 @@ onBeforeUnmount(() => {
     </el-dialog>
 
     <!-- 回收站：软删除项，保留期内可恢复，也可彻底删除 -->
-    <el-drawer v-model="trashVisible" title="回收站" size="520px">
+    <!-- 手机端全屏：size 固定 520px 会超出手机视口，列表被截断错位 -->
+    <el-drawer v-model="trashVisible" title="回收站" :size="isMobile ? '100%' : '520px'">
       <div class="trash-head">
         <span class="text-muted">
           共 {{ trashItems.length }} 项 · {{ formatSize(trashTotalSize) }} · 保留
@@ -1469,16 +1716,6 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 8px;
   margin-left: auto;
-}
-
-/* 目录头第三行：来源回溯独立成行，降低单行信息密度 */
-.folder-line3 {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-  font-size: 12px;
-  margin-top: 2px;
 }
 
 /* 文本查看弹窗：等宽字体 + 独立滚动，长文本不撑破弹窗 */
@@ -1640,12 +1877,12 @@ onBeforeUnmount(() => {
     flex-wrap: wrap;
   }
 
-  .insight-card {
-    gap: 16px;
-  }
-
+  /* 容量洞察卡：两个 Top10 明细块不再硬挤两列——窄屏下「名称 + 元信息 + 操作」
+     在半幅宽度内必然放不下而错位，改为上下堆叠各占整行 */
   /* 目录头相关规则见「样式表末尾」的移动端块：它们需要覆盖 .folder-name / .folder-head
-     等基础样式，同特异性下必须写在基础规则之后才会生效。 */
+     等基础样式，同特异性下必须写在基础规则之后才会生效。
+     容量洞察卡（.insight-card / .insight-line）的移动端降级同理，见该块末尾——
+     此处写在基础规则（1741 行 2 列网格）之前会被后者覆盖，media query 不提升特异性。 */
 }
 
 /* B6 容量洞察卡 */
@@ -1761,6 +1998,11 @@ onBeforeUnmount(() => {
   flex-shrink: 0;
 }
 
+/* Top10 目录行的元信息（N 个文件 · 大小）：不换行不压缩，保证与大文件行平行等高 */
+.insight-meta {
+  flex-shrink: 0;
+}
+
 /* B2 全局结果模式 */
 .global-summary {
   font-size: 13px;
@@ -1803,6 +2045,20 @@ onBeforeUnmount(() => {
   overflow: hidden;
 }
 
+/* 目录分页条：与目录卡片同宽，居中并错开上方留白 */
+.folder-pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 16px 0 4px;
+}
+
+.folder-pager .pager-all {
+  margin-left: 4px;
+}
+
 .folder-head {
   display: flex;
   align-items: center;
@@ -1832,19 +2088,18 @@ onBeforeUnmount(() => {
   flex-shrink: 0;
 }
 
+/* 单行形态（参考 Top10 行）：名称省略收缩，元信息/摘要/标记不换行不压缩 */
 .folder-main {
   flex: 1;
   min-width: 0;
-}
-
-.folder-line1 {
   display: flex;
   align-items: center;
-  gap: 8px;
-  min-width: 0;
+  gap: 10px;
 }
 
 .folder-name {
+  flex: 0 1 auto;
+  min-width: 0;
   font-weight: 600;
   color: #1f2d3d;
   overflow: hidden;
@@ -1852,20 +2107,13 @@ onBeforeUnmount(() => {
   white-space: nowrap;
 }
 
-.folder-line2 {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-  font-size: 12px;
-  margin-top: 2px;
-}
-
 .folder-meta {
+  flex-shrink: 0;
   font-size: 12px;
 }
 
 .folder-mix {
+  flex-shrink: 0;
   color: #606266;
 }
 
@@ -1874,18 +2122,7 @@ onBeforeUnmount(() => {
   color: #c0c4cc;
 }
 
-.folder-source {
-  color: #606266;
-}
-
-.src-btn {
-  padding: 0;
-  height: auto;
-}
-
-.task-tag {
-  cursor: pointer;
-}
+/* B7 下载任务关联标记已移除（2026-09-08） */
 
 .del-btn {
   flex-shrink: 0;
@@ -1895,7 +2132,8 @@ onBeforeUnmount(() => {
 /* 视频播放弹窗 */
 .video-player {
   width: 100%;
-  max-height: 70vh;
+  /* 最大化展示：高度放宽到 82vh（播放窗口本身已居中） */
+  max-height: 82vh;
   background: #000;
   border-radius: 6px;
   display: block;
@@ -1975,30 +2213,25 @@ onBeforeUnmount(() => {
 }
 
 /* ================= 移动端目录头（必须放在样式表末尾） =================
-   本块覆盖上方的 .folder-head / .folder-line1 / .folder-name 基础规则。
+   本块覆盖上方的 .folder-head / .folder-name 等基础规则。
    CSS 同特异性下「后定义者胜」，写在前面会被基础样式整块覆盖而静默失效
-   （曾放在样式表中部导致两行截断完全没生效），故固定在末尾并注明原因。 */
+   （曾放在样式表中部导致规则完全没生效），故固定在末尾并注明原因。 */
 @media (max-width: 767px) {
+  /* 目录头单行形态（与 Top10 行一致）：不换行，名称走省略号 */
   .folder-head {
-    flex-wrap: wrap;
-    align-items: flex-start;
-    padding: 12px;
+    padding: 10px 12px;
   }
 
-  /* 标题旁的「未下载到媒体」等 Tag 允许换行，不与标题争抢横向空间 */
-  .folder-line1 {
-    flex-wrap: wrap;
+  /* 类型摘要（图 N · 视频 N）与元信息（文件数 · 大小 · 时间）在窄屏全部让位：
+     移动网盘目录行通行做法是「目录名占满 + 更多菜单」，空间优先给名称 */
+  .folder-mix,
+  .folder-meta {
+    display: none;
   }
 
-  /* 目录名即帖子标题，普遍很长：单行省略只能看到十来个字。
-     改为两行截断（Material / iOS 文件列表的通行做法）。 */
+  /* 名称占满剩余宽度（tag/更多按钮除外），最大化可读字数 */
   .folder-name {
-    white-space: normal;
-    display: -webkit-box;
-    -webkit-line-clamp: 2;
-    -webkit-box-orient: vertical;
-    overflow: hidden;
-    line-height: 1.4;
+    flex: 1 1 auto;
   }
 
   /* 「更多」按钮：保持 44px 触控高度，同时尽量窄，把宽度让给目录名 */
@@ -2007,5 +2240,124 @@ onBeforeUnmount(() => {
     min-width: 40px;
     padding: 0 4px;
   }
+
+  /* Top10 行的「更多」菜单按钮：行高仅 22px 的紧凑列表，
+     不能用 44px 触控高度（会把每行撑高近一倍、行间出现大片空白像空行）；
+     保持按钮自然高度，宽度收窄把空间让给名称 */
+  .insight-more {
+    min-height: 24px;
+    min-width: 32px;
+    padding: 0 4px;
+  }
+
+  /* 容量洞察卡移动端降级：必须写在基础规则（2 列网格）之后才生效。
+     两个 Top10 卡片各占满整行宽度上下堆叠，不再并排半宽。 */
+  .insight-card {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+
+  /* Top10 行保持单行展示：名称超长走省略号收缩，元信息与操作按钮
+     不换行不压缩（用户确认单行形态） */
+  .insight-line > .text-muted,
+  .insight-line > .insight-ops {
+    flex-shrink: 0;
+  }
+
+  .insight-line .insight-ops {
+    margin-left: auto;
+  }
+}
+
+/* 目录资源浏览抽屉：缩略图网格 + 点击查看 */
+.browser-summary {
+  margin-bottom: 10px;
+  font-size: 12px;
+}
+
+.browser-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.browser-search {
+  width: 170px;
+}
+
+.browser-pager {
+  margin-top: 10px;
+  justify-content: flex-end;
+}
+
+.browser-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 12px;
+}
+
+.browser-cell {
+  cursor: pointer;
+  border: 1px solid #ebeef5;
+  border-radius: 6px;
+  padding: 6px;
+  transition: box-shadow 0.15s;
+}
+
+.browser-cell:hover {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+}
+
+.browser-thumb {
+  width: 100%;
+  height: 100px;
+  border-radius: 4px;
+  display: block;
+}
+
+/* 非图片类型占位块 */
+.browser-ph {
+  height: 100px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  background: #f5f7fa;
+  color: #909399;
+  font-size: 13px;
+}
+
+.ph-video {
+  background: #ecf5ff;
+  color: #409eff;
+}
+
+.ph-torrent {
+  background: #fdf6ec;
+  color: #e6a23c;
+}
+
+.ph-text {
+  background: #f0f9eb;
+  color: #67c23a;
+}
+
+.ph-other {
+  background: #f4f4f5;
+  color: #909399;
+}
+
+.browser-name {
+  margin-top: 6px;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.browser-size {
+  font-size: 12px;
 }
 </style>

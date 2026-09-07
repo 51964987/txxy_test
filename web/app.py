@@ -93,7 +93,12 @@ if FRONTEND_DIST.is_dir():
         target = (FRONTEND_DIST / full_path).resolve()
         if target.is_file() and str(target).startswith(str(FRONTEND_DIST.resolve())):
             return FileResponse(target)
-        return FileResponse(FRONTEND_DIST / "index.html")
+        # index.html 不缓存：否则前端发版后手机浏览器仍用旧入口引用旧 hash 资源，
+        # 表现为「新功能不生效」（用户需手动强刷才能拿到新版）
+        return FileResponse(
+            FRONTEND_DIST / "index.html",
+            headers={"Cache-Control": "no-cache"},
+        )
 else:
 
     @app.get("/", include_in_schema=False)

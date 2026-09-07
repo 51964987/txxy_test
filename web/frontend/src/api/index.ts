@@ -424,6 +424,8 @@ export interface DownloadTaskSummary {
   finished_at: string | null
   cancel_requested: boolean
   priority?: boolean
+  /** 队列入队令牌：排队中任务按它升序展示，与实际执行顺序（FIFO）一致 */
+  ticket?: number
   /** 各状态链接计数（ok/skip/fail/running/pending/cancelled） */
   items_summary?: Record<string, number>
   /** 已产生的保存目录（供资源管理页 B7 关联） */
@@ -463,6 +465,9 @@ export const api = {
     date_to?: string
     q?: string
     author?: string
+    /** 高级查询条件：条件树 JSON（可视化构建器）或表达式文本（高级模式），
+     *  与 fid/日期/关键词/作者 这些基础筛选按 AND 合并 */
+    adv?: string
     page?: number
     page_size?: number
     /** 预置排序组合（兼容大屏下钻链接，如 engagement_desc） */
@@ -498,10 +503,11 @@ export const api = {
     post<{ ok: boolean }>('/resources/open-file', { rel_path: relPath }),
   resourceText: (path: string) => get<ResourceText>('/resources/text', { path }),
   resourceTorrent: (path: string) => get<TorrentInfo>('/resources/torrent', { path }),
-  deleteResource: (path: string, isDir: boolean) =>
-    post<{ ok: boolean; id: string; rel: string; size: number }>('/resources/delete', {
+  deleteResource: (path: string, isDir: boolean, permanent = false) =>
+    post<{ ok: boolean; rel: string }>('/resources/delete', {
       path,
       is_dir: isDir,
+      permanent,
     }),
   trashList: () => get<TrashResp>('/resources/trash'),
   restoreResource: (id: string) => post<{ ok: boolean; rel: string }>('/resources/restore', { id }),
@@ -513,6 +519,9 @@ export const api = {
     post<DownloadDupResult>('/downloads/check-dup', { urls }),
   cancelDownload: (id: string) => post<{ id: string }>(`/downloads/${id}/cancel`),
   retryDownload: (id: string) => post<{ id: string; retried: number }>(`/downloads/${id}/retry`),
+  /** 重新下载任务里的单个链接（就地重跑原任务，不另开任务）；404 = 链接不存在或正在下载 */
+  retryDownloadUrl: (id: string, url: string) =>
+    post<{ id: string; url: string }>(`/downloads/${id}/retry-url`, { url }),
   prioritizeDownload: (id: string) => post<{ id: string }>(`/downloads/${id}/prioritize`),
   clearDownloads: () => post<{ cleared: number }>('/downloads/clear'),
   deleteDownload: (id: string) => del<{ id: string }>(`/downloads/${id}`),

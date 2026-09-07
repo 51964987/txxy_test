@@ -13,6 +13,7 @@ import {
 import type { ECharts } from 'echarts/core'
 import { ElMessage } from 'element-plus'
 import { Download } from '@element-plus/icons-vue'
+import { useDownloadSubmit } from '../composables/useDownloadSubmit'
 import { api, isAborted, type BoardDaily, type Boards, type BoardSort, type FidDistItem, type Overview, type RunSummary, type TodayTop, type TodayTopItem, type TopAuthor, type TopFid, type TrendByFid, type TrendPoint } from '../api'
 import { useDashboardStore } from '../stores/dashboard'
 import { useAppStore } from '../stores/app'
@@ -64,6 +65,12 @@ async function notifyError(msg: string): Promise<void> {
 async function notifySuccess(msg: string): Promise<void> {
   if (app.fullscreen && !app.pseudoFullscreen) await app.exitFullscreen()
   ElMessage.success(msg)
+}
+
+/** 警告提示同理（判重剔除提示用） */
+async function notifyWarning(msg: string): Promise<void> {
+  if (app.fullscreen && !app.pseudoFullscreen) await app.exitFullscreen()
+  ElMessage.warning(msg)
 }
 
 // ===== P0：首屏区块 =====
@@ -1044,14 +1051,18 @@ function openUrl(url: string) {
   window.open(url, '_blank', 'noopener')
 }
 
-/** 创建下载任务（热门榜每行「下载」按钮），进度在下载中心查看 */
+/** 创建下载任务（热门榜每行「下载」按钮）：与帖子浏览同一套共用交互（D2 判重 + 防连点），
+ *  进度在下载中心查看。全屏态需先退出全屏，提示与确认框才可见 */
+const { submitDownload } = useDownloadSubmit()
 async function downloadUrl(url: string) {
-  try {
-    const r = await api.submitDownload([url])
-    await notifySuccess(`已创建下载任务（${r.count} 个链接），可在下载中心查看进度`)
-  } catch (e) {
-    await notifyError(`创建下载任务失败: ${(e as Error).message}`)
-  }
+  await submitDownload([url], {
+    success: notifySuccess,
+    error: notifyError,
+    warning: notifyWarning,
+    beforeDialog: async () => {
+      if (app.fullscreen && !app.pseudoFullscreen) await app.exitFullscreen()
+    },
+  })
 }
 
 function rankClass(i: number): string {

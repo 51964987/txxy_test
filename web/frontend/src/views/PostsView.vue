@@ -4,7 +4,19 @@ import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { CopyDocument, Download, Search, View } from '@element-plus/icons-vue'
 import { api, exportCsvUrl, isAborted, type FidMeta, type Post, type PostsPage } from '../api'
+import ConditionGroup from '../components/query/ConditionGroup.vue'
+import {
+  describeNode,
+  emptyCondition,
+  fieldMeta,
+  isGroup,
+  type ConditionNode,
+  type GroupNode,
+  type QueryNode,
+} from '../utils/queryMeta'
 import { formatRelativeTime, formatFullTime } from '../utils/time'
+import { copyText } from '../utils/clipboard'
+import { useDownloadSubmit } from '../composables/useDownloadSubmit'
 import { colorForFid } from '../utils/fidColor'
 
 const route = useRoute()
@@ -16,8 +28,9 @@ const exporting = ref(false)
 
 /** 表格多选的行（批量下载用） */
 const selectedRows = ref<Post[]>([])
-/** 提交下载任务中：防连点重复创建任务 */
-const submitting = ref(false)
+// 提交下载统一入口（composable，与数据总览/下载中心共用）：D2 判重 + 防连点；
+// submitting 供批量下载按钮 loading
+const { submitting, submitDownload } = useDownloadSubmit()
 
 const filters = reactive({
   fid: [] as string[],
@@ -195,6 +208,93 @@ async function loadFidMeta() {
   }
 }
 
+// ===== 高级查询：可视化构建器 / 表达式，二者共用一个 adv 参数传给后端 =====
+/** 高级查询展开与否 */
+const advOpen = ref(false)
+/** 模式：builder=可视化构建器；expr=表达式 */
+const advMode = ref<'builder' | 'expr'>('builder')
+/** 构建器的条件树（根节点为分组） */
+const advTree = ref<GroupNode>({ op: 'AND', rules: [emptyCondition()] })
+/** 表达式文本 */
+const advExpr = ref('')
+/** 表达式校验提示（由后端返回） */
+const advError = ref('')
+
+/** 组装 adv 参数：构建器输出条件树 JSON，表达式模式输出原文；两者都为空则不传 */
+function advParam(): string {
+  if (advMode.value === 'expr') return advExpr.value.trim()
+  const json = JSON.stringify(advTree.value)
+  // 只有一个空条件时视为未设置，避免无意义地过滤出空结果
+  const isBlank =
+    advTree.value.rules.length === 1 &&
+    !isGroup(advTree.value.rules[0]) &&
+    !String((advTree.value.rules[0] as ConditionNode).value ?? '').trim()
+  return isBlank ? '' : json
+}
+
+/** 高级条件摘要（供摘要条展示） */
+const advSummary = computed(() => {
+  if (advMode.value === 'expr') {
+    const text = advExpr.value.trim()
+    return text ? `高级：${text}` : ''
+  }
+  const node = advTree.value
+  if (!node.rules.length) return ''
+  return `高级：${describeNode(node)}`
+})
+
+function addAdvCondition() {
+  advTree.value.rules.push(emptyCondition())
+}
+
+function clearAdv() {
+  advTree.value = { op: 'AND', rules: [emptyCondition()] }
+  advExpr.value = ''
+  advError.value = ''
+}
+
+/** 切换模式时把已有条件互相转换（表达式无法解析时保留原文并提示） */
+function onAdvModeChange(mode: 'builder' | 'expr') {
+  advError.value = ''
+  if (mode === 'expr') {
+    try {
+      advExpr.value = treeToExpr(advTree.value)
+    } catch {
+      advExpr.value = ''
+      advError.value = '当前条件无法转为表达式，请手动输入'
+    }
+  }
+}
+
+/** 条件树 → 表达式文本（不含值引号处理复杂场景时加单引号） */
+function treeToExpr(node: QueryNode): string {
+  if (!isGroup(node)) {
+    const op = node.op
+    if (op === 'between') {
+      const [a, b] = Array.isArray(node.value) ? node.value : ['', '']
+      return `${node.field} BETWEEN '${a}' AND '${b}'`
+    }
+    if (op === 'in' || op === 'not_in') {
+      const vals = Array.isArray(node.value) ? node.value : [String(node.value ?? '')]
+      return `${node.field} ${op === 'in' ? 'IN' : 'NOT IN'} (${vals.join(',')})`
+    }
+    if (op === 'contains') return `${node.field} LIKE '%${node.value}%'`
+    if (op === 'not_contains') return `NOT ${node.field} LIKE '%${node.value}%'`
+    if (op === 'starts_with') return `${node.field} LIKE '${node.value}%'`
+    if (op === 'is_empty') return `${node.field} IS EMPTY`
+    if (op === 'is_not_empty') return `NOT ${node.field} IS EMPTY`
+    const sym = { eq: '=', ne: '!=', gt: '>', gte: '>=', lt: '<', lte: '<=' }[op] ?? '='
+    // 数值不加引号（表达式里更地道，后端按数值解析）
+    const isNum = fieldMeta(node.field)?.type === 'number'
+    return isNum ? `${node.field} ${sym} ${node.value}` : `${node.field} ${sym} '${node.value}'`
+  }
+  const parts = node.rules.map((child) => {
+    const text = treeToExpr(child)
+    return isGroup(child) && child.rules.length > 1 ? `(${text})` : text
+  })
+  return parts.join(node.op === 'AND' ? ' AND ' : ' OR ')
+}
+
 /** 版块 fid → 中文名；未命中（版块元数据未加载或已下线）时退回 fid，避免出现空白列 */
 function fidName(fid: string | number | null | undefined) {
   if (fid === null || fid === undefined || fid === '') return '-'
@@ -210,6 +310,7 @@ async function load() {
       date_to: filters.dateRange?.[1],
       q: queryText.value || undefined,
       author: filters.author || undefined,
+      adv: advParam() || undefined,
       page: page.value,
       page_size: pageSize.value,
       sort_by: colSort.value.order ? colSort.value.by : undefined,
@@ -360,6 +461,7 @@ function doExport() {
       date_to: filters.dateRange?.[1],
       q: queryText.value || undefined,
       author: filters.author || undefined,
+      adv: advParam() || undefined,
       sort_by: colSort.value.order ? colSort.value.by : undefined,
       sort_order: colSort.value.order ?? undefined,
     })
@@ -369,11 +471,12 @@ function doExport() {
   }
 }
 
-function copyUrl(url: string) {
-  navigator.clipboard
-    .writeText(url)
-    .then(() => ElMessage.success('链接已复制'))
-    .catch(() => ElMessage.error('复制失败'))
+async function copyUrl(url: string) {
+  // 复制实现统一走 utils/clipboard：含非安全上下文（手机 http 访问）降级与返回值校验，
+  // 此前直接调 navigator.clipboard 在无安全上下文时会抛异常且无提示
+  const ok = await copyText(url)
+  if (ok) ElMessage.success('链接已复制')
+  else ElMessage.error('复制失败')
 }
 
 /** 表格多选变化回调（模板中不直接赋值 ref，避免 ts-plugin 类型收窄误报） */
@@ -381,24 +484,7 @@ function onSelectionChange(rows: Post[]) {
   selectedRows.value = rows
 }
 
-/** 提交下载任务（单选/批量共用）：创建成功仅提示，进度在下载中心查看 */
-async function submitDownload(urls: string[]) {
-  if (!urls.length) {
-    ElMessage.warning('请先选择要下载的链接')
-    return
-  }
-  submitting.value = true
-  try {
-    const r = await api.submitDownload(urls)
-    ElMessage.success(`已创建下载任务（${r.count} 个链接），可在下载中心查看进度`)
-  } catch (e) {
-    ElMessage.error(`创建下载任务失败: ${(e as Error).message}`)
-  } finally {
-    submitting.value = false
-  }
-}
-
-/** 批量下载：提交当前勾选行的 URL */
+/** 批量下载：提交当前勾选行的 URL（走共用 composable 的 D2 判重交互） */
 function downloadSelected() {
   submitDownload(selectedRows.value.map((row) => row.url))
 }
@@ -483,9 +569,52 @@ onMounted(() => {
           </el-input>
         </div>
         <el-button @click="doReset">重置</el-button>
+        <el-button type="primary" plain @click="advOpen = !advOpen">
+          高级查询
+          <span v-if="advSummary" class="adv-badge">已设置</span>
+        </el-button>
       </div>
+
+      <!-- 高级查询：可视化构建器 / 表达式两种模式，与基础筛选按 AND 合并 -->
+      <div v-if="advOpen" class="adv-panel">
+        <div class="adv-head">
+          <el-radio-group
+            v-model="advMode"
+            size="small"
+            @change="onAdvModeChange($event as 'builder' | 'expr')"
+          >
+            <el-radio-button value="builder">可视化条件</el-radio-button>
+            <el-radio-button value="expr">表达式</el-radio-button>
+          </el-radio-group>
+          <span class="adv-tip">与上方基础筛选同时生效（两者取交集）</span>
+          <el-button link type="danger" size="small" @click="clearAdv">清空高级条件</el-button>
+        </div>
+
+        <ConditionGroup
+          v-if="advMode === 'builder'"
+          :node="advTree"
+          :depth="1"
+          :fid-options="fidMeta"
+          :removable="false"
+        />
+        <template v-else>
+          <el-input
+            v-model="advExpr"
+            type="textarea"
+            :rows="3"
+            placeholder="例如：likes > 100 AND (title LIKE '%教程%' OR author = '张三')"
+          />
+          <div class="adv-help">
+            支持字段：fid / title / author / likes / replies / date / update_date；
+            操作符 = != &gt; &gt;= &lt; &lt;= LIKE IN BETWEEN，可用 AND / OR / NOT 与括号分组。日期值请加引号。
+          </div>
+        </template>
+
+        <div v-if="advError" class="adv-error">{{ advError }}</div>
+      </div>
+
       <!-- 当前查询条件：大屏下钻会带上作者/版块与时间范围，集中展示且可逐项清除 -->
-      <div v-if="activeFilters.length" class="active-filters">
+      <div v-if="activeFilters.length || advSummary" class="active-filters">
         <span class="af-label">当前条件</span>
         <el-tag
           v-for="f in activeFilters"
@@ -496,6 +625,9 @@ onMounted(() => {
           @close="f.clear"
         >
           {{ f.label }}
+        </el-tag>
+        <el-tag v-if="advSummary" closable size="small" type="warning" @close="clearAdv">
+          {{ advSummary }}
         </el-tag>
         <el-button link type="primary" size="small" @click="doReset">清空全部</el-button>
       </div>
@@ -612,6 +744,47 @@ onMounted(() => {
 }
 
 /* 当前查询条件摘要条：大屏下钻会带上作者/版块与时间范围，集中展示且可逐项清除 */
+/* 高级查询面板 */
+.adv-panel {
+  margin: 8px 0 4px;
+  padding: 10px 12px;
+  border: 1px solid #e4e7ed;
+  border-radius: 6px;
+  background: #fcfcfd;
+}
+
+.adv-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.adv-tip {
+  color: #909399;
+  font-size: 12px;
+}
+
+.adv-help {
+  color: #909399;
+  font-size: 12px;
+  line-height: 1.6;
+  margin-top: 6px;
+}
+
+.adv-error {
+  color: #f56c6c;
+  font-size: 12px;
+  margin-top: 6px;
+}
+
+.adv-badge {
+  margin-left: 6px;
+  font-size: 11px;
+  color: #e6a23c;
+}
+
 .active-filters {
   display: flex;
   align-items: center;
