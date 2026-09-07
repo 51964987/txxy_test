@@ -543,9 +543,9 @@ onBeforeUnmount(() => {
             </el-tooltip>
           </template>
         </el-table-column>
-        <el-table-column label="数据量" :min-width="118" align="center">
+        <el-table-column label="数据量" :min-width="92" align="center">
           <template #header>
-            <el-tooltip content="本次运行的数据条数：CSV 导出 / SQLite 入库" placement="top">
+            <el-tooltip content="本次入库 SQLite 的条数；悬浮单元格可同时看到 CSV 导出条数" placement="top">
               <span class="th-tip">
                 数据量
                 <el-icon><InfoFilled /></el-icon>
@@ -554,13 +554,11 @@ onBeforeUnmount(() => {
           </template>
           <template #default="{ row }">
             <el-tooltip
-              :content="`CSV 导出 ${row.csv} 条 / SQLite 入库 ${row.sqlite} 条`"
+              :content="`SQLite 入库 ${row.sqlite.toLocaleString()} 条 · CSV 导出 ${row.csv.toLocaleString()} 条`"
               placement="top"
             >
               <span class="stat">
-                <span class="s-total">{{ row.csv.toLocaleString() }}</span>
-                <span class="s-sep">/</span>
-                <span class="s-muted">{{ row.sqlite.toLocaleString() }}</span>
+                <span class="s-total">{{ row.sqlite.toLocaleString() }}</span>
               </span>
             </el-tooltip>
           </template>
