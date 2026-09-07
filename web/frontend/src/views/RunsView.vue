@@ -478,11 +478,25 @@ onBeforeUnmount(() => {
             <span class="time-cell">{{ row.time || (row.id ? '—' : '日志') }}</span>
           </template>
         </el-table-column>
-        <el-table-column prop="source" label="来源" :min-width="65">
+        <el-table-column prop="source" label="来源" :min-width="116">
           <template #default="{ row }">
             <el-tag size="small" :type="row.source === 'run_batch' ? 'primary' : 'warning'">
               {{ row.source === 'run_batch' ? 'run_batch' : 'scraper 单跑' }}
             </el-tag>
+            <el-tooltip
+              v-if="row.restart === 1"
+              content="强制重跑（--restart）：忽略断点进度，本次为全量抓取"
+              placement="top"
+            >
+              <el-tag size="small" type="danger" class="mode-tag">重跑</el-tag>
+            </el-tooltip>
+            <el-tooltip
+              v-else-if="row.restart === 0"
+              content="断点续跑：跳过已完成页，本次 CSV 条数只含增量"
+              placement="top"
+            >
+              <el-tag size="small" type="info" class="mode-tag">续跑</el-tag>
+            </el-tooltip>
           </template>
         </el-table-column>
         <el-table-column label="状态" :min-width="65">
@@ -513,7 +527,10 @@ onBeforeUnmount(() => {
           </template>
           <template #default="{ row }">
             <el-tooltip
-              :content="`成功 ${row.ok} 个版块 / 失败 ${row.fail} 个 / 未执行 ${row.skip} 个`"
+              :content="
+                `成功 ${row.ok} 个版块 / 失败 ${row.fail} 个 / 未执行 ${row.skip} 个` +
+                (row.running ? `（${row.running} 个进行中）` : '')
+              "
               placement="top"
             >
               <span class="stat">
@@ -600,7 +617,8 @@ onBeforeUnmount(() => {
         </div>
         <el-checkbox v-model="startForm.restart">强制重跑（--restart）</el-checkbox>
         <div class="param-desc warn">
-          忽略断点进度：当天已生成的 CSV / 进度文件会被删除并重新生成，请确认后再勾选
+          忽略断点进度：当天已生成的 CSV / 进度文件会被删除并重新生成，请确认后再勾选。
+          勾选后本次会在列表标注「重跑」，未勾选为「续跑」（只抓增量）
         </div>
         <template #footer>
           <el-button @click="startVisible = false">取消</el-button>
@@ -639,6 +657,8 @@ onBeforeUnmount(() => {
           </span>
           <span class="text-muted">
             状态：<el-tag size="small" :type="statusType(current.status)">{{ statusText(current.status) }}</el-tag>
+            <el-tag v-if="current.restart === 1" size="small" type="danger" class="mode-tag">重跑</el-tag>
+            <el-tag v-else-if="current.restart === 0" size="small" type="info" class="mode-tag">续跑</el-tag>
             <template v-if="current.status === 'running'">
               <template v-if="current.progress != null">
                 &nbsp;整体进度
@@ -788,6 +808,11 @@ onBeforeUnmount(() => {
 .time-cell {
   margin-left: 6px;
   color: #909399;
+}
+
+/* 运行模式标签（重跑 / 续跑），跟在来源标签后面 */
+.mode-tag {
+  margin-left: 4px;
 }
 
 /* 「版块」合并列：成功 / 失败 / 未执行，斜杠分隔（业界计数指标常用分隔） */

@@ -36,8 +36,12 @@ FORCE_RESTART = False                    # 是否忽略断点进度强制重跑�
 _RUN_BATCH_TS = file_logger.run_batch_ts()
 _OUTPUT_DATE = _RUN_BATCH_TS[:8]
 OUTPUT_DIR = f"outputs/{_OUTPUT_DATE}"
-OUTPUT_FILE = f"{OUTPUT_DIR}/{FID}_output_{_RUN_BATCH_TS}.csv"
-PROGRESS_FILE = f"{OUTPUT_DIR}/{FID}_progress_{_RUN_BATCH_TS}.txt"
+# 文件名按「版块 + 日期」固定，不再带批次时间戳：
+# 断点续传是按精确文件名读取进度的（get_last_page），此前每批一套新文件名，
+# 旧进度永远读不到 → 续传形同虚设、每次都从第 1 页重抓，磁盘还堆一整套文件。
+# 固定后同一天重复运行复用同一文件：进度能续上，CSV 也按 append 累积。
+OUTPUT_FILE = f"{OUTPUT_DIR}/{FID}_output_{_OUTPUT_DATE}.csv"
+PROGRESS_FILE = f"{OUTPUT_DIR}/{FID}_progress_{_OUTPUT_DATE}.txt"
 DB_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "db", "posts.db")
 
 # 请求头，模拟浏览器（与下载模块共用 http_headers 里唯一的 UA 定义）
@@ -345,6 +349,7 @@ def _record_run(status: str, rows: int, db_rows: int, duration: int) -> None:
         csv=rows,
         sqlite=db_rows,
         duration=duration,
+        restart=FORCE_RESTART,
         sections=[
             {
                 "fid": FID,
@@ -697,8 +702,8 @@ def _apply_cli_args() -> None:
     PUBLIC_URL = ROOT_URL  # pyright: ignore[reportConstantRedefinition]
     BASE_URL = ROOT_URL + "/thread0806.php"  # pyright: ignore[reportConstantRedefinition]
     OUTPUT_DIR = f"outputs/{_OUTPUT_DATE}"  # pyright: ignore[reportConstantRedefinition]
-    OUTPUT_FILE = f"{OUTPUT_DIR}/{FID}_output_{_RUN_BATCH_TS}.csv"  # pyright: ignore[reportConstantRedefinition]
-    PROGRESS_FILE = f"{OUTPUT_DIR}/{FID}_progress_{_RUN_BATCH_TS}.txt"  # pyright: ignore[reportConstantRedefinition]
+    OUTPUT_FILE = f"{OUTPUT_DIR}/{FID}_output_{_OUTPUT_DATE}.csv"  # pyright: ignore[reportConstantRedefinition]
+    PROGRESS_FILE = f"{OUTPUT_DIR}/{FID}_progress_{_OUTPUT_DATE}.txt"  # pyright: ignore[reportConstantRedefinition]
 
 
 if __name__ == "__main__":

@@ -79,18 +79,23 @@ def _run_progress(run_id: int) -> int | None:
     return round(total / len(rows))
 
 
-def _run_live_agg(run_id: int) -> dict[str, Any]:
+def _run_live_agg(run_id: int, stale_as_skip: bool = False) -> dict[str, Any]:
     """running 状态运行：从各版块明细实时聚合 CSV/SQLite 条数与成功/失败/未执行数。
 
     子进程每抓一页都会实时上报进度与条数（run_sections.csv / sqlite），
     此处按需聚合，保证【运行记录】列表与【运行明细】在运行期间
     所有数据（而非仅进度）随轮询实时刷新，无需额外落库写入。
+
+    stale_as_skip=True 用于**僵死批次**（进程被强杀/崩溃）：那些仍停在 running 的
+    版块永远不会再推进，按「未执行」计入——否则汇总只统计已完成项，会出现
+    「成功 6 / 失败 0 / 未执行 0」而实际有 13 个版块的缺口径（合计对不上）。
+    running 字段始终返回进行中的版块数，供前端提示「N 个进行中」。
     """
     rows = db.query(
         "SELECT status, csv, sqlite FROM run_sections WHERE run_id = ?",
         (run_id,),
     )
-    agg = {"ok": 0, "fail": 0, "skip": 0, "csv": 0, "sqlite": 0}
+    agg = {"ok": 0, "fail": 0, "skip": 0, "running": 0, "csv": 0, "sqlite": 0}
     for r in rows:
         agg["csv"] += r["csv"] or 0
         agg["sqlite"] += r["sqlite"] or 0
@@ -100,13 +105,20 @@ def _run_live_agg(run_id: int) -> dict[str, Any]:
             agg["fail"] += 1
         elif r["status"] == "skip":
             agg["skip"] += 1
+        else:
+            agg["running"] += 1
+            if stale_as_skip:
+                agg["skip"] += 1
     return agg
 
 
 def _db_run_row(r: Any, progress: int | None = None) -> dict[str, Any]:
-    """把 run_days 一行转成列表/详情通用结构（含 id / 时间 / 进度）"""
+    """把 run_days 一行转成列表/详情通用结构（含 id / 时间 / 进度 / 运行模式）"""
     return {
         "id": r["id"],
+        # 运行模式：1=强制重跑（--restart），0=断点续跑。用于前端标注，
+        # 否则「13 版块成功 + CSV 1300 条」无法判断是增量续跑还是全量重跑失败
+        "restart": int(r["restart"] or 0) if "restart" in r.keys() else 0,
         "date": _fmt_date(r["run_date"]),
         "dir": r["run_date"],
         "time": (r["created_at"] or "")[11:19],
@@ -150,30 +162,42 @@ def _db_list_runs() -> list[dict[str, Any]]:
     if not _db_ready():
         return []
     rows = db.query(
-        "SELECT id, run_date, source, status, ok, fail, skip, csv, sqlite, duration, created_at, updated_at FROM run_days" +
+        "SELECT id, run_date, source, status, ok, fail, skip, csv, sqlite, duration, restart, created_at, updated_at FROM run_days" +
         " ORDER BY run_date DESC, id DESC"
     )
     out: list[dict[str, Any]] = []
     for r in rows:
         if r["status"] == "running" and _running_stale(r):
-            # 孤儿降级（仅展示口径）：按 error 终态展示，条数保留实时聚合值
+            # 孤儿降级（仅展示口径）：按 error 终态展示；
+            # 未完成的版块（仍 running）按「未执行」计入，保证 成功+失败+未执行 = 版块总数
             r["status"] = "error"
             row = _db_run_row(r, 100)
-            agg = _run_live_agg(r["id"])
+            agg = _run_live_agg(r["id"], stale_as_skip=True)
             row.update(
-                ok=agg["ok"], fail=agg["fail"], skip=agg["skip"],
+                ok=agg["ok"], fail=agg["fail"], skip=agg["skip"], running=0,
                 csv=agg["csv"], sqlite=agg["sqlite"],
             )
         elif r["status"] == "running":
             row = _db_run_row(r, _run_progress(r["id"]))
-            # 运行中：条数与成功/失败/未执行数实时聚合自各版块明细
+            # 运行中：条数与成功/失败/未执行数实时聚合自各版块明细；
+            # 未完成项单独给 running 计数（不计入三者，避免把"还没跑"当成"没跑"）
             agg = _run_live_agg(r["id"])
             row.update(
-                ok=agg["ok"], fail=agg["fail"], skip=agg["skip"],
+                ok=agg["ok"], fail=agg["fail"], skip=agg["skip"], running=agg["running"],
                 csv=agg["csv"], sqlite=agg["sqlite"],
             )
         else:
             row = _db_run_row(r, 100)
+            # 终态但明细残留 running 的兜底：「启动收编」（新批次启动时把残留 running
+            # 收编为 error）等异常路径不会收敛版块明细——按已确认口径计入「未执行」，
+            # 否则会出现 0/0/0 的缺口径。正常终态明细无 running，聚合值与库字段一致。
+            if r["status"] in ("error", "cancelled"):
+                agg = _run_live_agg(r["id"], stale_as_skip=True)
+                if agg["running"]:
+                    row.update(
+                        ok=agg["ok"], fail=agg["fail"], skip=agg["skip"],
+                        csv=agg["csv"], sqlite=agg["sqlite"],
+                    )
         out.append(row)
     return out
 
@@ -183,7 +207,7 @@ def _db_detail_by_id(run_id: int) -> dict[str, Any] | None:
     if not _db_ready():
         return None
     rows = db.query(
-        "SELECT id, run_date, source, status, ok, fail, skip, csv, sqlite, duration, created_at FROM run_days" +
+        "SELECT id, run_date, source, status, ok, fail, skip, csv, sqlite, duration, restart, created_at FROM run_days" +
         " WHERE id = ?",
         (run_id,),
     )
@@ -196,17 +220,46 @@ def _db_detail_by_id(run_id: int) -> dict[str, Any] | None:
         (run_id,),
     )
     detail: dict[str, Any] = _db_run_row(r, _run_progress(run_id) if r["status"] == "running" else 100)
-    detail["sections"] = [dict(s) for s in sections]
-    if r["status"] == "running":
+    sections_out = [dict(s) for s in sections]
+    # 僵死批次（进程被强杀/崩溃）：与列表口径一致，状态降级为 error，
+    # 未完成的版块（仍 running）展示为「未执行」——它们不会再推进，
+    # 显示「进行中」会让明细与列表状态自相矛盾
+    stale = r["status"] == "running" and _running_stale(dict(r))
+    if stale:
+        detail["status"] = "error"
+        for s in sections_out:
+            if s["status"] == "running":
+                s["status"] = "skip"
+    detail["sections"] = sections_out
+    if r["status"] == "running" and not stale:
         # 运行中：CSV/SQLite 汇总与成功/失败/未执行数实时聚合自各版块明细
         agg = _run_live_agg(run_id)
         detail["total"] = {"csv": agg["csv"], "sqlite": agg["sqlite"]}
         if r["source"] == "run_batch":
             detail["overall"] = {"ok": agg["ok"], "fail": agg["fail"], "skip": agg["skip"]}
-    else:
-        detail["total"] = {"csv": r["csv"], "sqlite": r["sqlite"]}
+    elif stale:
+        # 僵死批次：库内汇总字段是进程死时的空值，需按明细重新聚合（未完成算未执行）
+        agg = _run_live_agg(run_id, stale_as_skip=True)
+        detail["total"] = {"csv": agg["csv"], "sqlite": agg["sqlite"]}
         if r["source"] == "run_batch":
-            detail["overall"] = {"ok": r["ok"], "fail": r["fail"], "skip": r["skip"]}
+            detail["overall"] = {"ok": agg["ok"], "fail": agg["fail"], "skip": agg["skip"]}
+    else:
+        # 终态但明细残留 running 的兜底（启动收编等异常路径不收敛明细）：同列表口径
+        stale_secs = False
+        if r["status"] in ("error", "cancelled"):
+            agg = _run_live_agg(run_id, stale_as_skip=True)
+            stale_secs = agg["running"] > 0
+            if stale_secs:
+                detail["total"] = {"csv": agg["csv"], "sqlite": agg["sqlite"]}
+                if r["source"] == "run_batch":
+                    detail["overall"] = {"ok": agg["ok"], "fail": agg["fail"], "skip": agg["skip"]}
+                for s in sections_out:
+                    if s["status"] == "running":
+                        s["status"] = "skip"
+        if not stale_secs:
+            detail["total"] = {"csv": r["csv"], "sqlite": r["sqlite"]}
+            if r["source"] == "run_batch":
+                detail["overall"] = {"ok": r["ok"], "fail": r["fail"], "skip": r["skip"]}
     return detail
 
 
@@ -699,6 +752,13 @@ def stop_run() -> dict[str, Any]:
             _ = conn.execute(
                 "UPDATE run_days SET status = 'cancelled', duration = ?, updated_at = ? WHERE id = ?",
                 (duration, now, r["id"]),
+            )
+            # 收敛该批次未完成的版块为「未执行」：进程被强杀后 run_batch 的 finally
+            # 不会执行，无人收敛，这些版块会永远挂着 running，导致汇总缺口径
+            # （成功+失败+未执行 < 版块总数）
+            _ = conn.execute(
+                "UPDATE run_sections SET status = 'skip' WHERE run_id = ? AND status = 'running'",
+                (r["id"],),
             )
         conn.commit()
     finally:

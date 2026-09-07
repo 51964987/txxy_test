@@ -275,11 +275,16 @@ export interface RunSummary {
   ok: number
   fail: number
   skip: number
+  /** 进行中的版块数：仅「活着的」运行中批次有值。
+   *  未完成项不计入成功/失败/未执行；批次僵死后这些版块按「未执行」计入 skip */
+  running?: number
   csv: number
   sqlite: number
   duration?: number | null
   /** 实时进度百分比 0-100；running 状态时实时聚合，已结束为 100 */
   progress?: number | null
+  /** 运行模式：1=强制重跑（--restart，忽略断点抓全量）/ 0=断点续跑（只抓增量） */
+  restart?: number
 }
 
 export interface RunSection {
@@ -304,6 +309,8 @@ export interface RunDetail {
   overall?: { ok: number; fail: number; skip: number }
   total: { csv: number; sqlite: number }
   progress?: number | null
+  /** 运行模式：1=强制重跑 / 0=断点续跑 */
+  restart?: number
   sections: RunSection[]
 }
 

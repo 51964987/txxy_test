@@ -225,7 +225,12 @@ def _find_port_pids(port: int) -> list[int]:
     pids: list[int] = []
     try:
         out = subprocess.run(
-          ["netstat", "-ano", "-p", "tcp"], capture_output=True, text=True, timeout=10
+          ["netstat", "-ano", "-p", "tcp"],
+          capture_output=True,
+          text=True,
+          # errors 容错：系统命令偶发非 UTF-8 字节不应让端口探测崩掉
+          errors="replace",
+          timeout=10,
         ).stdout
         for line in out.splitlines():
             parts = line.split()
@@ -320,16 +325,27 @@ def run_scraper(fid: str, name: str, run_id: int = 0) -> tuple[str, str, bool, i
         }
         env["SCRAPER_RECORD_RUN"] = "0"
         env["TXXY_LOCAL_PROXY"] = proxy_addr
+        # 统一子进程 stdout 编码为 UTF-8：本脚本被 Web 端以 `python -X utf8 run_batch.py`
+        # 拉起时处于 UTF-8 模式，下面的 Popen 会用 UTF-8 解码子进程输出；而子进程默认
+        # 未开 UTF-8 模式（-X utf8 不继承、PYTHONUTF8 未设），stdout 走系统 locale
+        # （中文 Windows 为 cp936），父进程按 UTF-8 解码就会抛
+        # UnicodeDecodeError: 'utf-8' codec can't decode byte 0xbb —— 在读取输出的循环里
+        # 直接崩掉，导致该版块被判失败（实测 13 个版块全部失败）。
+        env["PYTHONIOENCODING"] = "utf-8"
         # 把本批次的起始时刻传给子进程：子进程的日志 / CSV / 进度文件都用它命名，
         # 与批次本身落在同一日期目录（跨午夜不分裂），并和运行记录 run_date 对齐。
         env[file_logger.RUN_BATCH_TS_ENV] = file_logger.run_batch_ts()
         if run_id:
             env["SCRAPER_RUN_ID"] = str(run_id)
+        # 编码显式化（不依赖父进程 locale / UTF-8 模式）+ errors 容错：
+        # 个别异常字节不应让整个版块的抓取功亏一篑
         proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             env=env,
         )
         # 注册到活动子进程集合：Ctrl+C 中断时由 terminate_active_procs() 统一终止
@@ -419,6 +435,7 @@ def main() -> None:
             datetime.now().strftime("%Y%m%d"),
             "run_batch",
             [{"fid": fid, "name": name, "total_pages": 0} for fid, name in SECTIONS.items()],
+            restart=FORCE_RESTART,
         )
         if run_id:
             log(f"[入库] 已创建运行记录 ID={run_id}（状态: 进行中），子进程将实时上报进度")
@@ -559,6 +576,7 @@ def main() -> None:
                     csv=total_rows,
                     sqlite=total_db_rows,
                     duration=int(time.time() - batch_start),
+                    restart=FORCE_RESTART,
                     sections=sections,
                 )
                 log(

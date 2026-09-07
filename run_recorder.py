@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS run_days (
     csv        INTEGER NOT NULL DEFAULT 0,        /* 本次写入 CSV 总条数 */
     sqlite     INTEGER NOT NULL DEFAULT 0,        /* 本次入库 SQLite 总条数 */
     duration   INTEGER,                           /* 运行总耗时（秒，运行中为空） */
+    restart    INTEGER NOT NULL DEFAULT 0,        /* 运行模式：1=强制重跑(--restart，忽略断点) / 0=断点续跑 */
     created_at TEXT    NOT NULL,                  /* 记录创建时间戳（运行开始） */
     updated_at TEXT    NOT NULL                   /* 记录更新时间戳 */
 );
@@ -153,6 +154,20 @@ def _migrate_legacy(conn: sqlite3.Connection) -> None:
         print("[迁移] run_sections 已重建为 run_id 关联结构", file=sys.stderr)
 
 
+def _ensure_restart_column(conn: sqlite3.Connection) -> None:
+    """为旧 run_days 表补齐运行模式列（幂等）。
+
+    没有它就无法区分「续跑」与「重跑」：两者都是 13 版块成功，但 CSV 条数可能差
+    上百倍（续跑只抓增量），列表上会完全误读。老记录按续跑（0）处理。
+    """
+    if not _table_exists(conn, "run_days"):
+        return
+    if "restart" in _table_column_names(conn, "run_days"):
+        return
+    _ = conn.execute("ALTER TABLE run_days ADD COLUMN restart INTEGER NOT NULL DEFAULT 0")
+    print("[迁移] run_days 已补齐运行模式列 restart（0=续跑 / 1=强制重跑）", file=sys.stderr)
+
+
 def _ensure_progress_columns(conn: sqlite3.Connection) -> None:
     """为旧 run_sections 表补齐实时进度列（幂等）。"""
     if not _table_exists(conn, "run_sections"):
@@ -178,6 +193,7 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     """
     _migrate_legacy(conn)
     _ensure_progress_columns(conn)
+    _ensure_restart_column(conn)
     _ = conn.executescript(_DDL)
 
 
@@ -194,6 +210,8 @@ def start_run(
     run_date: str,
     source: str,
     sections: list[SectionInfo],
+    *,
+    restart: bool = False,
 ) -> int:
     """运行开始：创建一条 status=running 的记录及其版块明细，返回 run_days.id。
 
@@ -202,6 +220,9 @@ def start_run(
         source    运行来源：run_batch（批量） / scraper（单跑）
         sections  版块明细列表，每项为 dict：{fid, name, total_pages?}
                   （status 固定为 running，运行时逐项 update_section 推进）
+        restart   运行模式：True=强制重跑（--restart，忽略断点进度）；False=断点续跑。
+                  仅用于展示——同样的「13 版块成功」，续跑只抓增量、重跑抓全量，
+                  CSV 条数能差上百倍，不记录会导致列表数据被误读。
 
     返回 0 表示创建失败（仅告警，不影响抓取主流程）。
     """
@@ -217,9 +238,9 @@ def start_run(
         if orphans:
             print(f"[收编] 已将 {orphans} 条残留 running 记录收编为 error", file=sys.stderr)
         cur = conn.execute(
-            "INSERT INTO run_days(run_date, source, status, ok, fail, skip, csv, sqlite, duration, created_at, updated_at)"
-            + " VALUES (?, ?, 'running', 0, 0, 0, 0, 0, NULL, ?, ?)",
-            (run_date, source, now, now),
+            "INSERT INTO run_days(run_date, source, status, ok, fail, skip, csv, sqlite, duration, restart, created_at, updated_at)"
+            + " VALUES (?, ?, 'running', 0, 0, 0, 0, 0, NULL, ?, ?, ?)",
+            (run_date, source, 1 if restart else 0, now, now),
         )
         run_id = int(cur.lastrowid or 0)
         _ = conn.executemany(
@@ -351,6 +372,7 @@ def record_run(
     csv: int = 0,
     sqlite: int = 0,
     duration: int | None = None,
+    restart: bool = False,
     sections: list[SectionInfo],
 ) -> int:
     """一次性追加一条运行记录及其版块明细，返回本次运行的 run_days.id。
@@ -358,7 +380,7 @@ def record_run(
     用于无法提前创建 running 记录的场景（如单跑时无任何可抓页面）。
     等价于 start_run + 立即 finish_run。写入失败仅告警，返回 0。
     """
-    run_id = start_run(run_date, source, sections)
+    run_id = start_run(run_date, source, sections, restart=restart)
     if run_id:
         finish_run(run_id, status, ok=ok, fail=fail, skip=skip, csv=csv, sqlite=sqlite, duration=duration)
     return run_id
