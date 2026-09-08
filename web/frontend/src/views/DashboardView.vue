@@ -198,6 +198,11 @@ watch(
 // 自动刷新：开关状态存于 dashboard store（header 控件共享），每 30 秒静默刷新一次
 // 仅刷新已加载的区块，未进入视口的懒加载区块保持不动
 const REFRESH_INTERVAL = 5000
+// 活跃榜（活跃作者 / 活跃版块）窄屏断点：低于该容器宽度走「紧凑留白」配置，
+// 否则桌面的 74px 类目标签 + 92px 条尾会把柱条压到只剩约 44% 宽
+const RANK_NARROW_W = 400
+// 当前是否已按窄屏配置渲染（null = 尚未渲染），用于跨断点时强制重绘
+let rankNarrow: boolean | null = null
 let refreshTimer: ReturnType<typeof setInterval> | null = null
 // 页面可见性：后台隐藏时暂停全部轮询与轮播动画，恢复可见时立即刷新并重启
 let pageVisible = true
@@ -588,11 +593,23 @@ function renderHBarChart(
   }[],
   colors: string[],
   onClick?: (i: number) => void,
+  forceRedraw = false,
 ) {
   // 指纹纳入口径：切换口径后即使数值相同也要重绘
   const key = items.map((d) => `${d.name}:${d.value}:${d.valueLabel ?? ''}`).join('|')
-  if (key === lastKeyRef.v) return // P1-8：数据指纹无变化跳过重绘
+  if (key === lastKeyRef.v && !forceRedraw) return // P1-8：数据指纹无变化跳过重绘
   lastKeyRef.v = key
+  // 窄屏判定以「图表容器实际宽度」为准（比 window 宽度可靠：侧栏/全屏都会改变容器）
+  const narrow = (el.clientWidth || window.innerWidth) < RANK_NARROW_W
+  // 最大值：短柱内部放不下环比文字时按比例省略
+  const maxValue = Math.max(1, ...items.map((d) => d.value))
+  // 绘图区宽度（柱条可用像素）：容器宽 − 左侧留白 − 类目标签 − 条尾留白
+  const plotWidth = Math.max(
+    60,
+    (el.clientWidth || window.innerWidth) - (narrow ? 4 + 56 + 52 : 8 + 74 + 92),
+  )
+  // 柱内环比文字宽度（「↑12%」约 30px）+ 内边距，用于按像素判断是否放得下
+  const insideTextWidth = 36
   const c = chart.value ??= initChart(el)
   c.setOption(
     {
@@ -619,8 +636,14 @@ function renderHBarChart(
           return `${p.name}<br/>${label} ${p.value.toLocaleString()} 条<br/>${p.data.extra ?? ''}<br/>${cmp}`
         },
       },
-      // 右侧留出条尾「数值 + 环比」的空间，避免长标签被裁切
-      grid: { left: 8, right: 92, top: 6, bottom: 6, containLabel: true },
+      // 右侧留出条尾「数值」的空间，避免长标签被裁切。
+      // 窄屏（画布 < RANK_NARROW_W）按自适应收窄：桌面的 74px 类目标签 + 92px 条尾
+      // 在 312px 画布上会把柱条压到只剩约 44% 宽（用户反馈「被压到一半展示」）。
+      // 窄屏口径：数值仍放条尾外侧（需留足约 52px，否则会像「23,」一样被裁半个），
+      // 环比改放柱子内部靠右（白字），短柱放不下时自动省略——tooltip 里始终完整。
+      grid: narrow
+        ? { left: 4, right: 52, top: 6, bottom: 6, containLabel: true }
+        : { left: 8, right: 92, top: 6, bottom: 6, containLabel: true },
       // Y 轴横向线显示，X 轴竖向线隐藏（项目图表网格线规则）
       xAxis: {
         type: 'value',
@@ -636,7 +659,9 @@ function renderHBarChart(
         data: items.map((d) => d.name),
         axisLine: { show: false },
         axisTick: { show: false },
-        axisLabel: { color: '#1f2d3d', fontSize: 12, width: 74, overflow: 'truncate' },
+        axisLabel: narrow
+          ? { color: '#1f2d3d', fontSize: 11, width: 56, overflow: 'truncate' }
+          : { color: '#1f2d3d', fontSize: 12, width: 74, overflow: 'truncate' },
         splitLine: { show: false },
       },
       series: [
@@ -654,8 +679,12 @@ function renderHBarChart(
           label: {
             show: true,
             position: 'right',
-            // 条尾同时给出主值与环比：涨跌用颜色区分，一眼看出谁在上升
+            distance: 4,
+            // 条尾同时给出主值与环比：涨跌用颜色区分，一眼看出谁在上升。
+            // 窄屏条尾只留主值——环比挪进柱体内部（见下方叠加层），
+            // 否则右侧留白不足会把「23,752」裁成「23,」。
             formatter: (p: any) => {
+              if (narrow) return `{v|${p.value.toLocaleString()}}`
               const d = deltaText(p.data.delta)
               return `{v|${p.value.toLocaleString()}}  {${d.cls}|${d.text}}`
             },
@@ -668,6 +697,37 @@ function renderHBarChart(
             },
           },
         },
+        // 窄屏专用：同长透明柱叠加（barGap -100%），把环比文字画在柱体内部靠右。
+        // 用叠加层而非改主系列标签——主系列的条尾标签位置/富文本要保持不变。
+        ...(narrow
+          ? [
+              {
+                type: 'bar',
+                barWidth: 12,
+                barGap: '-100%',
+                silent: true,
+                data: items.map((d) => ({ value: d.value, delta: d.delta })),
+                itemStyle: { color: 'transparent' },
+                label: {
+                  show: true,
+                  position: 'insideRight' as const,
+                  distance: 4,
+                  // 按「实际可用像素」判断是否放得下：固定比例阈值（如 0.25）在长尾分布下
+                  // 会误杀——活跃作者第 1 名 23,752、第 2 名 5,612 只占 23.6%，
+                  // 结果只有第 1 根显示。改为「柱子像素长 ≥ 文字宽 + 间距」才省略。
+                  formatter: (p: any) =>
+                    (p.value / maxValue) * plotWidth >= insideTextWidth
+                      ? deltaText(p.data.delta).text
+                      : '',
+                  color: '#fff',
+                  fontSize: 10,
+                  textShadowColor: 'rgba(0,0,0,0.35)',
+                  textShadowBlur: 2,
+                },
+                tooltip: { show: false },
+              },
+            ]
+          : []),
       ],
     },
     true,
@@ -683,7 +743,7 @@ function renderHBarChart(
 /** 活跃作者 Top10：横向条形图，主值=累计发帖，多色区分，点击下钻该作者帖子。
  *  作者没有稳定 fid，按排名取色；复用 FID_PALETTE（见 utils/fidColor），
  *  不另建一套作者色板，避免同一色值在两图里的排名含义不一致。 */
-function renderAuthorChart() {
+function renderAuthorChart(force = false) {
   if (!authorChartRef.value) return
   const n = topAuthors.value.length
   if (!n) return
@@ -701,6 +761,7 @@ function renderAuthorChart() {
     })),
     colors,
     (i) => goAuthor(topAuthors.value[i]?.author ?? ''),
+    force,
   )
 }
 
@@ -771,7 +832,7 @@ function engagement(item: { likes?: number; replies?: number }) {
 }
 
 /** 活跃版块 Top10：横向条形图，主值=累计发帖，颜色按版块色板，点击跳版块列表 */
-function renderFidChart() {
+function renderFidChart(force = false) {
   if (!fidChartRef.value) return
   const n = topFids.value.length
   if (!n) return
@@ -788,6 +849,7 @@ function renderFidChart() {
     })),
     topFids.value.map((f) => colorForFid(f.fid ?? '')),
     (i) => goDist(topFids.value[i]?.fid ?? undefined),
+    force,
   )
 }
 
@@ -828,6 +890,16 @@ function onFidRangeChange(v: unknown) {
 }
 
 function onResize() {
+  // 跨过窄屏断点时，两张活跃榜要走另一套留白配置：仅 resize 不会改变 grid/标签，
+  // 必须强制重绘（renderHBarChart 平时靠数据指纹跳过重绘）
+  const w = authorChartRef.value?.clientWidth || window.innerWidth
+  const narrowNow = w < RANK_NARROW_W
+  if (rankNarrow === null) rankNarrow = narrowNow
+  else if (narrowNow !== rankNarrow) {
+    rankNarrow = narrowNow
+    renderAuthorChart(true)
+    renderFidChart(true)
+  }
   trendChart.value?.resize()
   fidTrendChart.value?.resize()
   authorChart.value?.resize()
@@ -871,6 +943,8 @@ function rebuildCharts(): void {
   lastFidTrendKey = ''
   lastAuthorKey = ''
   lastFidKey = ''
+  // 复位窄屏标记：重建后由 onResize 按新容器宽度重新判定
+  rankNarrow = null
   stopTrendCarousel()
   renderTrendChart()
   renderFidTrendChart()

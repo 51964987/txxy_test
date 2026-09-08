@@ -431,6 +431,92 @@ function goVideo(step: number) {
   videoIndex.value = next
 }
 
+// ===== 缩略图受控加载（限流友好 + 429 自动退避重试 + 错误态区分） =====
+// 背景：预览接口限 300 次/分（原 60），但一页 30~60 张缩略图若瞬间并发仍会撞限流，
+// 而 el-image 的 error 无法区分 429 / 文件损坏，一律显示「加载失败」。
+// 做法：自管队列 → 受控并发取图（fetch 可拿到状态码）→ 成功转 blob URL 交给 el-image，
+// 429 退避重试（最多 3 次），其余失败标记 broken；错误态给出「重试 / 打开」入口。
+type ThumbStatus = 'queued' | 'loading' | 'retrying' | 'ok' | 'error'
+interface ThumbState {
+  status: ThumbStatus
+  url?: string
+  tries: number
+}
+const THUMB_CONCURRENCY = 6
+const THUMB_MAX_TRIES = 3
+const thumbs = ref<Record<string, ThumbState>>({})
+const thumbQueue: string[] = []
+let thumbActive = 0
+let thumbTimer: ReturnType<typeof setTimeout> | null = null
+const thumbBlobUrls: string[] = []
+
+function thumbState(rel: string): ThumbState {
+  return thumbs.value[rel] ?? { status: 'queued', tries: 0 }
+}
+
+function setThumb(rel: string, st: ThumbState) {
+  thumbs.value = { ...thumbs.value, [rel]: st }
+}
+
+function enqueueThumbs(rels: string[]) {
+  for (const rel of rels) {
+    if (thumbs.value[rel]?.status === 'ok') continue
+    if (!thumbs.value[rel]) setThumb(rel, { status: 'queued', tries: 0 })
+    if (!thumbQueue.includes(rel)) thumbQueue.push(rel)
+  }
+  void pumpThumbs()
+}
+
+async function pumpThumbs() {
+  while (thumbActive < THUMB_CONCURRENCY && thumbQueue.length) {
+    const rel = thumbQueue.shift() as string
+    thumbActive += 1
+    void loadThumb(rel).finally(() => {
+      thumbActive -= 1
+      void pumpThumbs()
+    })
+  }
+}
+
+async function loadThumb(rel: string) {
+  const st = thumbState(rel)
+  if (st.status === 'ok') return
+  setThumb(rel, { status: 'loading', tries: st.tries, url: st.url })
+  try {
+    const res = await fetch(resourceFileUrl(rel))
+    if (res.status === 429) {
+      const tries = st.tries + 1
+      if (tries < THUMB_MAX_TRIES) {
+        setThumb(rel, { status: 'retrying', tries })
+        // 退避重试：1.5s / 3s，重新入队（不占用并发槽）
+        thumbTimer = setTimeout(() => {
+          thumbQueue.push(rel)
+          void pumpThumbs()
+        }, 1500 * tries)
+      } else {
+        setThumb(rel, { status: 'error', tries })
+      }
+      return
+    }
+    if (!res.ok) {
+      setThumb(rel, { status: 'error', tries: st.tries })
+      return
+    }
+    const url = URL.createObjectURL(await res.blob())
+    thumbBlobUrls.push(url)
+    setThumb(rel, { status: 'ok', url, tries: st.tries })
+  } catch {
+    setThumb(rel, { status: 'error', tries: st.tries })
+  }
+}
+
+/** 手动重试：错误态的「重试」入口 */
+function retryThumb(rel: string) {
+  setThumb(rel, { status: 'queued', tries: 0 })
+  if (!thumbQueue.includes(rel)) thumbQueue.push(rel)
+  void pumpThumbs()
+}
+
 /** 播放结束自动连播下一个；已是最后一个则不做处理 */
 function onVideoEnded() {
   if (videoIndex.value < videoList.value.length - 1) goVideo(1)
@@ -557,16 +643,45 @@ const browserMode = ref<'folder' | 'global'>('folder')
 // 文件名用 zh-Hans-CN locale（与目录排序一致），中文按拼音序。
 // global 模式不重排：globalFiles 已按用户排序状态排好，抽屉与列表顺序保持一致
 const CATEGORY_ORDER: Record<string, number> = { image: 0, video: 1, torrent: 2, text: 3, other: 4 }
+// 抽屉内排序：默认「类型优先」保留聚类浏览习惯；也可按名称 / 大小 / 时间 / 尺寸
+type BrowserSort = 'category' | 'name' | 'size' | 'time' | 'dimension'
+const browserSort = ref<BrowserSort>('category')
+const browserSortOptions: { label: string; value: BrowserSort }[] = [
+  { label: '类型优先', value: 'category' },
+  { label: '按名称', value: 'name' },
+  { label: '按大小', value: 'size' },
+  { label: '按时间', value: 'time' },
+  { label: '按尺寸', value: 'dimension' },
+]
 const browserFiles = computed<ResourceFile[]>(() => {
   if (browserMode.value === 'global') return globalFiles.value
   const list = [...(browserFolder.value?.files ?? [])]
-  list.sort((a, b) => {
-    const ca = CATEGORY_ORDER[a.category] ?? 9
-    const cb = CATEGORY_ORDER[b.category] ?? 9
-    if (ca !== cb) return ca - cb
-    return a.name.localeCompare(b.name, 'zh-Hans-CN')
-  })
+  const key = browserSort.value
+  if (key === 'name') {
+    list.sort((a, b) => a.name.localeCompare(b.name, 'zh-Hans-CN'))
+  } else if (key === 'size') {
+    list.sort((a, b) => Number(b.size) - Number(a.size))
+  } else if (key === 'time') {
+    list.sort((a, b) => Number(b.mtime ?? 0) - Number(a.mtime ?? 0))
+  } else if (key === 'dimension') {
+    // 无尺寸（非图片/解析失败）的排最后，其余按像素面积倒序
+    const area = (f: ResourceFile) => Number(f.width ?? 0) * Number(f.height ?? 0)
+    list.sort((a, b) => area(b) - area(a))
+  } else {
+    list.sort((a, b) => {
+      const ca = CATEGORY_ORDER[a.category] ?? 9
+      const cb = CATEGORY_ORDER[b.category] ?? 9
+      if (ca !== cb) return ca - cb
+      return a.name.localeCompare(b.name, 'zh-Hans-CN')
+    })
+  }
   return list
+})
+
+/** 抽屉内图片汇总：张数与占用（配合类型构成一起给出容量感） */
+const browserImageStats = computed(() => {
+  const imgs = browserFiles.value.filter((f) => f.category === 'image')
+  return { count: imgs.length, size: imgs.reduce((s, f) => s + Number(f.size), 0) }
 })
 
 // 资源过多时的展示优化（业界集合浏览通行做法：类型筛选 + 名称过滤 + 前端分页；
@@ -595,8 +710,8 @@ const browserPaged = computed(() =>
     browserPage.value * browserPageSize.value,
   ),
 )
-// 筛选/过滤变化回到第一页，避免停留在超出范围的页码
-watch([browserTypeFilter, browserKeyword], () => {
+// 筛选/过滤/排序变化回到第一页，避免停留在超出范围的页码
+watch([browserTypeFilter, browserKeyword, browserSort], () => {
   browserPage.value = 1
 })
 
@@ -715,8 +830,27 @@ function bindVideoPosters() {
 }
 watch([browserVisible, browserPaged], () => {
   void nextTick(bindVideoPosters)
+  // 当前页图片进入受控加载队列（并发 6，避免瞬间打满预览限流）
+  enqueueThumbs(
+    browserPaged.value.filter((f) => f.category === 'image').map((f) => f.rel_path),
+  )
 })
-onBeforeUnmount(() => posterObserver?.disconnect())
+onBeforeUnmount(() => {
+  posterObserver?.disconnect()
+  if (thumbTimer) clearTimeout(thumbTimer)
+  for (const u of thumbBlobUrls) URL.revokeObjectURL(u)
+})
+
+/** 浏览抽屉卡片的悬浮提示：把行内放不下的元信息（修改时间 / 完整路径 / 真实格式）集中给出 */
+function cellTitle(f: ResourceFile): string {
+  const parts = [f.name]
+  if (f.width && f.height) parts.push(`${f.width}×${f.height}`)
+  if (f.format) parts.push(f.format)
+  parts.push(formatSize(Number(f.size)))
+  if (f.mtime) parts.push(formatMinuteTime(f.mtime))
+  parts.push(f.rel_path)
+  return parts.join(' · ')
+}
 
 /** 首帧作为占位块背景：未抓到前保持类型文字 */
 function posterStyle(rel: string): Record<string, string> {
@@ -1670,8 +1804,8 @@ onBeforeUnmount(() => {
     </div>
 
     <!-- 目录资源浏览抽屉：不展开目录即可浏览该目录全部资源。
-         图片直接出缩略图（el-image lazy 懒加载，滚动到可视区才请求受控预览接口，
-         避免一次几十张触发 60 次/分限流）；视频/文本/种子/其他显示类型占位块。
+         图片缩略图走「受控并发队列 + 429 退避重试」（不再让 el-image 直接并发拉接口，
+         一页几十张会撞预览限流而被显示成「加载失败」）；视频/文本/种子/其他显示类型占位块。
          点击任意卡片走统一查看入口 openResource 打开对应查看器（叠在抽屉之上）。 -->
     <!-- 手机端全屏：size 固定 720px 会超出手机视口，内容被截断错位 -->
     <el-drawer
@@ -1691,9 +1825,14 @@ onBeforeUnmount(() => {
               <span v-if="i">·</span>
               <span>{{ m.label }} {{ m.count }}</span>
             </template>
+            <!-- 图片汇总：张数与占用（容量感） -->
+            <template v-if="browserImageStats.count">
+              <span>·</span>
+              <span>图片 {{ browserImageStats.count }} 张 / {{ formatSize(browserImageStats.size) }}</span>
+            </template>
           </template>
         </div>
-        <!-- 类型筛选 + 名称过滤：资源过多时先收敛范围再浏览 -->
+        <!-- 类型筛选 + 名称过滤 + 排序：资源过多时先收敛范围再浏览 -->
         <div class="browser-toolbar">
           <el-segmented v-model="browserTypeFilter" :options="categoryOptions" size="small" />
           <el-input
@@ -1704,30 +1843,51 @@ onBeforeUnmount(() => {
             size="small"
             :prefix-icon="'Search'"
           />
+          <el-select v-model="browserSort" size="small" class="browser-sort">
+            <el-option
+              v-for="o in browserSortOptions"
+              :key="o.value"
+              :label="o.label"
+              :value="o.value"
+            />
+          </el-select>
         </div>
         <div class="browser-grid">
           <div
             v-for="f in browserPaged"
             :key="f.rel_path"
             class="browser-cell"
-            :title="f.name"
+            :title="cellTitle(f)"
             @click="openResource(f, browserFiltered)"
           >
+            <!-- 图片：受控加载成功后用 blob URL 展示；其余状态显示对应占位 -->
             <el-image
-              v-if="f.category === 'image'"
-              :src="resourceFileUrl(f.rel_path)"
+              v-if="f.category === 'image' && thumbState(f.rel_path).status === 'ok'"
+              :src="thumbState(f.rel_path).url"
               fit="cover"
-              lazy
               class="browser-thumb"
+            />
+            <div
+              v-else-if="f.category === 'image'"
+              class="browser-ph"
+              :class="{ 'ph-warn': thumbState(f.rel_path).status === 'retrying' }"
             >
-              <!-- 懒加载未进入视口 / 加载中显示占位块，避免出现空白错位 -->
-              <template #placeholder>
-                <div class="browser-ph">加载中</div>
+              <template v-if="thumbState(f.rel_path).status === 'retrying'">
+                <span class="ph-text">限流中，稍后自动重试</span>
               </template>
-              <template #error>
-                <div class="browser-ph">加载失败</div>
+              <template v-else-if="thumbState(f.rel_path).status === 'error'">
+                <span class="ph-text">加载失败</span>
+                <div class="ph-ops">
+                  <el-button link type="primary" size="small" @click.stop="retryThumb(f.rel_path)">
+                    重试
+                  </el-button>
+                  <el-button link size="small" @click.stop="openFileLocal(f)">打开</el-button>
+                </div>
               </template>
-            </el-image>
+              <template v-else>
+                <span class="ph-text">加载中</span>
+              </template>
+            </div>
             <!-- 视频：显示抓到的首帧预览图；抓到前（或失败）显示类型文字 -->
             <div
               v-else-if="f.category === 'video'"
@@ -1741,7 +1901,12 @@ onBeforeUnmount(() => {
               {{ categoryLabel(f.category) }}
             </div>
             <div class="browser-name">{{ f.name }}</div>
-            <div class="text-muted browser-size">{{ formatSize(Number(f.size)) }}</div>
+            <div class="text-muted browser-size">
+              <!-- 元信息：像素尺寸 · 真实格式 · 大小（悬浮 title 另有修改时间与完整路径） -->
+              <span v-if="f.width && f.height">{{ f.width }}×{{ f.height }}</span>
+              <span v-if="f.format">{{ f.format }}</span>
+              <span>{{ formatSize(Number(f.size)) }}</span>
+            </div>
           </div>
         </div>
         <el-empty
@@ -2601,6 +2766,27 @@ onBeforeUnmount(() => {
 
 .browser-search {
   width: 170px;
+}
+
+/* 抽屉内排序下拉：与搜索框同一行，窄屏随 toolbar 换行 */
+.browser-sort {
+  width: 110px;
+}
+
+/* 缩略图占位块：限流/失败态「文案 + 操作行」纵向排列，避免溢出格子 */
+.ph-text {
+  font-size: 12px;
+}
+
+.ph-ops {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.ph-warn {
+  background: #fdf6ec;
+  color: #e6a23c;
 }
 
 .browser-pager {

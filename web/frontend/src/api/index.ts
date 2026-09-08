@@ -343,6 +343,12 @@ export interface ResourceFile {
   category: 'image' | 'video' | 'torrent' | 'text' | 'other'
   /** 文件修改时间（秒级时间戳）；0 或缺省 = stat 失败，不展示 */
   mtime?: number
+  /** 图片像素宽（非图片或缺省为 0） */
+  width?: number
+  /** 图片像素高（非图片或缺省为 0） */
+  height?: number
+  /** 图片**真实**格式（由文件头解析，不信任扩展名；非图片为空串） */
+  format?: string
 }
 
 /** 回收站条目（软删除，保留期内可恢复） */

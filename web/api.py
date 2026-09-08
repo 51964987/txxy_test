@@ -31,6 +31,10 @@ router = APIRouter()
 ExportRateLimit = Annotated[None, Depends(ratelimit.rate_limit(5, 60))]
 ResourcesRateLimit = Annotated[None, Depends(ratelimit.rate_limit(60, 60))]
 FileRateLimit = Annotated[None, Depends(ratelimit.rate_limit(60, 60))]
+# 图片预览：浏览抽屉一页 30~60 张缩略图，原 60 次/分额度会瞬间打满导致大量 429
+# （用户看到「图片加载失败」）。本机单人自用、接口只是读本地文件，放宽到 300 次/分；
+# 配合前端「受控并发 + 429 退避重试」，从两端同时消除限流失败。
+PreviewRateLimit = Annotated[None, Depends(ratelimit.rate_limit(300, 60))]
 OpenRateLimit = Annotated[None, Depends(ratelimit.rate_limit(10, 60))]
 # 视频播放会产生大量 Range 请求（拖进度条一次 3~10 个），限流放宽到 300 次/分
 VideoRateLimit = Annotated[None, Depends(ratelimit.rate_limit(300, 60))]
@@ -1132,7 +1136,7 @@ def resources_source(name: str) -> dict[str, Any]:
 
 
 @router.get("/resources/file")
-def resources_file(_: FileRateLimit, path: str) -> FileResponse:
+def resources_file(_: PreviewRateLimit, path: str) -> FileResponse:
     """受控图片预览（B5）：仅允许 downloads/ 内、扩展名在图片白名单内的文件，inline 返回。"""
     target = resources.resolve_safe(path)
     if target is None:

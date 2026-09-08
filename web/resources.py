@@ -47,6 +47,84 @@ PREVIEW_TYPES: dict[str, str] = {
 }
 
 
+# ---- 图片元信息：真实格式 + 像素尺寸（零依赖，只读文件头） ----
+# 结果按 (路径, 大小, mtime) 缓存：扫描缓存 TTL 到期重扫时无需重复读头，
+# 只有文件内容真正变化（大小/mtime 变）才重新解析。
+_IMAGE_META_CACHE: dict[str, dict[str, Any]] = {}
+# JPEG 的 SOF 标记（帧头，含宽高）；0xC4/0xC8/0xCC 为 DHT/JPG/DAC，不含尺寸
+_JPEG_SOF_MARKERS = {0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF}
+
+
+def image_meta(path: Path, size: int, mtime: float) -> dict[str, Any]:
+    """解析图片的**真实**格式与像素尺寸（不信任扩展名）。
+
+    零依赖：只读文件头（最多 64KB）按格式规范解析，解析失败返回 0 值（前端按缺省处理）。
+    """
+    empty = {"width": 0, "height": 0, "format": ""}
+    key = f"{path}:{size}:{mtime:.0f}"
+    hit = _IMAGE_META_CACHE.get(key)
+    if hit is not None:
+        return hit
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(65536)
+    except OSError:
+        _IMAGE_META_CACHE[key] = empty
+        return empty
+
+    info = dict(empty)
+    if head[:8] == b"\x89PNG\r\n\x1a\n" and len(head) >= 24:
+        info["format"] = "PNG"
+        info["width"] = int.from_bytes(head[16:20], "big")
+        info["height"] = int.from_bytes(head[20:24], "big")
+    elif head[:3] == b"GIF" and len(head) >= 10:
+        info["format"] = "GIF"
+        info["width"] = int.from_bytes(head[6:8], "little")
+        info["height"] = int.from_bytes(head[8:10], "little")
+    elif head[:2] == b"BM" and len(head) >= 26:
+        info["format"] = "BMP"
+        info["width"] = int.from_bytes(head[18:22], "little")
+        info["height"] = int.from_bytes(head[22:26], "little")
+    elif head[:4] == b"RIFF" and head[8:12] == b"WEBP" and len(head) >= 30:
+        info["format"] = "WebP"
+        chunk = head[12:16]
+        w = h = 0
+        if chunk == b"VP8X" and len(head) >= 30:
+            w = int.from_bytes(head[24:27], "little") + 1
+            h = int.from_bytes(head[27:30], "little") + 1
+        elif chunk == b"VP8 " and len(head) >= 30:
+            w = int.from_bytes(head[26:28], "little") & 0x3FFF
+            h = int.from_bytes(head[28:30], "little") & 0x3FFF
+        elif chunk == b"VP8L" and len(head) >= 25:
+            bits = int.from_bytes(head[21:25], "little")
+            w = (bits & 0x3FFF) + 1
+            h = ((bits >> 14) & 0x3FFF) + 1
+        info["width"], info["height"] = w, h
+    elif head[:2] == b"\xff\xd8":  # JPEG：顺序扫描各段，找到 SOF 取宽高
+        info["format"] = "JPEG"
+        i = 2
+        while i + 9 < len(head):
+            if head[i] != 0xFF:
+                i += 1
+                continue
+            marker = head[i + 1]
+            # 无负载段的标记（SOI / TEM / RSTn）：直接跳过
+            if marker in (0x01, 0xD8) or 0xD0 <= marker <= 0xD7:
+                i += 2
+                continue
+            seg_len = int.from_bytes(head[i + 2:i + 4], "big")
+            if marker in _JPEG_SOF_MARKERS:
+                info["height"] = int.from_bytes(head[i + 5:i + 7], "big")
+                info["width"] = int.from_bytes(head[i + 7:i + 9], "big")
+                break
+            if seg_len <= 0:
+                break
+            i += 2 + seg_len
+
+    _IMAGE_META_CACHE[key] = info
+    return info
+
+
 def category_of(name: str) -> str:
     ext = Path(name).suffix.lower()
     if ext in IMAGE_EXTS:
@@ -121,16 +199,19 @@ def scan() -> dict[str, Any]:
                         size = 0
                         mtime = 0
                     folder_size += size
-                    files.append(
-                        {
-                            "name": f.name,
-                            "rel_path": str(f.relative_to(root)).replace("\\", "/"),
-                            "size": size,
-                            "category": category_of(f.name),
-                            # 文件修改时间（秒级时间戳）：列表页展示元信息用，0 = stat 失败
-                            "mtime": mtime,
-                        }
-                    )
+                    category = category_of(f.name)
+                    entry: dict[str, Any] = {
+                        "name": f.name,
+                        "rel_path": str(f.relative_to(root)).replace("\\", "/"),
+                        "size": size,
+                        "category": category,
+                        # 文件修改时间（秒级时间戳）：列表页展示元信息用，0 = stat 失败
+                        "mtime": mtime,
+                    }
+                    # 图片额外带真实格式与像素尺寸（解析结果有缓存，重扫不重复读头）
+                    if category == "image":
+                        entry.update(image_meta(f, size, mtime))
+                    files.append(entry)
         except OSError:
             continue
         # 空目录也收录（file_count=0）：多为下载失败/取消任务的残留，
