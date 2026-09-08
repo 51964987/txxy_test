@@ -337,15 +337,16 @@ const parsedLogs = computed(() => {
    *  按出现顺序分组会为每行新建一组（实测产生 1071 个折叠面板，是卡顿的主因）。 */
   const groupMap = new Map<
     string,
-    { seq: string; title: string; lines: string[]; total: number }
+    { seq: string; title: string; lines: string[]; total: number; lastIdx: number }
   >()
-  const detailLines: { seq: string; text: string }[] = []
+  // idx = 该明细行在任务日志中的全局行序，用于「按最后活动时间」排序分组
+  const detailLines: { seq: string; text: string; idx: number }[] = []
 
-  for (const raw of detailTask.value?.logs || []) {
+  for (const [idx, raw] of (detailTask.value?.logs || []).entries()) {
     // 明细行：前导空白 + [i/N]（由后端缩进标注归属）
     const detail = raw.match(/^\s+\[(\d+\/\d+)\]\s?(.*)$/)
     if (detail) {
-      detailLines.push({ seq: detail[1], text: detail[2] })
+      detailLines.push({ seq: detail[1], text: detail[2], idx })
       continue
     }
     // 结果摘要行：[i/N] 开头（无缩进）—— 兼作该链接分组的标题
@@ -356,6 +357,7 @@ const parsedLogs = computed(() => {
         title: '',
         lines: [],
         total: 0,
+        lastIdx: -1,
       }
       g.title = summary[2]
       groupMap.set(summary[1], g)
@@ -367,18 +369,31 @@ const parsedLogs = computed(() => {
 
   // 全局尾部窗口：只渲染最近 N 行明细（日志可达数千行，全量渲染必然卡）
   const hiddenTotal = Math.max(0, detailLines.length - MAX_DETAIL_LINES)
-  for (const { seq, text } of detailLines.slice(-MAX_DETAIL_LINES)) {
-    const g = groupMap.get(seq) ?? { seq, title: '', lines: [], total: 0 }
+  for (const { seq, text, idx } of detailLines.slice(-MAX_DETAIL_LINES)) {
+    const g = groupMap.get(seq) ?? { seq, title: '', lines: [], total: 0, lastIdx: -1 }
     g.lines.push(text)
     g.total += 1
+    // 最后一次活动位置：用于把「最近还在输出」的组排到末尾
+    g.lastIdx = idx
     groupMap.set(seq, g)
   }
 
-  // 按链接序号升序（'9/50' → 9）
-  const groups = [...groupMap.values()].sort(
-    (a, b) => Number(a.seq.split('/')[0]) - Number(b.seq.split('/')[0]),
-  )
-  return { events, groups, hiddenTotal, detailTotal: detailLines.length }
+  // 排序口径：按「最后一次活动时间」升序（业界 CI 日志面板做法——时间序流、最新在最后，
+  // 配合已有的自动跟随到底部即 tail -f 体验），而不是按链接序号升序。
+  // 原因：重试 / 单条重新下载只跑未成功的链接，其序号往往更小——按序号排会让
+  // 正在输出的新日志落在列表中间的面板里，用户滚到底反而看不到最新内容。
+  const groups = [...groupMap.values()]
+    .filter((g) => g.lines.length > 0)
+    .sort((a, b) => a.lastIdx - b.lastIdx)
+  // 运行中标记：任务在跑且该组是最后活动的组（正在写入的那一个）
+  const running = detailTask.value?.status === 'running'
+  const activeSeq = running && groups.length ? groups[groups.length - 1].seq : ''
+  return {
+    events,
+    groups: groups.map((g) => ({ ...g, active: g.seq === activeSeq })),
+    hiddenTotal,
+    detailTotal: detailLines.length,
+  }
 })
 
 // 折叠项：默认全部展开——否则用户打开详情只看到任务事件，
@@ -888,6 +903,10 @@ onBeforeUnmount(() => {
             >
               <template #title>
                 <span class="log-group-title">[{{ g.seq }}] {{ g.title }}</span>
+                <!-- 正在写入的组：任务运行中且是最后活动的组，便于一眼定位最新输出 -->
+                <el-tag v-if="g.active" size="small" type="success" class="log-group-tag">
+                  进行中
+                </el-tag>
               </template>
               <pre class="log-detail">{{ g.lines.join('\n') }}</pre>
             </el-collapse-item>
@@ -1043,6 +1062,11 @@ onBeforeUnmount(() => {
 .logs-box :deep(textarea) {
   font-family: Consolas, monospace;
   font-size: 12px;
+}
+
+/* 分组标题旁的「进行中」标记：与标题基线对齐，不撑高折叠行 */
+.log-group-tag {
+  margin-left: 6px;
 }
 
 /* ================= 移动端适配 =================
