@@ -21,6 +21,7 @@ import query_builder
 import ratelimit
 import resources
 import runs
+import settings
 
 router = APIRouter()
 
@@ -41,6 +42,20 @@ DeleteRateLimit = Annotated[None, Depends(ratelimit.rate_limit(10, 60))]
 # response_model，避免模型静默丢弃字段破坏前端契约（前端已用 TS 类型约束）。
 class ConfigResp(BaseModel):
     enable_auto_refresh: bool
+    # 参数设置页数据：白名单参数的当前值/默认值/来源/范围/生效范围
+    settings: list[dict[str, Any]] = []
+
+
+class SettingsUpdateReq(BaseModel):
+    """参数设置保存体：{ 参数键: 值 }，仅接受白名单内的键。"""
+
+    items: dict[str, Any]
+
+
+class SettingsResetReq(BaseModel):
+    """恢复默认：keys 为空表示全部恢复。"""
+
+    keys: list[str] = []
 
 
 class OverviewResp(BaseModel):
@@ -377,8 +392,30 @@ def _board_top(field: str) -> list[dict[str, Any]]:
 
 @router.get("/config")
 def app_config() -> ConfigResp:
-    """前端运行时配置（自动刷新总开关等）。"""
-    return ConfigResp(enable_auto_refresh=config.ENABLE_AUTO_REFRESH)
+    """前端运行时配置（自动刷新总开关 + 参数设置白名单快照）。"""
+    return ConfigResp(
+        enable_auto_refresh=settings.get_bool("enable_auto_refresh", config.ENABLE_AUTO_REFRESH),
+        settings=settings.snapshot(),
+    )
+
+
+@router.put("/settings")
+def update_settings(req: SettingsUpdateReq) -> dict[str, Any]:
+    """保存参数设置：仅白名单内的键，范围自动钳制；保存后返回最新快照。
+
+    生效范围由各参数标注（immediate / next_task / frontend），前端据此提示用户。
+    """
+    try:
+        items = settings.update(req.items)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "settings": items}
+
+
+@router.post("/settings/reset")
+def reset_settings(req: SettingsResetReq) -> dict[str, Any]:
+    """恢复默认：keys 为空则清空全部覆盖值。"""
+    return {"ok": True, "settings": settings.reset(req.keys)}
 
 
 # ---------------- 统计 ----------------
@@ -1257,8 +1294,9 @@ def downloads_submit(req: DownloadSubmitReq) -> dict[str, Any]:
     urls = [u.strip() for u in req.urls if u and u.strip()]
     if not urls:
         raise HTTPException(400, "未提供任何下载链接")
-    if len(urls) > config.DOWNLOAD_MAX_BATCH:
-        raise HTTPException(400, f"单次最多提交 {config.DOWNLOAD_MAX_BATCH} 个链接，当前 {len(urls)} 个")
+    max_batch = settings.get_int("download_max_batch", config.DOWNLOAD_MAX_BATCH)
+    if len(urls) > max_batch:
+        raise HTTPException(400, f"单次最多提交 {max_batch} 个链接，当前 {len(urls)} 个")
     for u in urls:
         if not u.lower().startswith(("http://", "https://")):
             raise HTTPException(400, f"仅支持 http/https 链接: {u}")

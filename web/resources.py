@@ -28,6 +28,7 @@ from typing import Any
 from atomicfile import write_json_atomic
 import config
 import db
+import settings
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg"}
 VIDEO_EXTS = {".mp4", ".webm", ".flv", ".mkv", ".avi", ".mov", ".m4v", ".ts", ".m3u8"}
@@ -62,7 +63,8 @@ def category_of(name: str) -> str:
 # ---- 增量缓存：签名 = 顶层文件夹名 + 各自 mtime（新增/删除/覆盖文件都会引起目录 mtime 变化） ----
 _cache_signature = ""
 _cache_payload: dict[str, Any] | None = None
-# TTL：签名未变也定时重扫——签名只含「顶层目录名 + 顶层目录 mtime」，
+# TTL 默认值（设置页可覆盖，见 settings.WHITELIST.resources_scan_ttl）：
+# 签名未变也定时重扫——签名只含「顶层目录名 + 顶层目录 mtime」，
 # 子目录内部的文件增删（Web 进程外的变化，如手动整理、scraper 补下）不会
 # 改变顶层 mtime，仅靠签名永远感知不到，必须靠 TTL 兜底重扫
 _CACHE_TTL = 10.0
@@ -90,11 +92,13 @@ def scan() -> dict[str, Any]:
         return {"count": 0, "total_files": 0, "total_size": 0, "items": []}
 
     global _cache_signature, _cache_payload, _cache_time
+    # TTL 每次调用时读设置：设置页改动下一次扫描即生效
+    ttl = settings.get_float("resources_scan_ttl", _CACHE_TTL)
     sig = _signature(root)
     if (
         _cache_payload is not None
         and sig == _cache_signature
-        and time.monotonic() - _cache_time < _CACHE_TTL
+        and time.monotonic() - _cache_time < ttl
     ):
         return _cache_payload
 
@@ -410,8 +414,8 @@ def batch_delete(items: list[dict[str, Any]], permanent: bool) -> dict[str, Any]
 
 
 def list_trash() -> dict[str, Any]:
-    """回收站清单：含每项是否已过期与剩余保留天数"""
-    keep = config.TRASH_KEEP_DAYS
+    """回收站清单：含每项是否已过期与剩余保留天数（保留天数取当前设置值）"""
+    keep = settings.get_int("trash_keep_days", config.TRASH_KEEP_DAYS)
     now = datetime.now()
     out: list[dict[str, Any]] = []
     for it in _load_trash():

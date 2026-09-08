@@ -82,6 +82,25 @@ RETRY_DELAY = 2.0    # 首次重试等待（秒），后续按次数递增
 RETRYABLE_STATUS = {429, 500, 502, 503, 504, 520, 521, 522, 524, 525, 526, 527}
 
 
+def configure(
+    interval: float | None = None,
+    max_retries: int | None = None,
+    retry_delay: float | None = None,
+) -> None:
+    """运行时覆盖下载节流 / 重试参数（供 Web 设置页调用；不传即保持当前值）。
+
+    默认值只在本模块定义一份（CLI 与 Web 同源），这里仅改写模块级运行态——
+    调用点在每次下载时读这三个变量，因此对后续请求立即生效，对已发起的请求无回溯。
+    """
+    global DOWNLOAD_INTERVAL, MAX_RETRIES, RETRY_DELAY
+    if interval is not None:
+        DOWNLOAD_INTERVAL = interval
+    if max_retries is not None:
+        MAX_RETRIES = max_retries
+    if retry_delay is not None:
+        RETRY_DELAY = retry_delay
+
+
 # ============ 页面访问 ============
 
 

@@ -34,6 +34,7 @@ from typing import Any, cast
 from atomicfile import write_json_atomic
 import config
 import resources
+import settings
 
 # 项目根目录加入 sys.path：download_files.py 位于 txxy_test/ 根（web/ 脚本目录不在其搜索范围内）
 if str(config.BASE_DIR) not in sys.path:
@@ -270,10 +271,23 @@ class DownloadTaskManager:
     # ---------------- 生命周期 ----------------
 
     def start(self) -> None:
-        """按 DOWNLOAD_TASK_CONCURRENCY 启动消费线程（幂等，存活数不足时补足）。"""
+        """按当前设置的「任务间并行数」启动消费线程（幂等，存活数不足时补足）。"""
+        want = max(1, settings.get_int("download_task_concurrency", config.DOWNLOAD_TASK_CONCURRENCY))
+        self.resize_workers(want)
+
+    def resize_workers(self, want: int) -> None:
+        """调整 worker 数量：不足补足；超出则向队列推哨兵，让多余线程自然退出。
+
+        调小不能强杀线程（正在执行的任务必须跑完），故用 _run_loop 已支持的
+        `tid is None` 哨兵退出机制——多余线程消费到哨兵即 break，实现「当前任务结束后收缩」。
+        """
         with self._lock:
+            want = max(1, int(want))
             self._workers = [w for w in self._workers if w.is_alive()]
-            want = max(1, config.DOWNLOAD_TASK_CONCURRENCY)
+            if len(self._workers) > want:
+                for _ in range(len(self._workers) - want):
+                    self._queue.put((0, -1, None))  # 最高优先级的退出哨兵
+                self._workers = self._workers[:want]
             while len(self._workers) < want:
                 w = threading.Thread(target=self._run_loop, name="download-tasks", daemon=True)
                 w.start()
@@ -625,7 +639,14 @@ class DownloadTaskManager:
             self._save()
             _cleanup_empty_saved_dirs(task)
             return
-        concurrency = max(1, min(config.DOWNLOAD_CONCURRENCY, len(pending_idx)))
+        # 每个任务执行时读一次：设置页改动对「下一个任务」生效，不影响正在跑的任务
+        concurrency = max(
+            1,
+            min(
+                settings.get_int("download_concurrency", config.DOWNLOAD_CONCURRENCY),
+                len(pending_idx),
+            ),
+        )
         next_pos = 0
         futures: "dict[cf.Future[tuple[dict[str, int], str | None, str | None, float]], int]" = {}
         with cf.ThreadPoolExecutor(
@@ -756,9 +777,10 @@ class DownloadTaskManager:
             self._persist_locked()
 
     def _prune_locked(self) -> None:
-        """历史裁剪（D9）：任务数超出 DOWNLOAD_TASK_MAX_KEEP 时，
+        """历史裁剪（D9）：任务数超出「任务历史保留条数」设置时，
         按创建时间从旧到新删除终态任务（运行中/排队任务不删）。"""
-        overflow = len(self._tasks) - config.DOWNLOAD_TASK_MAX_KEEP
+        keep = settings.get_int("download_task_max_keep", config.DOWNLOAD_TASK_MAX_KEEP)
+        overflow = len(self._tasks) - max(1, keep)
         if overflow <= 0:
             return
         terminal_sorted = sorted(

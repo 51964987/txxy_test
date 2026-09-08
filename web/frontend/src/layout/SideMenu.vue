@@ -8,12 +8,13 @@ import {
   Download,
   FolderOpened,
   Odometer,
+  Setting,
 } from '@element-plus/icons-vue'
 
 /**
  * 侧栏内容（Logo + 菜单）：桌面 el-aside 与移动端 el-drawer 共用同一份，
  * 避免两处各写一套菜单导致后续改动不同步。
- * 菜单项与 router 中的 5 条路由一一对应，不新增/不改动路由。
+ * 菜单项与 router 中的路由一一对应（含 2026-09-08 新增的 /settings 参数设置）。
  */
 defineProps<{ collapsed?: boolean }>()
 const emit = defineEmits<{ navigate: [] }>()
@@ -31,6 +32,7 @@ const MENU_ITEMS: MenuItem[] = [
   { path: '/resources', title: '资源管理', icon: FolderOpened },
   { path: '/downloads', title: '下载中心', icon: Download },
   { path: '/trash', title: '回收管理', icon: Delete },
+  { path: '/settings', title: '参数设置', icon: Setting },
 ]
 
 const route = useRoute()

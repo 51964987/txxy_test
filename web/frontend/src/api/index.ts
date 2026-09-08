@@ -129,6 +129,11 @@ async function post<T>(path: string, body?: unknown): Promise<T> {
   return request<T>(path, undefined, { method: 'POST', body, dedupe: false })
 }
 
+/** PUT 请求（参数设置保存用，同样不参与去重） */
+async function put<T>(path: string, body?: unknown): Promise<T> {
+  return request<T>(path, undefined, { method: 'PUT', body, dedupe: false })
+}
+
 /** DELETE 请求（不参与轮询去重，同 POST） */
 async function del<T>(path: string): Promise<T> {
   return request<T>(path, undefined, { method: 'DELETE', dedupe: false })
@@ -254,8 +259,25 @@ export interface FidDistItem {
   yesterday_count?: number
 }
 
+/** 单个可设置参数的快照（后端 settings.WHITELIST 生成） */
+export interface SettingItem {
+  key: string
+  label: string
+  desc: string
+  /** 生效范围：immediate=下一次调用即生效 / next_task=下一个任务生效 / frontend=前端直接应用 */
+  scope: 'immediate' | 'next_task' | 'frontend'
+  type: 'int' | 'float' | 'bool'
+  min?: number | null
+  max?: number | null
+  value: number | boolean
+  default: number | boolean
+  /** 来源：file=设置文件覆盖 / default=环境或默认 */
+  source: 'file' | 'default'
+}
+
 export interface AppConfig {
   enable_auto_refresh: boolean
+  settings: SettingItem[]
 }
 
 export interface PostsPage {
@@ -446,6 +468,10 @@ export type DownloadTask = DownloadTaskDetail
 
 export const api = {
   config: () => get<AppConfig>('/config'),
+  saveSettings: (items: Record<string, number | boolean>) =>
+    put<{ ok: boolean; settings: SettingItem[] }>('/settings', { items }),
+  resetSettings: (keys: string[] = []) =>
+    post<{ ok: boolean; settings: SettingItem[] }>('/settings/reset', { keys }),
   overview: () => get<Overview>('/stats/overview'),
   boards: () => get<Boards>('/stats/boards'),
   todayTop: (limit = 10, sort: BoardSort = 'engagement') =>

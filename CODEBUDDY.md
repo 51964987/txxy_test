@@ -114,9 +114,9 @@ txxy_test/                  # 抓取脚本在项目根：scraper.py / run_batch.
     ├── runs.py / resources.py / download_tasks.py  # 运行记录 / 资源扫描 / 下载中心队列
     └── frontend/src/
         ├── api/ stores/ router/ layout/ components/ views/ utils/ composables/
-        └── views/    # Dashboard / Posts / Runs / Resources / Downloads / Trash 六个页面
+        └── views/    # Dashboard / Posts / Runs / Resources / Downloads / Trash / Settings 七个页面
 ```
-路由为 `/`、`/posts`、`/runs`、`/resources`、`/downloads`、`/trash` 六条（`/trash` 为 2026-08-31 经用户确认新增的回收管理页，此前为五条）。
+路由为 `/`、`/posts`、`/runs`、`/resources`、`/downloads`、`/trash`、`/settings` 七条（`/trash` 为 2026-08-31 经用户确认新增的回收管理页，此前为五条；`/settings` 为 2026-09-08 经用户确认新增的参数设置页，此前为六条）。
 
 ## 项目专属约束（必须遵守）
 1. **自动刷新默认开启**：`config.ENABLE_AUTO_REFRESH` 默认 `1`；前端 `REFRESH_INTERVAL = 5000` 轮询；`db._TTL = 5`。禁止回退为关闭 / 30s 轮询 / 60s 缓存，除非用户明确要求。
@@ -150,4 +150,5 @@ txxy_test/                  # 抓取脚本在项目根：scraper.py / run_batch.
 | 前端颜色 | `web/frontend/src/utils/fidColor.ts` | 唯一色板：`colorForFid()`（按 fid 取模）/ `colorByIndex()`（按排名）。禁止另建第二套色板 |
 | 前端时间格式化 | `web/frontend/src/utils/time.ts` | `formatFullTime` / `formatDateTime` / `formatMinuteTime` / `formatRelativeTime` / `formatShortTime`。禁止在页面内自己补零拼字符串 |
 | 回收站数据与操作 | `web/frontend/src/composables/useTrash.ts` | TrashView（表格版）与 ResourcesView（抽屉版）共用；额外刷新用 `onChanged` 回调 |
+| 页内参数设置 | `web/settings.py`（白名单 / 范围钳制 / 原子落盘 / 来源标注） | 唯一的参数设置实现：`get/get_int/get_float/get_bool` + `snapshot/update/reset/apply_runtime`；默认值仍在各归属模块（`config.py` / `download_files.py` / `resources._CACHE_TTL`），此处**只存覆盖值**，禁止复制第二份默认值 |
 | 错误提示 | `web/app.py`（`HTTPException(detail)`）+ 前端 `ElMessage.error` | 后端统一 `detail`，前端统一解析，禁止另造 `{ok:false,msg}` 形态 |

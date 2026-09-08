@@ -26,6 +26,7 @@ for _stream in (sys.stdout, sys.stderr):
         pass
 
 import config
+import settings
 from api import router as api_router
 
 app = FastAPI(
@@ -67,6 +68,15 @@ async def request_monitor(request: Request, call_next: RequestResponseEndpoint) 
 # 文本类响应（JSON / CSV 导出等）>1KB 自动 gzip，浏览器自动解压
 app.add_middleware(GZipMiddleware, minimum_size=1024)
 app.include_router(api_router, prefix="/api")
+
+
+@app.on_event("startup")
+def apply_saved_settings() -> None:
+    """启动时应用已保存的参数设置（并发 / 节流 / 重试等），否则只在首次保存后才生效。"""
+    try:
+        settings.apply_runtime()
+    except Exception as e:  # 设置应用失败不应阻断启动，回落默认值即可
+        _monitor_logger.warning("应用已保存参数设置失败（回落默认值）: %s", e)
 
 FRONTEND_DIST = Path(__file__).resolve().parent / "frontend" / "dist"
 
