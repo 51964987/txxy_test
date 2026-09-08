@@ -799,6 +799,16 @@ onBeforeUnmount(() => {
   font-size: 12px;
 }
 
+/* 运行记录 / 明细两张表统一强制单行不换行，并略缩字号（13px）。
+ * 此前 .el-table .cell 默认 white-space: normal，窗口偏窄时「日期时间」
+ * （日期+时间两个 span）、「来源」（来源标签 + 重跑/续跑标签）等单元格会折行；
+ * 设为 nowrap 后内容始终在一行内，正常宽度下不触发横向滚动，极窄屏由
+ * el-table 自动出横向滚动条兜底。 */
+:deep(.el-table .cell) {
+  white-space: nowrap;
+  font-size: 13px;
+}
+
 .date-cell {
   font-weight: 600;
 }
