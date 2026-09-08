@@ -138,3 +138,20 @@ body {
 .title-link:hover {
   color: var(--brand);
 }
+
+/* ================= 移动端分页（全局）：修复窄屏页码错位 =================
+   el-pagination 根元素默认 nowrap，total/sizes/pager/jumper 组合在手机上
+   超出视口宽度后按钮挤出屏幕、压缩变形（全部 6 处分页统一在此修复）。
+   业界移动端通行做法：只留 total + prev/pager/next，居中，允许换行。 */
+@media (max-width: 767px) {
+  .el-pagination {
+    flex-wrap: wrap;
+    row-gap: 6px;
+  }
+
+  /* 每页条数选择器与跳页输入框占宽过大，窄屏隐藏 */
+  .el-pagination .el-pagination__sizes,
+  .el-pagination .el-pagination__jump {
+    display: none;
+  }
+}

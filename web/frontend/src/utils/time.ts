@@ -1,9 +1,9 @@
 // 时间展示工具：兼容旧 ISO 字符串与新的 Unix 秒时间戳两种入库形态
 
-// 判定是否为 Unix 秒时间戳形态（6 位以上纯十进制数字串；
+// 判定是否为 Unix 秒时间戳形态（6 位以上纯十进制数字串，兼容带小数的浮点秒；
 // 源站个别超老帖 data-timestamp 为 1970 年代的小值如 960041，需一并识别）
 function isUnixSeconds(s: string): boolean {
-  return /^\d{6,}$/.test(s)
+  return /^\d{6,}(\.\d+)?$/.test(s)
 }
 
 // 二位补零（对外导出：需要自行拼接日期的场景复用它，避免各页面各写一份 padStart）

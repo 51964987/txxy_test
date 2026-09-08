@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, h, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElButton, ElMessage, ElMessageBox, ElResult, ElTag } from 'element-plus'
+import { ElButton, ElCheckbox, ElMessage, ElMessageBox, ElResult, ElTag } from 'element-plus'
 import type { Columns } from 'element-plus'
 import {
   api,
@@ -258,6 +258,32 @@ const filteredFiles = computed<ResourceFile[]>(() => {
   return sortFiles(list)
 })
 
+// 全局模式（搜索 / 类型筛选）为平铺文件列表 + 前端分页（2026-09-08 按用户要求去掉目录分组——
+// 每张卡片已带类型标签，组头目录行是冗余）。命中量可达数千（全库 9000+ 文件），
+// 必须受控渲染：分页切片，每页仅渲染一页（原「组内 20 / 总量 200」截断方案随之移除）。
+// 不提供「显示全部」：数千卡片一次渲染会卡死页面（二十八节的教训）。
+const globalPageSize = ref(30)
+const globalPage = ref(1)
+
+const globalPaged = computed<ResourceFile[]>(() =>
+  globalFiles.value.slice(
+    (globalPage.value - 1) * globalPageSize.value,
+    globalPage.value * globalPageSize.value,
+  ),
+)
+
+function onGlobalPage(p: number) {
+  globalPage.value = p
+}
+function onGlobalPageSize(s: number) {
+  globalPageSize.value = s
+  globalPage.value = 1
+}
+// 筛选口径 / 排序变化回到第一页，避免停留在超出范围的页码
+watch([keyword, typeFilter, sortState], () => {
+  globalPage.value = 1
+})
+
 // 命中高亮：先把文本做 HTML 转义，再把关键词匹配片段包成 <mark>（避免特殊字符破坏 innerHTML）
 function highlight(text: string): string {
   const kw = keyword.value.trim()
@@ -279,6 +305,12 @@ function onColumnSort(params: { key: string; order: 'asc' | 'desc' | null }) {
 /** 类型枚举 → 中文标签（复用筛选选项，避免第二处硬编码） */
 function categoryLabel(c: string): string {
   return categoryOptions.find((o) => o.value === c)?.label ?? c
+}
+
+/** 文件所在路径（含子目录，如「目录名/子目录」；无子目录时即目录名），行内元信息展示用 */
+function fileParentPath(f: ResourceFile): string {
+  const i = f.rel_path.lastIndexOf('/')
+  return i > 0 ? f.rel_path.slice(0, i) : f.rel_path.split('/')[0]
 }
 
 // ---- 移动端排序：小屏没有表头可点，用「字段下拉 + 升降序」代替，复用同一套 sortState ----
@@ -305,7 +337,6 @@ function fitHeight(rows: number): number {
   return Math.min(rows * 36 + 40, 420)
 }
 const tableHeight = computed(() => fitHeight(filteredFiles.value.length))
-const globalTableHeight = computed(() => fitHeight(globalFiles.value.length))
 
 // 表格宽度跟随容器（用 :ref 函数避免 v-for 重复 ref）
 const tableWidth = ref(900)
@@ -316,23 +347,9 @@ function setTableWrapRef(el: unknown, name: string) {
   if (name === active.value) tableWrapRef = (el as HTMLDivElement) ?? null
 }
 
-// B2 全局结果模式表格的独立容器（与目录模式共用宽度测量）
-const globalWrap = ref<HTMLDivElement | null>(null)
-
 function measureWidth() {
-  // 全局结果模式表格在独立容器中，按当前模式取实际容器测宽
-  const el = globalMode.value ? globalWrap.value : tableWrapRef
-  if (el) tableWidth.value = Math.floor(el.getBoundingClientRect().width)
+  if (tableWrapRef) tableWidth.value = Math.floor(tableWrapRef.getBoundingClientRect().width)
 }
-
-// 切换全局/目录模式后重测表格宽度（全局容器进入 DOM 后测量并纳入尺寸监听）
-watch(globalMode, async () => {
-  await nextTick()
-  measureWidth()
-  if (typeof ResizeObserver !== 'undefined' && resizeObserver && globalWrap.value) {
-    resizeObserver.observe(globalWrap.value)
-  }
-})
 
 // ---- B10 页面状态记忆（sessionStorage：搜索词/类型/列排序/目录排序/展开目录） ----
 const STATE_KEY = 'resources_view_state'
@@ -531,11 +548,17 @@ function openResource(file: ResourceFile, list: ResourceFile[]) {
 // ===== 目录级浏览：不展开目录即可浏览该目录全部资源 =====
 const browserVisible = ref(false)
 const browserFolder = ref<ResourceItem | null>(null)
+// 浏览抽屉数据源双模式（2026-09-08）：
+// folder = 单目录浏览（目录头「浏览」入口）；global = 跨目录浏览全部命中资源
+// （全局模式命中行「浏览」入口——列表当前页只渲染 30 个，抽屉里可翻页看到后续页的资源）
+const browserMode = ref<'folder' | 'global'>('folder')
 // 浏览抽屉固定排序：先按类型（图→视频→种子→文本→其他，与筛选选项同序）再按文件名。
 // 不跟随表格列排序状态——浏览是「按类型聚类浏览」场景，同类文件相邻更符合直觉；
-// 文件名用 zh-Hans-CN locale（与目录排序一致），中文按拼音序
+// 文件名用 zh-Hans-CN locale（与目录排序一致），中文按拼音序。
+// global 模式不重排：globalFiles 已按用户排序状态排好，抽屉与列表顺序保持一致
 const CATEGORY_ORDER: Record<string, number> = { image: 0, video: 1, torrent: 2, text: 3, other: 4 }
 const browserFiles = computed<ResourceFile[]>(() => {
+  if (browserMode.value === 'global') return globalFiles.value
   const list = [...(browserFolder.value?.files ?? [])]
   list.sort((a, b) => {
     const ca = CATEGORY_ORDER[a.category] ?? 9
@@ -548,8 +571,11 @@ const browserFiles = computed<ResourceFile[]>(() => {
 
 // 资源过多时的展示优化（业界集合浏览通行做法：类型筛选 + 名称过滤 + 前端分页；
 // 与目录列表分页、任务列表分页同一模式。图片懒加载保留，每页数量有限天然不触限流）：
-// 移动端每页 30（缩略图流量与滚动负担更小），桌面 60；与切片、分页条共用
-const browserPageSize = computed(() => (isMobile.value ? 30 : 60))
+// folder 模式移动端每页 30（缩略图流量与滚动负担更小）、桌面 60；
+// global 模式两端统一每页 30，与命中列表分页规格一致（用户口径：这一页 30 个、翻页看下一批 30 个）
+const browserPageSize = computed(() =>
+  browserMode.value === 'global' ? 30 : isMobile.value ? 30 : 60,
+)
 const browserTypeFilter = ref<'all' | 'image' | 'video' | 'torrent' | 'text' | 'other'>('all')
 const browserKeyword = ref('')
 const browserPage = ref(1)
@@ -579,6 +605,7 @@ function openBrowser(item: ResourceItem) {
     ElMessage.info('该目录没有文件')
     return
   }
+  browserMode.value = 'folder'
   browserFolder.value = item
   // 每次打开从干净状态开始，避免上一次的筛选残留在新目录上
   browserTypeFilter.value = 'all'
@@ -586,6 +613,34 @@ function openBrowser(item: ResourceItem) {
   browserPage.value = 1
   browserVisible.value = true
 }
+
+/** 命中行「浏览」→ 跨目录浏览全部命中资源（与列表同一筛选口径，抽屉内分页可翻看后续页） */
+function openBrowserAll() {
+  if (!globalFiles.value.length) {
+    ElMessage.info('当前没有命中的资源')
+    return
+  }
+  browserMode.value = 'global'
+  browserFolder.value = null
+  browserTypeFilter.value = 'all'
+  browserKeyword.value = ''
+  browserPage.value = 1
+  browserVisible.value = true
+}
+
+/** 浏览抽屉标题随数据源模式切换 */
+const browserTitle = computed(() =>
+  browserMode.value === 'global'
+    ? '浏览全部命中资源'
+    : browserFolder.value
+      ? `浏览目录：${browserFolder.value.name}`
+      : '浏览目录',
+)
+
+/** 抽屉摘要的类型构成（folder 模式专用；global 模式为空数组不渲染） */
+const browserMix = computed(() =>
+  browserMode.value === 'folder' && browserFolder.value ? folderMix(browserFolder.value) : [],
+)
 
 // ===== 视频首帧预览：浏览器内 canvas 抓帧（零后端依赖）=====
 // 后端生成缩略图需引入 ffmpeg——8.2.2 已评估「依赖 ffmpeg，建议不做」；
@@ -671,9 +726,132 @@ function posterStyle(rel: string): Record<string, string> {
     : {}
 }
 
+// ===== 勾选批量删除（业界网盘通行做法：逐条勾选 + 全选 + 批量操作） =====
+// 文件选中集合以 rel_path 为键：目录模式下跨目录累积勾选、全局模式与筛选切换不丢勾选
+// （Gmail / 百度网盘同策略——选中跟条目走，不跟视图走）；列表刷新后按现存文件裁剪，
+// 已被删除或不再存在的路径自动移出选中，避免提交无效路径。
+const selectedPaths = ref<Set<string>>(new Set())
+const selectedCount = computed(() => selectedPaths.value.size)
+
+// 目录选中集合以目录名为键（目录名 = 相对路径首段，全库唯一），供目录级批量删除
+const selectedDirs = ref<Set<string>>(new Set())
+const selectedDirCount = computed(() => selectedDirs.value.size)
+// 已选总数（文件 + 目录），工具栏「删除所选」计数用
+const selectedTotal = computed(() => selectedCount.value + selectedDirCount.value)
+
+/** 当前作用域文件（目录模式 = 展开目录的筛选结果；全局模式 = 全部命中文件），供表格表头全选用 */
+const scopeFiles = computed<ResourceFile[]>(() =>
+  globalMode.value ? globalFiles.value : filteredFiles.value,
+)
+
+const allScopeSelected = computed(
+  () =>
+    scopeFiles.value.length > 0 &&
+    scopeFiles.value.every((f) => selectedPaths.value.has(f.rel_path)),
+)
+// 半选态：作用域内有勾选但未全勾（表头复选框的 indeterminate）
+const someScopeSelected = computed(() =>
+  scopeFiles.value.some((f) => selectedPaths.value.has(f.rel_path)),
+)
+
+// 目录模式「全选当前结果」作用域 = 当前页目录（与目录列表分页一致，不跨页隐式全选）
+const folderPageAllSelected = computed(
+  () =>
+    pagedFolders.value.length > 0 &&
+    pagedFolders.value.every((i) => selectedDirs.value.has(i.name)),
+)
+const folderPageSomeSelected = computed(() =>
+  pagedFolders.value.some((i) => selectedDirs.value.has(i.name)),
+)
+
+// 全局模式「全选当前结果」作用域 = 全部命中文件（含未渲染的后续页，一次请求可整批删）
+const allGlobalSelected = computed(
+  () =>
+    globalFiles.value.length > 0 &&
+    globalFiles.value.every((f) => selectedPaths.value.has(f.rel_path)),
+)
+const someGlobalSelected = computed(() =>
+  globalFiles.value.some((f) => selectedPaths.value.has(f.rel_path)),
+)
+
+/** 工具栏「全选当前结果」的可用性与状态：全局模式作用于全部命中文件；目录模式作用于当前页目录 */
+const canSelectAll = computed(() =>
+  globalMode.value ? globalFiles.value.length > 0 : pagedFolders.value.length > 0,
+)
+const allToolbarSelected = computed(() =>
+  globalMode.value ? allGlobalSelected.value : folderPageAllSelected.value,
+)
+const someToolbarSelected = computed(() =>
+  globalMode.value ? someGlobalSelected.value : folderPageSomeSelected.value,
+)
+
+function isSelected(rel: string): boolean {
+  return selectedPaths.value.has(rel)
+}
+
+function toggleSelect(rel: string) {
+  const next = new Set(selectedPaths.value)
+  if (next.has(rel)) next.delete(rel)
+  else next.add(rel)
+  selectedPaths.value = next
+}
+
+function isSelectedDir(name: string): boolean {
+  return selectedDirs.value.has(name)
+}
+
+function toggleSelectDir(name: string) {
+  const next = new Set(selectedDirs.value)
+  if (next.has(name)) next.delete(name)
+  else next.add(name)
+  selectedDirs.value = next
+}
+
+/** 全选 / 取消全选当前作用域（幂等：只增删作用域内的条目，不影响范围外的既有勾选） */
+function toggleSelectAll() {
+  if (globalMode.value) {
+    const next = new Set(selectedPaths.value)
+    if (allGlobalSelected.value) {
+      for (const f of globalFiles.value) next.delete(f.rel_path)
+    } else {
+      for (const f of globalFiles.value) next.add(f.rel_path)
+    }
+    selectedPaths.value = next
+  } else {
+    const next = new Set(selectedDirs.value)
+    if (folderPageAllSelected.value) {
+      for (const i of pagedFolders.value) next.delete(i.name)
+    } else {
+      for (const i of pagedFolders.value) next.add(i.name)
+    }
+    selectedDirs.value = next
+  }
+}
+
+function clearSelection() {
+  selectedPaths.value = new Set()
+  selectedDirs.value = new Set()
+}
+
+// 资源列表变化后裁剪选中集合（删除 / 后台文件变动后，选中项可能已不存在）
+watch(allFiles, (files) => {
+  if (!selectedPaths.value.size) return
+  const alive = new Set(files.map((f) => f.rel_path))
+  const next = new Set([...selectedPaths.value].filter((p) => alive.has(p)))
+  if (next.size !== selectedPaths.value.size) selectedPaths.value = next
+})
+watch(sortedFolders, (folders) => {
+  if (!selectedDirs.value.size) return
+  const alive = new Set(folders.map((i) => i.name))
+  const next = new Set([...selectedDirs.value].filter((n) => alive.has(n)))
+  if (next.size !== selectedDirs.value.size) selectedDirs.value = next
+})
+
 // ===== 删除（软删除：移入回收站，保留期内可恢复）=====
 /** 删除确认（三选）：确认=直接删除（不可恢复），取消按钮=移入回收站，右上角 X=放弃。
- *  EP 的 resolve 可能是 action 字符串或 { action } 对象（版本差异），做兼容处理 */
+ *  EP 的 confirm 在 distinguishCancelAndClose 下只有 confirm 会 resolve；
+ *  cancel 按钮固定 reject('cancel')，X/ESC/遮罩 reject('close')——必须按 reject 原因
+ *  区分，不能把所有 rejection 当作「放弃」（否则「移入回收站」永远不生效）。 */
 function askDeleteAction(title: string, message: string): Promise<'confirm' | 'cancel' | 'close'> {
   return ElMessageBox.confirm(message, title, {
     type: 'warning',
@@ -681,12 +859,8 @@ function askDeleteAction(title: string, message: string): Promise<'confirm' | 'c
     confirmButtonText: '直接删除',
     cancelButtonText: '移入回收站',
   }).then(
-    (r) =>
-      (typeof r === 'string' ? r : ((r as { action?: string })?.action ?? 'confirm')) as
-        | 'confirm'
-        | 'cancel'
-        | 'close',
-    () => 'close' as const, // 右上角 X / ESC / 点击遮罩：不操作
+    () => 'confirm' as const,
+    (reason) => (reason === 'cancel' ? ('cancel' as const) : ('close' as const)),
   )
 }
 
@@ -722,6 +896,53 @@ async function removeFolder(item: ResourceItem) {
   } catch (e) {
     if (isAborted(e)) return
     ElMessage.error(`删除失败: ${(e as Error).message}`)
+  }
+}
+
+/** 批量删除已勾选的条目：文件勾选跨目录累积、目录勾选（整目录含其下全部文件），
+ *  混合后一次请求整批提交。三选确认（直接删除不可恢复 / 移入回收站 / 放弃），
+ *  复用 askDeleteAction。 */
+async function batchRemove() {
+  const files = allFiles.value.filter((f) => selectedPaths.value.has(f.rel_path))
+  const dirs = sortedFolders.value.filter((i) => selectedDirs.value.has(i.name))
+  if (!files.length && !dirs.length) {
+    ElMessage.warning('请先勾选要删除的文件或目录（列表勾选 / 全选当前结果）')
+    return
+  }
+  // 确认文案按实际勾选构成拼接（仅文件 / 仅目录 / 混合三种形态），明确告知删除规模
+  const fileSize = files.reduce((s, f) => s + Number(f.size), 0)
+  const dirSize = dirs.reduce((s, i) => s + i.total_size, 0)
+  const parts: string[] = []
+  if (files.length) parts.push(`${files.length} 个文件（${formatSize(fileSize)}）`)
+  if (dirs.length) {
+    const dirFileCount = dirs.reduce((s, i) => s + i.file_count, 0)
+    parts.push(`${dirs.length} 个目录（含 ${dirFileCount} 个文件，${formatSize(dirSize)}）`)
+  }
+  const action = await askDeleteAction(
+    '批量删除确认',
+    `将删除已勾选的 ${parts.join('、')}——「直接删除」不可恢复；「移入回收站」可保留 ${trashKeepDays.value} 天。`,
+  )
+  if (action === 'close') return
+  const permanent = action === 'confirm'
+  try {
+    const r = await api.batchDeleteResource(
+      [
+        ...files.map((f) => ({ path: f.rel_path, is_dir: false })),
+        ...dirs.map((i) => ({ path: i.name, is_dir: true })),
+      ],
+      permanent,
+    )
+    if (r.failed.length) {
+      ElMessage.warning(`已删除 ${r.deleted} 个，${r.failed.length} 个失败（可能被占用）`)
+    } else {
+      ElMessage.success(`已${permanent ? '直接删除' : '移入回收站'} ${r.deleted} 个`)
+    }
+    clearSelection()
+    await load()
+    await loadTrash()
+  } catch (e) {
+    if (isAborted(e)) return
+    ElMessage.error(`批量删除失败: ${(e as Error).message}`)
   }
 }
 
@@ -816,6 +1037,24 @@ const topFiles = computed<ResourceFile[]>(() =>
 // 宽度收敛到 320，并用 flexGrow 吸收剩余空间，兼顾可读性与铺满。
 const columns: Columns<ResourceFile> = [
   {
+    // 勾选列：el-table-v2 无内建 selection，自定义复选框；表头为全选（含半选态）
+    key: 'selection',
+    title: '',
+    width: 44,
+    align: 'center',
+    cellRenderer: ({ rowData }) =>
+      h(ElCheckbox, {
+        modelValue: selectedPaths.value.has((rowData as ResourceFile).rel_path),
+        onChange: () => toggleSelect((rowData as ResourceFile).rel_path),
+      }),
+    headerCellRenderer: () =>
+      h(ElCheckbox, {
+        modelValue: allScopeSelected.value,
+        indeterminate: someScopeSelected.value && !allScopeSelected.value,
+        onChange: () => toggleSelectAll(),
+      }),
+  },
+  {
     key: 'name',
     dataKey: 'name',
     title: '文件名',
@@ -866,72 +1105,6 @@ const columns: Columns<ResourceFile> = [
         ),
       )
       // 所有类型都可用系统默认程序打开（压缩包、种子等本地处理更直接）
-      btns.unshift(h(ElButton, { link: true, onClick: () => openFileLocal(rowData) }, () => '打开'))
-      return h('div', { class: 'row-actions' }, btns)
-    },
-  },
-]
-
-// 全局结果模式：额外展示「所属目录」列（B2）
-const globalColumns: Columns<ResourceFile> = [
-  {
-    key: 'name',
-    dataKey: 'name',
-    title: '文件名',
-    width: 320,
-    ellipsis: true,
-    sortable: true,
-    cellRenderer: ({ rowData }) =>
-      h('span', { title: rowData.name, innerHTML: highlight(rowData.name) }),
-  },
-  {
-    key: 'category',
-    dataKey: 'category',
-    title: '类型',
-    width: 90,
-    sortable: true,
-    cellRenderer: ({ cellData }) => {
-      const meta = categoryMeta[String(cellData)]
-      return h(ElTag, { size: 'small', type: (meta?.type as any) ?? 'info' }, () => meta?.label ?? '其他')
-    },
-  },
-  {
-    key: 'size',
-    dataKey: 'size',
-    title: '大小',
-    width: 100,
-    sortable: true,
-    cellRenderer: ({ cellData }) => h('span', formatSize(Number(cellData))),
-  },
-  {
-    key: 'folder',
-    dataKey: 'rel_path',
-    title: '所属目录',
-    width: 220,
-    ellipsis: true,
-    cellRenderer: ({ rowData }) =>
-      h('span', { class: 'text-muted' }, String(rowData.rel_path).split('/')[0]),
-  },
-  {
-    key: 'actions',
-    title: '操作',
-    width: 260,
-    cellRenderer: ({ rowData }) => {
-      const btns = [
-        h(
-          ElButton,
-          { link: true, type: 'danger', onClick: () => removeFile(rowData) },
-          () => '删除',
-        ),
-      ]
-      // 统一查看入口：按类型自动分派（与目录模式同一交互）
-      btns.unshift(
-        h(
-          ElButton,
-          { link: true, type: 'primary', onClick: () => openResource(rowData, globalFiles.value) },
-          () => '查看',
-        ),
-      )
       btns.unshift(h(ElButton, { link: true, onClick: () => openFileLocal(rowData) }, () => '打开'))
       return h('div', { class: 'row-actions' }, btns)
     },
@@ -1178,6 +1351,14 @@ onBeforeUnmount(() => {
           </div>
           <!-- 动作组统一靠右（互联网文件/网盘列表的常见布局：筛选在左、动作在右） -->
           <div class="toolbar-right">
+            <!-- 全选当前作用域：全局模式 = 全部命中文件；目录模式 = 当前页目录 -->
+            <el-button :disabled="!canSelectAll" @click="toggleSelectAll">
+              {{ allToolbarSelected ? '取消全选' : '全选当前结果' }}
+            </el-button>
+            <!-- 删除所选：文件与目录勾选混合提交，未勾选时禁用；三选确认防误删 -->
+            <el-button type="danger" plain :disabled="!selectedTotal" @click="batchRemove">
+              删除所选<template v-if="selectedTotal">（{{ selectedTotal }}）</template>
+            </el-button>
             <el-button type="warning" plain @click="openTrash">
               回收站<template v-if="trashItems.length">（{{ trashItems.length }}）</template>
             </el-button>
@@ -1203,54 +1384,84 @@ onBeforeUnmount(() => {
               {{ f.name }}
             </el-tag>
           </div>
-          <div ref="globalWrap">
-            <el-table-v2
-              v-if="!isMobile && globalFiles.length > 0"
-              class="global-table"
-              :columns="globalColumns"
-              :data="globalFiles"
-              :width="tableWidth"
-              :height="globalTableHeight"
-              :row-height="36"
-              :header-height="40"
-              :sort-state="sortState"
-              @column-sort="onColumnSort"
-            />
-            <!-- 移动端卡片：结构与目录模式一致（改一处需同步另一处），
-                 副信息里的完整路径天然充当「所属目录」 -->
-            <div v-else-if="isMobile && globalFiles.length > 0" class="file-cards">
-              <div v-for="f in globalFiles" :key="f.rel_path" class="file-card">
-                <div class="fc-main">
-                  <div class="fc-name" :title="f.name">
-                    <i
-                      class="fc-dot"
-                      :style="{ background: categoryColors[f.category] ?? '#c0c4cc' }"
-                    ></i>
-                    {{ f.name }}
-                  </div>
-                  <div class="fc-meta text-muted">
-                    <span>{{ categoryLabel(f.category) }}</span>
-                    <span>{{ formatSize(Number(f.size)) }}</span>
-                  </div>
-                </div>
-                <div class="fc-ops">
-                  <!-- 统一查看入口：按类型自动分派 -->
-                  <el-button size="small" type="primary" link @click="openResource(f, globalFiles)">
+          <!-- 平铺命中文件列表 + 分页（单行形态：名称 + 类型标签 + 大小 + 所属目录一行铺开不换行，
+               信息密度与 Top10 行/目录头一致）；「浏览」= 打开所属目录浏览抽屉（统一浏览入口）；
+               勾选框点击不触发行内操作，与桌面表格勾选列同一选中集合 -->
+          <div class="file-lines">
+            <div v-for="f in globalPaged" :key="f.rel_path" class="file-line">
+              <el-checkbox
+                class="fc-check"
+                :model-value="isSelected(f.rel_path)"
+                @change="toggleSelect(f.rel_path)"
+                @click.stop
+              />
+              <div class="fl-name" :title="f.name">
+                <i
+                  class="fc-dot"
+                  :style="{ background: categoryColors[f.category] ?? '#c0c4cc' }"
+                ></i>
+                <span class="fl-name-text">{{ f.name }}</span>
+              </div>
+              <!-- 不再显示类型标签：筛选模式下类型即当前筛选条件（如筛选视频，行内无需再标「视频」），
+                   色点已按类型着色保留最低限度的类型视觉线索 -->
+              <span class="fl-size text-muted">{{ formatSize(Number(f.size)) }}</span>
+              <!-- 修改时间：填充行内空白的有用元信息（窄屏隐藏）；0/缺省 = stat 失败不展示 -->
+              <span v-if="f.mtime" class="fl-mtime text-muted">
+                {{ formatMinuteTime(f.mtime) }}
+              </span>
+              <!-- 所属目录/子路径：平铺后目录上下文收进行内元信息（窄屏隐藏，悬停可见完整路径） -->
+              <span class="fl-dir text-muted" :title="f.rel_path">
+                {{ fileParentPath(f) }}
+              </span>
+              <div class="fc-ops">
+                <!-- 桌面端：四个操作全部默认显示，与元信息紧挨排列 -->
+                <template v-if="!isMobile">
+                  <el-button size="small" type="primary" link @click="openResource(f, globalPaged)">
                     查看
                   </el-button>
+                  <el-button size="small" type="primary" link @click="openBrowserAll()">
+                    浏览
+                  </el-button>
+                  <el-button size="small" link @click="openFileLocal(f)">
+                    打开
+                  </el-button>
+                  <el-button size="small" type="danger" link @click="removeFile(f)">
+                    删除
+                  </el-button>
+                </template>
+                <!-- 移动端：位置不够时至少直显「浏览」（跨目录浏览入口），其余收进「更多」菜单 -->
+                <template v-else>
+                  <el-button size="small" type="primary" link @click="openBrowserAll()">
+                    浏览
+                  </el-button>
                   <el-dropdown trigger="click">
-                    <el-button size="small" link>更多</el-button>
+                    <el-button size="small" link class="fl-more">更多</el-button>
                     <template #dropdown>
                       <el-dropdown-menu>
+                        <el-dropdown-item @click="openResource(f, globalPaged)">查看</el-dropdown-item>
                         <el-dropdown-item @click="openFileLocal(f)">打开</el-dropdown-item>
-                        <el-dropdown-item @click="removeFile(f)">删除</el-dropdown-item>
+                        <el-dropdown-item divided @click="removeFile(f)">删除</el-dropdown-item>
                       </el-dropdown-menu>
                     </template>
                   </el-dropdown>
-                </div>
+                </template>
               </div>
             </div>
-            <el-empty v-else :image-size="64" description="无匹配文件" />
+          </div>
+          <el-empty v-if="!globalFiles.length" :image-size="64" description="无匹配文件" />
+          <!-- 命中结果分页（与目录列表分页同一模式）；不提供「显示全部」，数千卡片一次渲染会卡死 -->
+          <div class="folder-pager">
+            <el-pagination
+              layout="total, sizes, prev, pager, next, jumper"
+              :total="globalFiles.length"
+              :page-size="globalPageSize"
+              :current-page="globalPage"
+              :page-sizes="[30, 50, 100]"
+              small
+              background
+              @current-change="onGlobalPage"
+              @size-change="onGlobalPageSize"
+            />
           </div>
         </template>
 
@@ -1263,6 +1474,13 @@ onBeforeUnmount(() => {
             :ref="(el) => setFolderRef(el, item.name)"
           >
             <div class="folder-head" @click="toggle(item.name)">
+              <!-- 勾选框：目录级批量删除；点击不触发展开/折叠 -->
+              <el-checkbox
+                class="folder-check"
+                :model-value="isSelectedDir(item.name)"
+                @change="toggleSelectDir(item.name)"
+                @click.stop
+              />
               <el-icon class="folder-arrow" :class="{ open: active === item.name }">
                 <ArrowRight />
               </el-icon>
@@ -1282,8 +1500,10 @@ onBeforeUnmount(() => {
                       <span>{{ m.label }} {{ m.count }}</span>
                     </template>
                   </span>
-                  <!-- B9 空壳目录标记：只有磁力/云盘清单、无媒体文件 -->
-                  <el-tag v-if="isMedialess(item)" size="small" type="warning">未下载到媒体</el-tag>
+                  <!-- 空目录（0 个文件，多为下载失败/取消残留）与空壳目录（仅磁力/云盘清单、
+                       无媒体文件）互斥展示：isMedialess 的 every 对空数组恒真，须先判空目录 -->
+                  <el-tag v-if="item.file_count === 0" size="small" type="info">空目录</el-tag>
+                  <el-tag v-else-if="isMedialess(item)" size="small" type="warning">未下载到媒体</el-tag>
                   <!-- B7 下载任务关联标记已按用户要求移除（2026-09-08） -->
                 </div>
               </div>
@@ -1361,6 +1581,13 @@ onBeforeUnmount(() => {
                     class="file-cards"
                   >
                     <div v-for="f in filteredFiles" :key="f.rel_path" class="file-card">
+                      <!-- 勾选框：点击不触发卡片「查看」，与桌面表格勾选列同一选中集合 -->
+                      <el-checkbox
+                        class="fc-check"
+                        :model-value="isSelected(f.rel_path)"
+                        @change="toggleSelect(f.rel_path)"
+                        @click.stop
+                      />
                       <div class="fc-main">
                         <div class="fc-name" :title="f.name">
                           <i
@@ -1449,15 +1676,21 @@ onBeforeUnmount(() => {
     <!-- 手机端全屏：size 固定 720px 会超出手机视口，内容被截断错位 -->
     <el-drawer
       v-model="browserVisible"
-      :title="browserFolder ? `浏览目录：${browserFolder.name}` : '浏览目录'"
+      :title="browserTitle"
       :size="isMobile ? '100%' : '720px'"
     >
-      <template v-if="browserFolder">
+      <!-- folder = 单目录浏览；global = 跨目录浏览全部命中资源（与列表同一筛选口径） -->
+      <template v-if="browserMode === 'global' || browserFolder">
         <div class="browser-summary text-muted">
-          共 {{ browserFiles.length }} 个文件
-          <template v-for="(m, i) in folderMix(browserFolder)" :key="m.label">
-            <span v-if="i">·</span>
-            <span>{{ m.label }} {{ m.count }}</span>
+          <template v-if="browserMode === 'global'">
+            共 {{ browserFiles.length }} 个命中文件（跨全部目录，与列表同一筛选口径）
+          </template>
+          <template v-else>
+            共 {{ browserFiles.length }} 个文件
+            <template v-for="(m, i) in browserMix" :key="m.label">
+              <span v-if="i">·</span>
+              <span>{{ m.label }} {{ m.count }}</span>
+            </template>
           </template>
         </div>
         <!-- 类型筛选 + 名称过滤：资源过多时先收敛范围再浏览 -->
@@ -1821,6 +2054,12 @@ onBeforeUnmount(() => {
   min-width: 0;
 }
 
+/* 卡片勾选框：固定不收缩；高度不随 .file-card 的对齐拉伸 */
+.fc-check {
+  flex-shrink: 0;
+  height: auto;
+}
+
 .fc-name {
   display: flex;
   align-items: center;
@@ -2026,8 +2265,78 @@ onBeforeUnmount(() => {
   margin-right: 2px;
 }
 
-.global-table {
-  margin-bottom: 8px;
+/* 全局模式平铺单行文件行：名称 + 类型标签 + 大小 + 所属目录一行铺开，均不换行 */
+.file-lines {
+  display: flex;
+  flex-direction: column;
+}
+
+.file-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 2px 6px;
+  border-radius: 6px;
+}
+
+.file-line:hover {
+  background: #f6f8fc;
+}
+
+/* 文件名收缩自适应（不占满行宽）：名称与后面的类型/大小/目录紧挨排列，
+   超长时省略收缩；行尾空白统一留给右侧操作区 */
+.fl-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.fl-name-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 大小不换行不压缩 */
+.fl-size {
+  flex-shrink: 0;
+  font-size: 12px;
+}
+
+/* 所属目录/子路径：放宽到 45% 并随内容伸展（含子目录的完整父路径），
+   超长省略，悬停 title 可见完整路径 */
+.fl-dir {
+  flex: 0 1 auto;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+/* 移动端「更多」按钮：紧凑行高，不撑高单行 */
+.fl-more {
+  min-height: 24px;
+}
+
+/* 单行内信息簇（名称+大小+时间+目录）依次紧挨排列，操作区右对齐（吸收剩余空白） */
+.file-line .fc-ops {
+  margin-left: auto;
+}
+
+/* 修改时间：不换行不压缩 */
+.fl-mtime {
+  flex-shrink: 0;
+  font-size: 12px;
+}
+
+/* 目录头勾选框：固定不收缩，点击不触发头部的展开/折叠 */
+.folder-check {
+  flex-shrink: 0;
+  height: auto;
 }
 
 /* P0-1 搜索命中高亮 */
@@ -2266,6 +2575,13 @@ onBeforeUnmount(() => {
 
   .insight-line .insight-ops {
     margin-left: auto;
+  }
+
+  /* 全局模式单行文件行：窄屏隐藏所属目录与修改时间（挤掉文件名），
+     行内只留 名称 + 类型标签 + 大小 + 操作，全部单行不换行 */
+  .fl-dir,
+  .fl-mtime {
+    display: none;
   }
 }
 

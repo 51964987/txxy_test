@@ -636,9 +636,7 @@ onMounted(() => {
     <!-- 列表 -->
     <div class="page-card" style="margin-top: 16px">
       <div class="toolbar">
-        <span>
-          共 <b>{{ pageData?.total?.toLocaleString() ?? '-' }}</b> 条记录
-        </span>
+        <!-- 原「共 N 条记录」已移除：分页条的 total 已给出同一信息（且与顶部分页重复） -->
         <div class="toolbar-right">
           <!-- 与表头排序共用 colSort；表头排出的组合（如标题升序）会动态多出「自定义：…」项 -->
           <el-select v-model="sortSelect" style="width: 168px">
@@ -658,6 +656,21 @@ onMounted(() => {
             导出 CSV
           </el-button>
         </div>
+      </div>
+
+      <!-- 顶部分页：与底部同状态双份展示——长列表滚到顶时不必滚到底部翻页（业界长表格通行做法）。
+           两份共用 page/pageSize 与同一套回调；窄屏由全局移动端分页规则收敛为 total+prev/pager/next -->
+      <div class="pager pager-top">
+        <el-pagination
+          background
+          layout="total, sizes, prev, pager, next, jumper"
+          :total="pageData?.total ?? 0"
+          :current-page="page"
+          :page-size="pageSize"
+          :page-sizes="[20, 50, 100, 200]"
+          @current-change="onPageChange"
+          @size-change="onSizeChange"
+        />
       </div>
 
       <!-- 列排序用 custom 模式：分页列表必须走服务端排序，本地排序只作用于当前页，等于没排。
@@ -842,7 +855,23 @@ onMounted(() => {
 .pager {
   margin-top: 14px;
   display: flex;
-  justify-content: flex-end;
+}
+
+/* 分页条单行满宽：组件撑满卡片宽度，total 靠左、每页条数与翻页控件靠右。
+   不再用 justify-content: flex-end 让分页控件缩在右侧（宽度未充分利用，观感偏散）；
+   换行仍由全局移动端规则兜底（窄屏隐藏 sizes/jumper 后照常单行） */
+.pager :deep(.el-pagination) {
+  width: 100%;
+}
+
+.pager :deep(.el-pagination__total) {
+  margin-right: auto;
+}
+
+/* 顶部分页：紧贴工具栏下方、表格上方，间距与底部对称 */
+.pager-top {
+  margin-top: 12px;
+  margin-bottom: 0;
 }
 
 /* 操作列：三个图标按钮单行不换行，消除相邻按钮默认 12px 间距 */

@@ -319,6 +319,8 @@ export interface ResourceFile {
   rel_path: string
   size: number
   category: 'image' | 'video' | 'torrent' | 'text' | 'other'
+  /** 文件修改时间（秒级时间戳）；0 或缺省 = stat 失败，不展示 */
+  mtime?: number
 }
 
 /** 回收站条目（软删除，保留期内可恢复） */
@@ -512,6 +514,15 @@ export const api = {
   trashList: () => get<TrashResp>('/resources/trash'),
   restoreResource: (id: string) => post<{ ok: boolean; rel: string }>('/resources/restore', { id }),
   purgeResource: (id: string) => post<{ ok: boolean; count: number }>('/resources/purge', { id }),
+  batchDeleteResource: (
+    items: { path: string; is_dir: boolean }[],
+    permanent: boolean,
+  ) =>
+    post<{
+      ok: boolean
+      deleted: number
+      failed: { path: string; reason: string }[]
+    }>('/resources/batch-delete', { items, permanent }),
   submitDownload: (urls: string[]) => post<{ id: string; count: number }>('/downloads', { urls }),
   downloadTasks: () => get<{ tasks: DownloadTaskSummary[] }>('/downloads'),
   downloadTask: (id: string) => get<DownloadTaskDetail>(`/downloads/${id}`),

@@ -1201,6 +1201,30 @@ def resources_trash() -> dict[str, Any]:
     return resources.list_trash()
 
 
+class ResourceBatchDeleteItem(BaseModel):
+    """批量删除的单项：path 为 downloads/ 内相对路径，is_dir 区分文件与目录。"""
+
+    path: str
+    is_dir: bool = False
+
+
+class ResourceBatchDeleteReq(BaseModel):
+    """批量删除请求体：items 为文件/目录列表；permanent=True 直接删除（不可恢复）。"""
+
+    items: list[ResourceBatchDeleteItem]
+    permanent: bool = False
+
+
+@router.post("/resources/batch-delete")
+def resources_batch_delete(_: DeleteRateLimit, req: ResourceBatchDeleteReq) -> dict[str, Any]:
+    """批量删除：逐项软删除或直接删除；单项失败不影响其余，返回删除数与失败明细。"""
+    if not req.items:
+        raise HTTPException(400, "未提供要删除的资源")
+    if len(req.items) > 500:
+        raise HTTPException(400, f"单次最多批量删除 500 项，当前 {len(req.items)} 项")
+    return resources.batch_delete([i.model_dump() for i in req.items], req.permanent)
+
+
 @router.post("/resources/restore")
 def resources_restore(_: DeleteRateLimit, req: ResourceIdReq) -> dict[str, Any]:
     """从回收站恢复到 downloads/ 下的原路径（目标已存在时拒绝，避免覆盖）。"""

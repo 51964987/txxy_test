@@ -33,6 +33,7 @@ from typing import Any, cast
 
 from atomicfile import write_json_atomic
 import config
+import resources
 
 # 项目根目录加入 sys.path：download_files.py 位于 txxy_test/ 根（web/ 脚本目录不在其搜索范围内）
 if str(config.BASE_DIR) not in sys.path:
@@ -47,6 +48,30 @@ _TERMINAL = {"done", "failed", "cancelled"}
 # 明细较啰嗦（一张图一行），上限过小会让早期 URL 的日志被挤掉；
 # 这里按「50 个链接 × 少量图片」的量级取 2000，兼顾可读性与 JSON 体积。
 _MAX_LOGS = 2000
+
+
+def _cleanup_empty_saved_dirs(task: dict[str, Any]) -> None:
+    """任务收尾：清理本任务遗留的空目录（治本：不再产生空壳目录）。
+
+    只处理任务 items 中出现过的 saved_dir，且用 rmdir（目录非空时系统层面必然失败）——
+    物理上保证不可能误删有文件的目录。删除失败（被占用等）静默忽略：空目录留着无害，
+    资源管理页还能看到并手动清理。
+    """
+    rels: list[str] = []
+    for it in task.get("items", []):
+        sd = it.get("saved_dir")
+        if sd and sd not in rels:
+            rels.append(sd)
+    removed = False
+    for rel in rels:
+        p = config.DOWNLOADS_DIR / rel
+        try:
+            p.rmdir()  # 目录非空时抛 OSError，天然防误删
+            removed = True
+        except OSError:
+            continue
+    if removed:
+        resources.invalidate_cache()
 
 
 class _ThreadLogCapture:
@@ -223,6 +248,9 @@ def _run_one(url: str, sink: _TaskLogSink) -> tuple[dict[str, int], str | None, 
         # 必须 detach：线程池线程会复用，残留的缓冲会影响该线程后续的输出
         cap.detach()
         sink.flush()  # 末尾无换行的残留仍要落库
+        # 下载可能已向 downloads/ 落盘（含失败前的部分写入）：主动失效资源扫描缓存，
+        # 让资源管理页下一次刷新立即看到新文件，而不是等 10s TTL 过期
+        resources.invalidate_cache()
 
 
 class DownloadTaskManager:
@@ -595,6 +623,7 @@ class DownloadTaskManager:
             # 没有待跑项（理论上不会发生）：直接收尾，避免空线程池
             task["finished_at"] = self._now()
             self._save()
+            _cleanup_empty_saved_dirs(task)
             return
         concurrency = max(1, min(config.DOWNLOAD_CONCURRENCY, len(pending_idx)))
         next_pos = 0
@@ -671,6 +700,8 @@ class DownloadTaskManager:
                 _log(task, f"任务全部完成（共 {task['total']} 个链接）")
         task["finished_at"] = self._now()
         self._save()
+        # 任务收尾：清理本任务遗留的空目录（下载全部失败/取消时的空壳残留）
+        _cleanup_empty_saved_dirs(task)
 
     def _record_result(
         self,

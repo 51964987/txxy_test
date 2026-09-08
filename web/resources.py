@@ -62,6 +62,11 @@ def category_of(name: str) -> str:
 # ---- 增量缓存：签名 = 顶层文件夹名 + 各自 mtime（新增/删除/覆盖文件都会引起目录 mtime 变化） ----
 _cache_signature = ""
 _cache_payload: dict[str, Any] | None = None
+# TTL：签名未变也定时重扫——签名只含「顶层目录名 + 顶层目录 mtime」，
+# 子目录内部的文件增删（Web 进程外的变化，如手动整理、scraper 补下）不会
+# 改变顶层 mtime，仅靠签名永远感知不到，必须靠 TTL 兜底重扫
+_CACHE_TTL = 10.0
+_cache_time = 0.0
 
 
 def _signature(root: Path) -> str:
@@ -84,9 +89,13 @@ def scan() -> dict[str, Any]:
     if not root.is_dir():
         return {"count": 0, "total_files": 0, "total_size": 0, "items": []}
 
-    global _cache_signature, _cache_payload
+    global _cache_signature, _cache_payload, _cache_time
     sig = _signature(root)
-    if _cache_payload is not None and sig == _cache_signature:
+    if (
+        _cache_payload is not None
+        and sig == _cache_signature
+        and time.monotonic() - _cache_time < _CACHE_TTL
+    ):
         return _cache_payload
 
     items: list[dict[str, Any]] = []
@@ -101,9 +110,12 @@ def scan() -> dict[str, Any]:
             for f in sorted(folder.rglob("*"), key=lambda p: str(p).lower()):
                 if f.is_file():
                     try:
-                        size = f.stat().st_size
+                        st = f.stat()
+                        size = st.st_size
+                        mtime = st.st_mtime
                     except OSError:
                         size = 0
+                        mtime = 0
                     folder_size += size
                     files.append(
                         {
@@ -111,12 +123,14 @@ def scan() -> dict[str, Any]:
                             "rel_path": str(f.relative_to(root)).replace("\\", "/"),
                             "size": size,
                             "category": category_of(f.name),
+                            # 文件修改时间（秒级时间戳）：列表页展示元信息用，0 = stat 失败
+                            "mtime": mtime,
                         }
                     )
         except OSError:
             continue
-        if not files:
-            continue
+        # 空目录也收录（file_count=0）：多为下载失败/取消任务的残留，
+        # 资源管理页以「空目录」标记展示，便于用户发现并清理
         try:
             mtime = folder.stat().st_mtime
         except OSError:
@@ -141,6 +155,7 @@ def scan() -> dict[str, Any]:
     }
     _cache_signature = sig
     _cache_payload = payload
+    _cache_time = time.monotonic()
     return payload
 
 
@@ -275,9 +290,10 @@ def invalidate_cache() -> None:
     签名只取顶层目录名 + mtime，而删除子文件不保证触发顶层目录 mtime 变化，
     因此删除 / 恢复 / 彻底删除后必须显式失效，避免列表继续显示已删除项。
     """
-    global _cache_signature, _cache_payload
+    global _cache_signature, _cache_payload, _cache_time
     _cache_signature = ""
     _cache_payload = None
+    _cache_time = 0.0
 
 
 # ---- 回收站（软删除）：移入 outputs/trash/<id>/，保留 TRASH_KEEP_DAYS 天 ----
@@ -372,6 +388,25 @@ def delete_permanent(rel: str, is_dir: bool) -> dict[str, Any]:
         return {"ok": False, "reason": f"删除失败，文件可能被占用: {e}"}
     invalidate_cache()
     return {"ok": True, "rel": rel}
+
+
+def batch_delete(items: list[dict[str, Any]], permanent: bool) -> dict[str, Any]:
+    """批量删除：逐项软删除（移入回收站）或直接删除；单项失败不影响其余。
+
+    单次请求完成整批（绕开删除限流 10 次/分的逐项调用）；每项删除后
+    各自 invalidate_cache（重复失效无害）。
+    """
+    deleted = 0
+    failed: list[dict[str, Any]] = []
+    for it in items:
+        rel = str(it.get("path", ""))
+        is_dir = bool(it.get("is_dir"))
+        r = delete_permanent(rel, is_dir) if permanent else move_to_trash(rel, is_dir)
+        if r.get("ok"):
+            deleted += 1
+        else:
+            failed.append({"path": rel, "reason": str(r.get("reason"))})
+    return {"ok": True, "deleted": deleted, "failed": failed}
 
 
 def list_trash() -> dict[str, Any]:

@@ -58,3 +58,7 @@ docker/bundle/
 # 命名卷备份产物
 backups/
 
+
+# 临时文件
+_*.py
+.*.png
