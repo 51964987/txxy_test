@@ -25,10 +25,16 @@ REM    start_web.bat                    LAN access by default, no rebuild
 REM    start_web.bat --rebuild          rebuild frontend, then start
 REM    start_web.bat --no-lan           localhost only
 REM    start_web.bat --rebuild --no-lan rebuild, localhost only
+REM
+REM  share service (port 8090 by default, env TXXY_SHARE_PORT to override) is
+REM  started automatically together with the main service, so generated share
+REM  links are reachable without running the share server manually.
 REM ============================================================
 
 if not defined TXXY_WEB_PORT set "TXXY_WEB_PORT=8088"
 set "PORT=%TXXY_WEB_PORT%"
+if not defined TXXY_SHARE_PORT set "TXXY_SHARE_PORT=8090"
+set "SHAREPORT=%TXXY_SHARE_PORT%"
 set "ARG_BUILD="
 set "LAN=1"
 
@@ -64,7 +70,8 @@ set "TXXY_WEB_HOST=127.0.0.1"
 :afterhost
 echo ============================================
 echo   txxy 数据展示服务
-echo   监听地址: %TXXY_WEB_HOST%:%PORT%
+echo   主服务:   %TXXY_WEB_HOST%:%PORT%
+echo   分享服务: %TXXY_WEB_HOST%:%SHAREPORT%
 echo ============================================
 
 REM ---------------- stop previous instance holding the port ----------------
@@ -81,6 +88,20 @@ goto :afterkill
 echo 端口 %PORT% 无旧服务占用
 
 :afterkill
+REM ---------------- stop previous share-service instance on SHAREPORT ----------------
+set "OLD_SHARE_PID="
+for /f "tokens=5" %%a in ('netstat -ano ^| findstr /R /C:":%SHAREPORT% .*LISTENING"') do set "OLD_SHARE_PID=%%a"
+if not defined OLD_SHARE_PID goto :shnokill
+echo 检测到旧分享服务占用端口 %SHAREPORT%，PID=%OLD_SHARE_PID%，正在结束...
+taskkill /PID %OLD_SHARE_PID% /F >nul 2>&1
+timeout /t 3 /nobreak >nul
+echo 旧分享服务已结束
+goto :shafter
+
+:shnokill
+echo 端口 %SHAREPORT% 无旧分享服务占用
+
+:shafter
 if not "%LAN%"=="1" goto :startsvc
 
 REM ---------------- lan mode: open firewall ----------------
@@ -106,10 +127,30 @@ echo [提示] 局域网模式无鉴权，同网设备均可访问；不需要时
 echo   netsh advfirewall firewall delete rule name="txxy-web-%PORT%"
 echo 局域网访问地址，手机连同一网络时使用:
 powershell -NoProfile -Command "Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.IPAddress -notlike '127.*' -and $_.IPAddress -notlike '169.254.*' } | ForEach-Object { Write-Host ('  http://' + $_.IPAddress + ':%PORT%   [' + $_.InterfaceAlias + ']') }"
+REM ---------------- lan mode: open firewall for share service (SHAREPORT) ----------------
+netsh advfirewall firewall show rule name="txxy-share-%SHAREPORT%" >nul 2>&1
+if errorlevel 1 goto :shfwadd
+echo [防火墙] %SHAREPORT% 放行规则已存在
+goto :shfwok
+
+:shfwadd
+echo [防火墙] 正在添加 %SHAREPORT% 入站放行规则（分享服务）...
+netsh advfirewall firewall add rule name="txxy-share-%SHAREPORT%" dir=in action=allow protocol=TCP localport=%SHAREPORT% >nul 2>&1
+if errorlevel 1 goto :shfwfail
+echo [防火墙] 已放行 %SHAREPORT% 端口（分享服务）
+goto :shfwok
+
+:shfwfail
+echo [防火墙] 分享服务 %SHAREPORT% 规则添加失败，请手动执行:
+echo   netsh advfirewall firewall add rule name="txxy-share-%SHAREPORT%" dir=in action=allow protocol=TCP localport=%SHAREPORT%
+
+:shfwok
 
 REM ---------------- start service ----------------
 :startsvc
-echo 启动服务...
+echo 启动分享服务（端口 %SHAREPORT%，独立进程）...
+start "txxy-share" /min python -X utf8 web/share_server.py
+echo 启动主服务...
 python -X utf8 start_web.py %ARG_BUILD%
 echo.
 echo 服务已退出

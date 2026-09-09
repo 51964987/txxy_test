@@ -19,7 +19,7 @@ import {
 import { useAppStore } from '../stores/app'
 import { useTrash } from '../composables/useTrash'
 import { formatMinuteTime } from '../utils/time'
-import { legacyCopy } from '../utils/clipboard'
+import { legacyCopy, copyText } from '../utils/clipboard'
 
 const router = useRouter()
 // 移动端形态沿用布局层的统一断点（<768px），页面不自建第二套判定
@@ -631,6 +631,92 @@ function openResource(file: ResourceFile, list: ResourceFile[]) {
   else openFileLocal(file)
 }
 
+// ===== 分享：可单文件，也可一次性分享整个目录 / 勾选的多个文件（不暴露前端看板） =====
+// 一个分享链接对应一组文件（业界网盘「分享文件夹 / 多选分享」同思路），
+// 由独立 8090 分享服务渲染为画廊式预览页。
+const shareVisible = ref(false)
+// 待分享文件集合（单文件时只有一个元素）
+const shareTargets = ref<ResourceFile[]>([])
+// 是否进入「自由勾选」模式（浏览抽屉「分享此目录」使用）：勾选子集而非整目录
+const shareSelectable = ref(false)
+// 已勾选的相对路径集合（仅 selectable 模式使用）
+const shareSelected = ref<Set<string>>(new Set())
+const shareTtl = ref<'1h' | '24h' | '7d' | '30d'>('7d')
+const shareUrl = ref('')
+const shareLoading = ref(false)
+
+// 单文件分享入口（卡片 / 行内「分享」）
+function openShare(file: ResourceFile) {
+  shareSelectable.value = false
+  shareTargets.value = [file]
+  shareUrl.value = ''
+  shareTtl.value = '7d'
+  shareVisible.value = true
+}
+
+// 浏览抽屉「分享此目录」：弹出可勾选清单（支持全选/全不选），默认全选当前筛选结果
+function openShareBrowser() {
+  shareSelectable.value = true
+  shareTargets.value = [...browserFiltered.value]
+  shareSelected.value = new Set(browserFiltered.value.map((f) => f.rel_path))
+  shareUrl.value = ''
+  shareTtl.value = '7d'
+  shareVisible.value = true
+}
+
+// 勾选切换（重赋值以触发响应式）
+function togglePick(rel: string, val: unknown) {
+  const on = val === true
+  const s = new Set(shareSelected.value)
+  if (on) s.add(rel)
+  else s.delete(rel)
+  shareSelected.value = s
+}
+// 全选 / 全不选
+function pickAll(on: boolean) {
+  shareSelected.value = new Set(on ? shareTargets.value.map((f) => f.rel_path) : [])
+}
+// 弹窗标题：反映当前勾选数量
+const shareTitle = computed(() =>
+  shareSelectable.value
+    ? `分享 ${shareSelected.value.size} 个文件`
+    : shareTargets.value.length > 1
+      ? `分享 ${shareTargets.value.length} 个文件`
+      : '分享文件',
+)
+
+async function generateShare() {
+  // selectable 模式只分享已勾选的文件
+  const targets = shareSelectable.value
+    ? shareTargets.value.filter((f) => shareSelected.value.has(f.rel_path))
+    : shareTargets.value
+  if (!targets.length) {
+    ElMessage.warning('请至少选择一个文件')
+    return
+  }
+  shareLoading.value = true
+  try {
+    const r = await api.createShare(
+      targets.map((f) => f.rel_path),
+      shareTtl.value,
+    )
+    shareUrl.value = r.url
+    const ok = await copyText(r.url)
+    ElMessage.success(ok ? '链接已生成并复制' : '链接已生成，请手动复制')
+  } catch (e) {
+    if (isAborted(e)) return
+    ElMessage.error(`生成失败: ${(e as Error).message}`)
+  } finally {
+    shareLoading.value = false
+  }
+}
+
+async function copyShare() {
+  if (!shareUrl.value) return
+  const ok = await copyText(shareUrl.value)
+  ElMessage.success(ok ? '链接已复制' : '复制失败，请手动复制')
+}
+
 // ===== 目录级浏览：不展开目录即可浏览该目录全部资源 =====
 const browserVisible = ref(false)
 const browserFolder = ref<ResourceItem | null>(null)
@@ -841,11 +927,10 @@ onBeforeUnmount(() => {
   for (const u of thumbBlobUrls) URL.revokeObjectURL(u)
 })
 
-/** 浏览抽屉卡片的悬浮提示：把行内放不下的元信息（修改时间 / 完整路径 / 真实格式）集中给出 */
+/** 浏览抽屉卡片的悬浮提示：把行内放不下的元信息（修改时间 / 完整路径）集中给出 */
 function cellTitle(f: ResourceFile): string {
   const parts = [f.name]
   if (f.width && f.height) parts.push(`${f.width}×${f.height}`)
-  if (f.format) parts.push(f.format)
   parts.push(formatSize(Number(f.size)))
   if (f.mtime) parts.push(formatMinuteTime(f.mtime))
   parts.push(f.rel_path)
@@ -1559,6 +1644,9 @@ onBeforeUnmount(() => {
                   <el-button size="small" link @click="openFileLocal(f)">
                     打开
                   </el-button>
+                  <el-button size="small" link @click="openShare(f)">
+                    分享
+                  </el-button>
                   <el-button size="small" type="danger" link @click="removeFile(f)">
                     删除
                   </el-button>
@@ -1574,6 +1662,7 @@ onBeforeUnmount(() => {
                       <el-dropdown-menu>
                         <el-dropdown-item @click="openResource(f, globalPaged)">查看</el-dropdown-item>
                         <el-dropdown-item @click="openFileLocal(f)">打开</el-dropdown-item>
+                        <el-dropdown-item @click="openShare(f)">分享</el-dropdown-item>
                         <el-dropdown-item divided @click="removeFile(f)">删除</el-dropdown-item>
                       </el-dropdown-menu>
                     </template>
@@ -1747,6 +1836,7 @@ onBeforeUnmount(() => {
                           <template #dropdown>
                             <el-dropdown-menu>
                               <el-dropdown-item @click="openFileLocal(f)">打开</el-dropdown-item>
+                              <el-dropdown-item @click="openShare(f)">分享</el-dropdown-item>
                               <el-dropdown-item divided @click="removeFile(f)">
                                 删除
                               </el-dropdown-item>
@@ -1851,6 +1941,15 @@ onBeforeUnmount(() => {
               :value="o.value"
             />
           </el-select>
+          <el-button
+            size="small"
+            type="primary"
+            plain
+            :disabled="!browserFiltered.length"
+            @click="openShareBrowser"
+          >
+            分享此目录
+          </el-button>
         </div>
         <div class="browser-grid">
           <div
@@ -1902,10 +2001,16 @@ onBeforeUnmount(() => {
             </div>
             <div class="browser-name">{{ f.name }}</div>
             <div class="text-muted browser-size">
-              <!-- 元信息：像素尺寸 · 真实格式 · 大小（悬浮 title 另有修改时间与完整路径） -->
+              <!-- 元信息：像素尺寸 · 大小（真实格式标签已去除，二者用间隔点隔开，悬浮 title 另有修改时间与完整路径） -->
               <span v-if="f.width && f.height">{{ f.width }}×{{ f.height }}</span>
-              <span v-if="f.format">{{ f.format }}</span>
+              <span v-if="f.width && f.height" class="sep">·</span>
               <span>{{ formatSize(Number(f.size)) }}</span>
+            </div>
+            <!-- 文件卡点击走统一查看入口；「分享」用 @click.stop 阻断冒泡，避免误开查看器 -->
+            <div class="browser-ops">
+              <el-button link type="primary" size="small" @click.stop="openShare(f)">
+                分享
+              </el-button>
             </div>
           </div>
         </div>
@@ -2032,6 +2137,76 @@ onBeforeUnmount(() => {
         </div>
       </template>
       <el-empty v-else :image-size="64" description="无法解析该种子" />
+    </el-dialog>
+
+    <!-- 分享：可单文件，也可一次性分享整个目录 / 多个文件（独立 8090 分享服务，不暴露前端看板） -->
+    <el-dialog
+      v-model="shareVisible"
+      :title="shareTitle"
+      :width="isMobile ? '92%' : '480px'"
+      top="8vh"
+    >
+      <div v-if="shareTargets.length" class="share-body">
+        <!-- 自由勾选模式：复选清单 + 全选/全不选 -->
+        <template v-if="shareSelectable">
+          <div class="share-pick-bar">
+            <span class="text-muted">已选 {{ shareSelected.size }} / {{ shareTargets.length }}</span>
+            <div class="share-pick-ops">
+              <el-button size="small" link type="primary" @click="pickAll(true)">全选</el-button>
+              <el-button size="small" link @click="pickAll(false)">全不选</el-button>
+            </div>
+          </div>
+          <div class="share-pick-list">
+            <label v-for="f in shareTargets" :key="f.rel_path" class="share-pick-item">
+              <el-checkbox
+                :model-value="shareSelected.has(f.rel_path)"
+                @change="(v) => togglePick(f.rel_path, v)"
+              />
+              <span class="share-pick-name" :title="f.rel_path">{{ f.name }}</span>
+            </label>
+          </div>
+        </template>
+        <!-- 普通模式：只读展示待分享文件 -->
+        <template v-else>
+          <div class="share-name-list">
+            <div
+              v-for="f in shareTargets.slice(0, 50)"
+              :key="f.rel_path"
+              class="share-name"
+              :title="f.rel_path"
+            >{{ f.name }}</div>
+            <div v-if="shareTargets.length > 50" class="text-muted">
+              等共 {{ shareTargets.length }} 个文件
+            </div>
+          </div>
+        </template>
+        <div class="text-muted share-sub">链接有效期</div>
+        <el-select v-model="shareTtl" size="small" style="width: 100%">
+          <el-option label="1 小时" value="1h" />
+          <el-option label="24 小时" value="24h" />
+          <el-option label="7 天" value="7d" />
+          <el-option label="30 天" value="30d" />
+        </el-select>
+        <el-button
+          class="share-gen"
+          type="primary"
+          size="small"
+          :loading="shareLoading"
+          @click="generateShare"
+        >
+          生成并复制链接
+        </el-button>
+        <template v-if="shareUrl">
+          <el-input :model-value="shareUrl" readonly size="small" class="share-url">
+            <template #append>
+              <el-button @click="copyShare">复制</el-button>
+            </template>
+          </el-input>
+          <div class="text-muted share-tip">
+            该链接由独立端口提供，打开后只显示所选文件、不会展示本系统的管理界面。
+          </div>
+        </template>
+      </div>
     </el-dialog>
 
     <!-- 回收站：软删除项，保留期内可恢复，也可彻底删除 -->
@@ -2190,6 +2365,82 @@ onBeforeUnmount(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* 分享对话框 */
+.share-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.share-name {
+  font-weight: 600;
+  font-size: 14px;
+  word-break: break-all;
+}
+.share-name-list {
+  max-height: 220px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px 6px;
+  background: #f5f7fa;
+  border-radius: 8px;
+}
+.share-name-list .share-name {
+  font-weight: 400;
+  font-size: 13px;
+}
+/* 自由勾选清单（分享此目录） */
+.share-pick-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+.share-pick-ops {
+  display: flex;
+  gap: 8px;
+}
+.share-pick-list {
+  max-height: 240px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  background: #f5f7fa;
+  border-radius: 8px;
+}
+.share-pick-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 4px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.share-pick-item:hover {
+  background: #ecf5ff;
+}
+.share-pick-name {
+  font-size: 13px;
+  word-break: break-all;
+}
+.share-sub {
+  font-size: 12px;
+  margin-top: 4px;
+}
+.share-gen {
+  align-self: flex-start;
+}
+.share-url {
+  margin-top: 4px;
+}
+.share-tip {
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 /* ================= 移动端适配 =================
@@ -2861,5 +3112,15 @@ onBeforeUnmount(() => {
 
 .browser-size {
   font-size: 12px;
+}
+.browser-size .sep {
+  margin: 0 6px;
+  color: #c0c4cc;
+}
+
+/* 文件卡底部「分享」操作：与元信息之间留白，堆叠在卡片内底部 */
+.browser-ops {
+  margin-top: 4px;
+  text-align: right;
 }
 </style>

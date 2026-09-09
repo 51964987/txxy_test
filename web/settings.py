@@ -86,6 +86,14 @@ WHITELIST: dict[str, dict[str, Any]] = {
         "scope": "immediate",
         "desc": "签名未变时距上次扫描超过该值即重扫；越小越实时、越大越省 IO",
     },
+    "share_host": {
+        "label": "分享链接固定主机名/IP",
+        "type": "text",
+        "scope": "immediate",
+        "desc": "生成的分享链接使用的固定主机名/IP（如 192.168.1.5）。留空则自动取访问看板的地址、仅把端口换成分享端口；"
+                "设为局域网 IP 后，无论用 localhost 还是域名打开看板，生成的链接都固定指向该 IP，便于他人直接打开。"
+                "修改后立即影响后续生成的链接，无需重启。",
+    },
     "enable_auto_refresh": {
         "label": "数据总览自动刷新",
         "type": "bool",
@@ -154,6 +162,8 @@ def _env_or_default(key: str) -> Any:
         return config.DOWNLOAD_TASK_MAX_KEEP
     if key == "trash_keep_days":
         return config.TRASH_KEEP_DAYS
+    if key == "share_host":
+        return config.SHARE_HOST
     if key == "enable_auto_refresh":
         return config.ENABLE_AUTO_REFRESH
     # 以下默认值定义在项目根 download_files.py（CLI 与 Web 同源）
@@ -207,6 +217,9 @@ def _clamp(key: str, value: Any) -> Any:
     t = spec.get("type", "int")
     if t == "bool":
         return bool(value)
+    if t == "text":
+        # 文本型：仅做空值归一（None/空白视为未设置），不施加范围钳制
+        return "" if value is None else str(value).strip()
     if t == "array":
         allowed = {o["value"] for o in spec.get("options", [])}
         if not isinstance(value, (list, tuple)):

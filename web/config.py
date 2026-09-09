@@ -74,6 +74,13 @@ def to_display_url(url: str | None) -> str:
 
 HOST = os.environ.get("TXXY_WEB_HOST", "127.0.0.1")
 PORT = int(os.environ.get("TXXY_WEB_PORT", "8088"))
+# 独立分享服务端口：完全隔离于前端 SPA（不挂载任何前端资源，/ 也不返回看板）。
+# 局域网分享时需与 TXXY_WEB_HOST 一致设为 0.0.0.0。
+SHARE_PORT = int(os.environ.get("TXXY_SHARE_PORT", "8090"))
+# 分享链接中固定的主机名/IP：为空则沿用请求 Host（自动适配局域网/域名，当前默认行为）；
+# 设为 LAN IP（如 192.168.1.5）可使无论用 localhost 还是域名访问看板，生成的链接都固定指向该 IP，
+# 便于局域网他人直接打开。需同时将 TXXY_WEB_HOST 设为 0.0.0.0 让分享服务监听所有网卡。
+SHARE_HOST = os.environ.get("TXXY_SHARE_HOST", "")
 
 # ---------------- 下载中心（URL 批量下载） ----------------
 # 单任务内并行下载的 URL 数：并发过高易触发源站限流/封禁，默认 2 保守取值。

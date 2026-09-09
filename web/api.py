@@ -9,7 +9,7 @@ from datetime import timedelta
 
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
@@ -40,6 +40,8 @@ OpenRateLimit = Annotated[None, Depends(ratelimit.rate_limit(10, 60))]
 VideoRateLimit = Annotated[None, Depends(ratelimit.rate_limit(300, 60))]
 # 删除 / 恢复 / 彻底删除为破坏性操作，限 10 次/分
 DeleteRateLimit = Annotated[None, Depends(ratelimit.rate_limit(10, 60))]
+# 创建分享链接：用户主动点击，限 20 次/分足够
+ShareRateLimit = Annotated[None, Depends(ratelimit.rate_limit(20, 60))]
 
 # ================= 响应模型（P1-10） =================
 # 仅覆盖结构稳定的核心接口；/runs、/resources 因字段条件性存在（运行中 / 日志回退等）不强制
@@ -1206,6 +1208,66 @@ def resources_video(_: VideoRateLimit, path: str) -> FileResponse:
     if media_type is None:
         raise HTTPException(400, "仅支持播放视频文件")
     return FileResponse(target, media_type=media_type)
+
+
+def _share_base(request: Request) -> str:
+    """构造分享基址。
+
+    优先级：TXXY_SHARE_HOST（固定主机名/IP，如 192.168.1.5）> 请求 Host 主机 >
+    config.HOST 兜底。端口始终为独立分享端口（SHARE_PORT），使链接落到隔离的分享服务，
+    而非 8088 的前端 SPA。
+    """
+    scheme = (request.url.scheme or "http").split(":")[0]
+    # 优先固定主机名/IP（页内参数设置 share_host，回落到环境变量 TXXY_SHARE_HOST），
+    # 否则沿用请求 Host（自动适配局域网 IP / 域名）。每次请求都实时读取，覆盖值保存后立即生效且重启不丢。
+    share_host = settings.get("share_host", config.SHARE_HOST)
+    if share_host:
+        netloc = f"{share_host}:{config.SHARE_PORT}"
+    else:
+        # 未配置固定主机时沿用请求 Host（自动适配局域网 IP / 域名）。
+        host_header = request.headers.get("host", "")
+        if host_header:
+            # host 形如 192.168.1.5:8088 或 [::1]:8088
+            if "]" in host_header:
+                hostname = host_header.rsplit("]:", 1)[0] + "]"
+            elif ":" in host_header:
+                hostname = host_header.rsplit(":", 1)[0]
+            else:
+                hostname = host_header
+            netloc = f"{hostname}:{config.SHARE_PORT}"
+        else:
+            netloc = f"{config.HOST}:{config.SHARE_PORT}"
+    return f"{scheme}://{netloc}"
+
+
+class ShareCreateReq(BaseModel):
+    """创建分享链接：rel_paths 为 downloads/ 内相对路径列表（支持单文件或整目录多选）；
+    ttl 可选 1h/24h/7d/30d。"""
+
+    rel_paths: list[str]
+    ttl: str = "7d"
+
+
+@router.post("/share")
+def create_share_link(_: ShareRateLimit, req: ShareCreateReq, request: Request) -> dict[str, Any]:
+    """生成一个分享链接（写入 share 索引，由独立分享服务消费），一个链接可包含多个文件。"""
+    from share import create_share
+
+    try:
+        info = create_share(req.rel_paths, req.ttl)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {
+        "ok": True,
+        "url": f"{_share_base(request)}/share/{info['token']}",
+        "count": info["count"],
+        "name": info["name"],
+        "rels": info["rels"],
+        "ttl": req.ttl,
+        "expire_at": info["expire_at"],
+    }
 
 
 class ResourceDeleteReq(BaseModel):

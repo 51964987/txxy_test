@@ -266,13 +266,13 @@ export interface SettingItem {
   desc: string
   /** 生效范围：immediate=下一次调用即生效 / next_task=下一个任务生效 / frontend=前端直接应用 */
   scope: 'immediate' | 'next_task' | 'frontend'
-  type: 'int' | 'float' | 'bool' | 'array'
+  type: 'int' | 'float' | 'bool' | 'array' | 'text'
   min?: number | null
   max?: number | null
   /** array 类型：可选项的键与展示标签 */
   options?: { value: string; label: string }[]
-  value: number | boolean | string[]
-  default: number | boolean | string[]
+  value: number | boolean | string[] | string
+  default: number | boolean | string[] | string
   /** 来源：file=设置文件覆盖 / default=环境或默认 */
   source: 'file' | 'default'
 }
@@ -476,7 +476,7 @@ export type DownloadTask = DownloadTaskDetail
 
 export const api = {
   config: () => get<AppConfig>('/config'),
-  saveSettings: (items: Record<string, number | boolean | string[]>) =>
+  saveSettings: (items: Record<string, number | boolean | string[] | string>) =>
     put<{ ok: boolean; settings: SettingItem[] }>('/settings', { items }),
   resetSettings: (keys: string[] = []) =>
     post<{ ok: boolean; settings: SettingItem[] }>('/settings/reset', { keys }),
@@ -539,6 +539,13 @@ export const api = {
     post<{ ok: boolean }>('/resources/open-file', { rel_path: relPath }),
   resourceText: (path: string) => get<ResourceText>('/resources/text', { path }),
   resourceTorrent: (path: string) => get<TorrentInfo>('/resources/torrent', { path }),
+  /** 创建分享链接（独立 8090 分享服务，返回带过期时间的 url）。
+   *  relPaths 为 downloads/ 内相对路径列表，支持单文件或整目录多选分享。 */
+  createShare: (relPaths: string[], ttl: string) =>
+    post<{ ok: boolean; url: string; count: number; name: string; rels: string[]; ttl: string; expire_at: number }>(
+      '/share',
+      { rel_paths: relPaths, ttl },
+    ),
   deleteResource: (path: string, isDir: boolean, permanent = false) =>
     post<{ ok: boolean; rel: string }>('/resources/delete', {
       path,

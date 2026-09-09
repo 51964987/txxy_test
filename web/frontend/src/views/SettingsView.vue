@@ -16,7 +16,7 @@ const saving = ref(false)
 const loadError = ref('')
 const items = ref<SettingItem[]>([])
 // 表单草稿：key -> 值（保存前不写回 items，避免未保存就改了回显）
-const draft = ref<Record<string, number | boolean | string[]>>({})
+const draft = ref<Record<string, number | boolean | string[] | string>>({})
 
 /** 分组：与后端白名单顺序一致，按业务域切分（业界设置页通行做法） */
 const GROUPS: { title: string; desc: string; keys: string[] }[] = [
@@ -37,6 +37,11 @@ const GROUPS: { title: string; desc: string; keys: string[] }[] = [
     title: '资源与回收站',
     desc: '影响资源扫描实时性与回收站保留策略',
     keys: ['trash_keep_days', 'resources_scan_ttl'],
+  },
+  {
+    title: '分享链接',
+    desc: '控制生成的单文件分享链接指向的主机，便于局域网他人直接打开',
+    keys: ['share_host'],
   },
   {
     title: '界面',
@@ -65,7 +70,7 @@ function groupItems(keys: string[]): SettingItem[] {
 }
 
 /** 草稿值（未改动时取当前生效值） */
-function valueOf(it: SettingItem): number | boolean | string[] {
+function valueOf(it: SettingItem): number | boolean | string[] | string {
   const v = draft.value[it.key]
   return v === undefined ? it.value : v
 }
@@ -133,6 +138,9 @@ function setNumber(it: SettingItem, v: number | null) {
 
 function setBool(it: SettingItem, v: boolean | string | number) {
   draft.value[it.key] = Boolean(v)
+}
+function setText(it: SettingItem, v: string) {
+  draft.value[it.key] = v
 }
 
 async function save() {
@@ -274,6 +282,18 @@ onMounted(() => {
                 </div>
                 <div class="sr-default text-muted">默认：{{ arrayLabels(it, it.default as string[]) }}</div>
               </div>
+              <template v-else-if="it.type === 'text'">
+                <el-input
+                  :model-value="String(valueOf(it))"
+                  clearable
+                  placeholder="留空则自动取访问地址"
+                  class="sr-input"
+                  @input="(v: string) => setText(it, v)"
+                />
+                <div class="sr-default text-muted">
+                  默认：{{ it.default ? String(it.default) : '自动（取访问地址）' }}
+                </div>
+              </template>
               <template v-else>
                 <el-input-number
                   :model-value="Number(valueOf(it))"
