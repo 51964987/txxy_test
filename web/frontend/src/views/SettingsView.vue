@@ -16,7 +16,7 @@ const saving = ref(false)
 const loadError = ref('')
 const items = ref<SettingItem[]>([])
 // 表单草稿：key -> 值（保存前不写回 items，避免未保存就改了回显）
-const draft = ref<Record<string, number | boolean>>({})
+const draft = ref<Record<string, number | boolean | string[]>>({})
 
 /** 分组：与后端白名单顺序一致，按业务域切分（业界设置页通行做法） */
 const GROUPS: { title: string; desc: string; keys: string[] }[] = [
@@ -43,6 +43,11 @@ const GROUPS: { title: string; desc: string; keys: string[] }[] = [
     desc: '仅影响前端行为',
     keys: ['enable_auto_refresh'],
   },
+  {
+    title: '演示轮播',
+    desc: '投屏演示模式（Header「演示轮播」按钮）的行为，仅前端生效，保存后立即应用',
+    keys: ['carousel_interval', 'carousel_sections'],
+  },
 ]
 
 const SCOPE_TEXT: Record<SettingItem['scope'], string> = {
@@ -60,9 +65,45 @@ function groupItems(keys: string[]): SettingItem[] {
 }
 
 /** 草稿值（未改动时取当前生效值） */
-function valueOf(it: SettingItem): number | boolean {
+function valueOf(it: SettingItem): number | boolean | string[] {
   const v = draft.value[it.key]
   return v === undefined ? it.value : v
+}
+
+/** 数组型设置项的当前草稿值（缺省回落到已生效值） */
+function arrayValue(it: SettingItem): string[] {
+  const v = draft.value[it.key]
+  return Array.isArray(v) ? v : ((it.value as string[]) ?? [])
+}
+function isIncluded(it: SettingItem, key: string): boolean {
+  return arrayValue(it).includes(key)
+}
+function toggleSection(it: SettingItem, key: string) {
+  const cur = arrayValue(it)
+  let next: string[]
+  if (cur.includes(key)) {
+    next = cur.filter((k) => k !== key)
+  } else {
+    // 新增时按 options 规范顺序插入，保证默认次序稳定
+    const order = (it.options ?? []).map((o) => o.value)
+    next = cur.concat(key).sort((a, b) => order.indexOf(a) - order.indexOf(b))
+  }
+  draft.value[it.key] = next
+}
+function moveSection(it: SettingItem, key: string, dir: -1 | 1) {
+  const cur = arrayValue(it).slice()
+  const i = cur.indexOf(key)
+  const j = i + dir
+  if (i < 0 || j < 0 || j >= cur.length) return
+  const tmp = cur[i]
+  cur[i] = cur[j]
+  cur[j] = tmp
+  draft.value[it.key] = cur
+}
+/** 板块序列默认值用标签展示，便于回显 */
+function arrayLabels(it: SettingItem, keys: string[]): string {
+  const map = new Map((it.options ?? []).map((o) => [o.value, o.label]))
+  return keys.map((k) => map.get(k) ?? k).join(' → ')
 }
 
 const dirty = computed(() =>
@@ -208,18 +249,44 @@ onMounted(() => {
                 inactive-text="关"
                 @change="(v: boolean | string | number) => setBool(it, v)"
               />
-              <el-input-number
-                v-else
-                :model-value="Number(valueOf(it))"
-                :min="it.min ?? undefined"
-                :max="it.max ?? undefined"
-                :step="1"
-                :size="isMobile ? 'small' : 'default'"
-                controls-position="right"
-                class="sr-input"
-                @change="(v: number | null) => setNumber(it, v)"
-              />
-              <div class="sr-default text-muted">默认 {{ String(it.default) }}</div>
+              <div v-else-if="it.type === 'array'" class="sr-array">
+                <div v-for="opt in (it.options ?? [])" :key="opt.value" class="ar-row">
+                  <el-checkbox
+                    :model-value="isIncluded(it, opt.value)"
+                    @change="() => toggleSection(it, opt.value)"
+                  >{{ opt.label }}</el-checkbox>
+                  <span v-if="isIncluded(it, opt.value)" class="ar-move">
+                    <el-button
+                      link
+                      type="primary"
+                      size="small"
+                      :disabled="arrayValue(it)[0] === opt.value"
+                      @click="moveSection(it, opt.value, -1)"
+                    >上移</el-button>
+                    <el-button
+                      link
+                      type="primary"
+                      size="small"
+                      :disabled="arrayValue(it)[arrayValue(it).length - 1] === opt.value"
+                      @click="moveSection(it, opt.value, 1)"
+                    >下移</el-button>
+                  </span>
+                </div>
+                <div class="sr-default text-muted">默认：{{ arrayLabels(it, it.default as string[]) }}</div>
+              </div>
+              <template v-else>
+                <el-input-number
+                  :model-value="Number(valueOf(it))"
+                  :min="it.min ?? undefined"
+                  :max="it.max ?? undefined"
+                  :step="1"
+                  :size="isMobile ? 'small' : 'default'"
+                  controls-position="right"
+                  class="sr-input"
+                  @change="(v: number | null) => setNumber(it, v)"
+                />
+                <div class="sr-default text-muted">默认 {{ String(it.default) }}</div>
+              </template>
               <el-button link type="primary" size="small" @click="resetOne(it)">恢复默认</el-button>
             </div>
           </div>
@@ -320,6 +387,24 @@ onMounted(() => {
 
 .sr-input {
   width: 130px;
+}
+
+.sr-array {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 280px;
+}
+
+.ar-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.ar-move {
+  display: flex;
+  gap: 4px;
 }
 
 .sr-default {

@@ -266,11 +266,13 @@ export interface SettingItem {
   desc: string
   /** 生效范围：immediate=下一次调用即生效 / next_task=下一个任务生效 / frontend=前端直接应用 */
   scope: 'immediate' | 'next_task' | 'frontend'
-  type: 'int' | 'float' | 'bool'
+  type: 'int' | 'float' | 'bool' | 'array'
   min?: number | null
   max?: number | null
-  value: number | boolean
-  default: number | boolean
+  /** array 类型：可选项的键与展示标签 */
+  options?: { value: string; label: string }[]
+  value: number | boolean | string[]
+  default: number | boolean | string[]
   /** 来源：file=设置文件覆盖 / default=环境或默认 */
   source: 'file' | 'default'
 }
@@ -474,7 +476,7 @@ export type DownloadTask = DownloadTaskDetail
 
 export const api = {
   config: () => get<AppConfig>('/config'),
-  saveSettings: (items: Record<string, number | boolean>) =>
+  saveSettings: (items: Record<string, number | boolean | string[]>) =>
     put<{ ok: boolean; settings: SettingItem[] }>('/settings', { items }),
   resetSettings: (keys: string[] = []) =>
     post<{ ok: boolean; settings: SettingItem[] }>('/settings/reset', { keys }),

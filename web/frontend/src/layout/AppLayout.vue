@@ -117,21 +117,35 @@ onUnmounted(() => {
             <span class="text-muted auto-label">自动刷新</span>
             <el-switch v-model="store.autoRefresh" size="small" @change="onAutoChange" />
           </div>
-          <!-- 全屏（真）时挂 body 的弹层不可见：tooltip 改为就地挂载 -->
-          <el-tooltip
-            v-if="isDashboard"
-            :content="app.fullscreen ? '退出大屏（Esc）' : '进入大屏'"
-            placement="bottom"
-            :teleported="!app.fullscreen"
-          >
-            <el-button
-              class="fs-btn"
-              text
-              :icon="app.fullscreen ? 'Aim' : 'FullScreen'"
-              aria-label="切换大屏"
-              @click="onFullscreenToggle"
-            />
-          </el-tooltip>
+          <!-- 全屏 + 投屏：同属「演示」相关操作，整体收窄间距 -->
+          <div class="header-actions" v-if="isDashboard">
+            <el-tooltip
+              :content="app.fullscreen ? '退出大屏（Esc）' : '进入大屏'"
+              placement="bottom"
+              :teleported="!app.fullscreen"
+            >
+              <el-button
+                class="fs-btn"
+                text
+                :icon="app.fullscreen ? 'Aim' : 'FullScreen'"
+                aria-label="切换大屏"
+                @click="onFullscreenToggle"
+              />
+            </el-tooltip>
+            <el-tooltip
+              :content="store.carouselActive ? '退出演示轮播' : '演示轮播（投屏）'"
+              placement="bottom"
+              :teleported="!app.fullscreen"
+            >
+              <el-button
+                class="fs-btn"
+                text
+                :icon="store.carouselActive ? 'Aim' : 'VideoPlay'"
+                aria-label="演示轮播"
+                @click="store.toggleCarousel()"
+              />
+            </el-tooltip>
+          </div>
         </div>
       </el-header>
       <el-main class="main">
@@ -179,6 +193,17 @@ onUnmounted(() => {
   gap: 16px;
   min-width: 0;
   position: relative; /* 全屏时就地挂载的 popper 以本容器为定位基准 */
+}
+
+/* 全屏 + 投屏同属演示操作：内部间距收到最小，与左侧控件保持整体节奏 */
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0; /* 两按钮紧邻，仅留图标自身极小内边距 */
+}
+.header-actions .fs-btn {
+  padding-left: 2px;
+  padding-right: 2px;
 }
 
 .menu-btn,

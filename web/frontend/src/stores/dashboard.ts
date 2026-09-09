@@ -17,6 +17,21 @@ export const useDashboardStore = defineStore('dashboard', () => {
   // 最后更新时间（Dashboard 加载成功后更新）
   const updatedAtRaw = ref<string | null>(null)
 
+  // 演示轮播（投屏模式）：独立开关，仅控制视图滚动，不影响数据刷新。
+  // 与「全屏」解耦——可单独开，也可叠加全屏投屏（见 DashboardView 的轮播逻辑）。
+  const carouselActive = ref(false)
+  const carouselPaused = ref(false)
+  function setCarouselActive(v: boolean) {
+    carouselActive.value = v
+    if (!v) carouselPaused.value = false // 退出时复位暂停态
+  }
+  function toggleCarousel() {
+    setCarouselActive(!carouselActive.value)
+  }
+  function setCarouselPaused(p: boolean) {
+    carouselPaused.value = p
+  }
+
   const updatedAtText = computed(() => {
     if (!updatedAtRaw.value) return '更新于 --'
     // 兼容旧 ISO 字符串与新 Unix 秒时间戳两种形态
@@ -82,5 +97,10 @@ export const useDashboardStore = defineStore('dashboard', () => {
     registerAutoChange,
     setAutoRefresh,
     setEnableAutoRefresh,
+    carouselActive,
+    carouselPaused,
+    setCarouselActive,
+    toggleCarousel,
+    setCarouselPaused,
   }
 })

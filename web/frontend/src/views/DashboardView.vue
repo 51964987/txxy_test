@@ -993,6 +993,10 @@ function stopAllTimers() {
     clearInterval(refreshTimer)
     refreshTimer = null
   }
+  if (carouselTimer) {
+    clearInterval(carouselTimer)
+    carouselTimer = null
+  }
   stopTrendCarousel()
   if (fidTrendTipTimer) {
     clearInterval(fidTrendTipTimer)
@@ -1005,6 +1009,7 @@ function resumeAllTimers() {
   if (store.autoRefresh) autoRefreshTick()
   syncAutoRefresh()
   if (trendChart.value && trend.value.length) startTrendCarousel(0)
+  if (store.carouselActive) createCarouselTimer()
 }
 
 function onVisibilityChange() {
@@ -1060,6 +1065,7 @@ onMounted(() => {
     window.addEventListener('resize', onResize)
   }
   document.addEventListener('visibilitychange', onVisibilityChange)
+  window.addEventListener('keydown', onKeydown)
 })
 
 /**
@@ -1076,6 +1082,143 @@ watch(
     await Promise.allSettled([loadBoards(), loadFidTrend()])
   },
 )
+
+// ============================================================
+// 演示轮播（投屏模式）：独立开关，仅控制视图滚动，不影响数据刷新；
+// 与「全屏」解耦——可单独开，也可叠加全屏投屏。
+// 复用 stopAllTimers / resumeAllTimers 的页面可见性暂停框架（后台标签不空转轮播）。
+// ============================================================
+// 板块锚点：key（与后端 carousel_sections 白名单对齐）→ 页面元素 id。
+// 总览首屏 / 趋势 / 活跃榜 / 热门榜为四个真实垂直滚动位置，可自由组合与排序。
+const SECTION_IDS: Record<string, string> = {
+  overview: 'section-overview',
+  trend: 'section-trend',
+  ranks: 'section-ranks',
+  boards: 'section-boards',
+}
+const CAROUSEL_DEFAULT_ORDER = ['overview', 'trend', 'ranks', 'boards']
+const CAROUSEL_DEFAULT_INTERVAL_MS = 8000
+let carouselTimer: ReturnType<typeof setInterval> | null = null
+const carouselIdx = ref(0)
+// 运行时轮播配置：来自「参数设置」页；进入轮播时拉取一次（运行中不变）
+let carouselSections: string[] = CAROUSEL_DEFAULT_ORDER
+let carouselIntervalMs = CAROUSEL_DEFAULT_INTERVAL_MS
+
+/** 从「参数设置」页读取轮播间隔与板块序列；读取失败回落默认 */
+async function loadCarouselConfig() {
+  try {
+    const cfg = await api.config()
+    const intervalItem = cfg.settings.find((s) => s.key === 'carousel_interval')
+    const sectionsItem = cfg.settings.find((s) => s.key === 'carousel_sections')
+    const secKeys = Array.isArray(sectionsItem?.value)
+      ? (sectionsItem!.value as string[])
+      : CAROUSEL_DEFAULT_ORDER
+    const valid = secKeys.filter((k) => SECTION_IDS[k])
+    carouselSections = valid.length ? valid : CAROUSEL_DEFAULT_ORDER
+    const sec = typeof intervalItem?.value === 'number' ? intervalItem.value : 8
+    carouselIntervalMs = sec * 1000
+  } catch {
+    carouselSections = CAROUSEL_DEFAULT_ORDER
+    carouselIntervalMs = CAROUSEL_DEFAULT_INTERVAL_MS
+  }
+}
+
+function scrollToSection(idx: number) {
+  const id = SECTION_IDS[carouselSections[idx]]
+  if (!id) return
+  document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
+
+/** 仅创建/重置轮播定时器（不复位滚动位置，供页面恢复可见时续播） */
+function createCarouselTimer() {
+  if (carouselTimer) clearInterval(carouselTimer)
+  carouselTimer = setInterval(() => {
+    // 悬停暂停：用户想看 tooltip / 下钻时不被强制滚走
+    if (store.carouselPaused) return
+    carouselIdx.value = (carouselIdx.value + 1) % carouselSections.length
+    scrollToSection(carouselIdx.value)
+  }, carouselIntervalMs)
+}
+
+async function startCarousel() {
+  await loadCarouselConfig()
+  // 进入即预加载 P1 热门榜，避免轮播到 boards 时仍是骨架
+  if (!boards.value) void loadBoards()
+  carouselIdx.value = 0
+  scrollToSection(0)
+  createCarouselTimer()
+}
+
+function stopCarousel() {
+  if (carouselTimer) {
+    clearInterval(carouselTimer)
+    carouselTimer = null
+  }
+  store.setCarouselPaused(false)
+  // 复位到总览首屏顶部
+  document.getElementById('section-overview')?.scrollIntoView({ block: 'start' })
+}
+
+/** 仅清定时器（页面隐藏时调用，不复位滚动位置，恢复时直接续播） */
+function stopCarouselTimer() {
+  if (carouselTimer) {
+    clearInterval(carouselTimer)
+    carouselTimer = null
+  }
+}
+
+function nextSlide() {
+  carouselIdx.value = (carouselIdx.value + 1) % carouselSections.length
+  scrollToSection(carouselIdx.value)
+}
+
+function prevSlide() {
+  carouselIdx.value = (carouselIdx.value - 1 + carouselSections.length) % carouselSections.length
+  scrollToSection(carouselIdx.value)
+}
+
+function toggleCarouselPause() {
+  store.setCarouselPaused(!store.carouselPaused)
+}
+
+// 鼠标进入大屏区域即暂停轮播，移出恢复（与趋势轮播悬停暂停同范式）
+function onRootMouseEnter() {
+  if (store.carouselActive) store.setCarouselPaused(true)
+}
+function onRootMouseLeave() {
+  if (store.carouselActive) store.setCarouselPaused(false)
+}
+
+// 控制条可见性：收起后保留极简唤回入口，轮播本身继续运行
+const barHidden = ref(false)
+function toggleBarHidden() {
+  barHidden.value = !barHidden.value
+}
+
+// 监听 store 中的演示开关，启停轮播
+watch(
+  () => store.carouselActive,
+  (v) => {
+    if (v) {
+      void startCarousel()
+      barHidden.value = false // 重新进入演示时复位为展开态
+    } else {
+      stopCarousel()
+    }
+  },
+)
+
+// 键盘：Esc 完全退出演示；H 仅收起/展开控制条（轮播继续）
+function onKeydown(e: KeyboardEvent) {
+  if (!store.carouselActive) return
+  if (e.key === 'Escape') {
+    store.setCarouselActive(false)
+  } else if (e.key === 'h' || e.key === 'H') {
+    // 输入框聚焦时不拦截，避免影响正常打字
+    const tag = (e.target as HTMLElement | null)?.tagName
+    if (tag !== 'INPUT' && tag !== 'TEXTAREA') toggleBarHidden()
+  }
+}
 
 onBeforeUnmount(() => {
   if (refreshTimer) {
@@ -1108,6 +1251,8 @@ onBeforeUnmount(() => {
     fidChart.value.dispose()
     fidChart.value = null
   }
+  stopCarouselTimer()
+  window.removeEventListener('keydown', onKeydown)
   stopTrendCarousel()
   store.registerAutoChange(null)
   resizeObserver?.disconnect()
@@ -1637,9 +1782,9 @@ function renderFidTrendChart() {
 </script>
 
 <template>
-  <div ref="rootRef" class="dashboard" :class="{ 'is-fullscreen': app.fullscreen }">
+  <div ref="rootRef" class="dashboard" :class="{ 'is-fullscreen': app.fullscreen }" @mouseenter="onRootMouseEnter" @mouseleave="onRootMouseLeave">
     <!-- 统计卡片 -->
-    <div class="stat-grid">
+    <div id="section-overview" class="stat-grid">
       <template v-if="overview">
         <div class="stat-card">
           <div class="stat-icon" style="background: linear-gradient(135deg, #4f83f1, #2f6fed)">
@@ -1705,7 +1850,7 @@ function renderFidTrendChart() {
     </div>
 
     <!-- 每日发布趋势：全站趋势 + 分版块 同行各占 1/2 -->
-    <div class="trend-row">
+    <div id="section-trend" class="trend-row">
     <div
       ref="trendCardRef"
       class="page-card chart-card trend-half"
@@ -1854,7 +1999,7 @@ function renderFidTrendChart() {
     </div>
 
     <!-- 图表（P0）：左活跃作者 + 右活跃版块，均为横向条形图 -->
-    <div class="chart-row">
+    <div id="section-ranks" class="chart-row">
       <div class="page-card chart-card">
         <div class="chart-head" style="margin-bottom: 6px">
           <div class="chart-head-left">
@@ -1916,7 +2061,7 @@ function renderFidTrendChart() {
     <!-- 热门榜 + 最近抓取（P1：懒加载） -->
     <div ref="p1AreaRef">
       <!-- 热门榜 -->
-      <div class="board-row">
+      <div id="section-boards" class="board-row">
         <div class="page-card chart-card">
           <div class="chart-head" style="margin-bottom: 8px">
             <span class="chart-title">点赞最高帖</span>
@@ -2106,6 +2251,29 @@ function renderFidTrendChart() {
       </div>
 
     </div>
+
+    <!-- 演示轮播控制条：仅演示模式显示，固定底部居中；Esc 退出 / H 收起 -->
+    <div v-if="store.carouselActive && !barHidden" class="carousel-bar">
+      <span class="cb-title">演示轮播</span>
+      <el-button size="small" text @click="prevSlide()">‹ 上一项</el-button>
+      <el-button size="small" text :icon="store.carouselPaused ? 'VideoPlay' : 'Timer'" @click="toggleCarouselPause()">
+        {{ store.carouselPaused ? '播放' : '暂停' }}
+      </el-button>
+      <el-button size="small" text @click="nextSlide()">下一项 ›</el-button>
+      <el-button size="small" text title="收起控制条（H 键）" @click="barHidden = true">收起</el-button>
+      <el-button size="small" type="primary" @click="store.toggleCarousel()">退出</el-button>
+    </div>
+    <!-- 收起态：极简唤回入口，轮播继续；点击或 H 键展开 -->
+    <transition name="cb-fade">
+      <div
+        v-if="store.carouselActive && barHidden"
+        class="carousel-bar-mini"
+        @click="barHidden = false"
+      >
+        <el-icon><VideoPlay /></el-icon>
+        <span>演示轮播 · 点击展开</span>
+      </div>
+    </transition>
   </div>
 </template>
 
@@ -2213,6 +2381,69 @@ function renderFidTrendChart() {
 
 .card-fs-btn {
   flex-shrink: 0;
+}
+
+/* 演示轮播控制条：固定底部居中，覆盖在大屏内容之上（z-index 高于卡片全屏） */
+.carousel-bar {
+  position: fixed;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  z-index: 4000;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: rgba(20, 28, 48, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+  color: #e6ebf5;
+}
+.carousel-bar .cb-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #a8c5ff;
+  margin-right: 4px;
+}
+.carousel-bar .el-button {
+  color: #e6ebf5;
+}
+.carousel-bar .el-button:hover {
+  color: #fff;
+}
+
+/* 收起态：极简唤回入口，固定在底部居中，不遮挡内容 */
+.carousel-bar-mini {
+  position: fixed;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  z-index: 4000;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  background: rgba(20, 28, 48, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+  color: #e6ebf5;
+  font-size: 12px;
+  cursor: pointer;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  transition: background 0.2s, color 0.2s;
+}
+.carousel-bar-mini:hover {
+  background: rgba(20, 28, 48, 0.92);
+  color: #fff;
+}
+.cb-fade-enter-active,
+.cb-fade-leave-active {
+  transition: opacity 0.25s ease;
+}
+.cb-fade-enter-from,
+.cb-fade-leave-to {
+  opacity: 0;
 }
 
 .chart-head {

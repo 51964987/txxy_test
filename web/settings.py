@@ -92,6 +92,25 @@ WHITELIST: dict[str, dict[str, Any]] = {
         "scope": "frontend",
         "desc": "关闭后数据总览不显示自动刷新开关、不启动轮询",
     },
+    "carousel_interval": {
+        "label": "演示轮播停留时长（秒）",
+        "min": 3,
+        "max": 60,
+        "scope": "frontend",
+        "desc": "投屏演示模式下每个板块停留在屏幕上的秒数；超出范围自动收敛",
+    },
+    "carousel_sections": {
+        "label": "演示轮播板块序列",
+        "type": "array",
+        "scope": "frontend",
+        "options": [
+            {"value": "overview", "label": "总览首屏（KPI 指标）"},
+            {"value": "trend", "label": "每日发布趋势 + 分版块趋势"},
+            {"value": "ranks", "label": "活跃作者 / 活跃 fid 榜"},
+            {"value": "boards", "label": "热门榜（点赞/回复/最新最热/本月最热）"},
+        ],
+        "desc": "演示轮播依次切换的板块与顺序：勾选即纳入、上下移动调整顺序",
+    },
 }
 
 SETTINGS_FILE = Path(
@@ -100,6 +119,9 @@ SETTINGS_FILE = Path(
 
 _lock = threading.Lock()
 _values: dict[str, Any] | None = None
+
+# 演示轮播默认板块序列（与前端 SECTION_IDS 的键对齐）；顺序即轮播切换顺序
+CAROUSEL_SECTIONS_DEFAULT: list[str] = ["overview", "trend", "ranks", "boards"]
 
 
 def _load() -> dict[str, Any]:
@@ -141,6 +163,10 @@ def _env_or_default(key: str) -> Any:
         return download_files.MAX_RETRIES
     if key == "download_retry_delay":
         return download_files.RETRY_DELAY
+    if key == "carousel_interval":
+        return 8
+    if key == "carousel_sections":
+        return CAROUSEL_SECTIONS_DEFAULT
     # resources_scan_ttl 的默认值由调用方传入（resources._CACHE_TTL）
     return None
 
@@ -178,14 +204,24 @@ def get_bool(key: str, fallback: bool) -> bool:
 
 def _clamp(key: str, value: Any) -> Any:
     spec = WHITELIST[key]
-    if spec.get("type") == "bool":
+    t = spec.get("type", "int")
+    if t == "bool":
         return bool(value)
+    if t == "array":
+        allowed = {o["value"] for o in spec.get("options", [])}
+        if not isinstance(value, (list, tuple)):
+            value = []
+        seen: list[str] = []
+        for v in value:
+            if v in allowed and v not in seen:
+                seen.append(v)
+        return seen
     try:
         num = float(value)
     except (TypeError, ValueError):
         raise ValueError(f"「{spec['label']}」必须是数字")
     num = max(float(spec["min"]), min(float(spec["max"]), num))
-    return int(num) if spec.get("type", "int") == "int" else num
+    return int(num) if t == "int" else num
 
 
 def snapshot() -> list[dict[str, Any]]:
@@ -205,6 +241,7 @@ def snapshot() -> list[dict[str, Any]]:
                 "type": spec.get("type", "int"),
                 "min": spec.get("min"),
                 "max": spec.get("max"),
+                "options": spec.get("options"),
                 "value": value,
                 "default": default,
                 "source": "file" if overridden else "default",
