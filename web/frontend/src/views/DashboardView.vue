@@ -601,15 +601,6 @@ function renderHBarChart(
   lastKeyRef.v = key
   // 窄屏判定以「图表容器实际宽度」为准（比 window 宽度可靠：侧栏/全屏都会改变容器）
   const narrow = (el.clientWidth || window.innerWidth) < RANK_NARROW_W
-  // 最大值：短柱内部放不下环比文字时按比例省略
-  const maxValue = Math.max(1, ...items.map((d) => d.value))
-  // 绘图区宽度（柱条可用像素）：容器宽 − 左侧留白 − 类目标签 − 条尾留白
-  const plotWidth = Math.max(
-    60,
-    (el.clientWidth || window.innerWidth) - (narrow ? 4 + 56 + 52 : 8 + 74 + 92),
-  )
-  // 柱内环比文字宽度（「↑12%」约 30px）+ 内边距，用于按像素判断是否放得下
-  const insideTextWidth = 36
   const c = chart.value ??= initChart(el)
   c.setOption(
     {
@@ -636,13 +627,11 @@ function renderHBarChart(
           return `${p.name}<br/>${label} ${p.value.toLocaleString()} 条<br/>${p.data.extra ?? ''}<br/>${cmp}`
         },
       },
-      // 右侧留出条尾「数值」的空间，避免长标签被裁切。
-      // 窄屏（画布 < RANK_NARROW_W）按自适应收窄：桌面的 74px 类目标签 + 92px 条尾
-      // 在 312px 画布上会把柱条压到只剩约 44% 宽（用户反馈「被压到一半展示」）。
-      // 窄屏口径：数值仍放条尾外侧（需留足约 52px，否则会像「23,」一样被裁半个），
-      // 环比改放柱子内部靠右（白字），短柱放不下时自动省略——tooltip 里始终完整。
+      // 右侧留足条尾「数值 + 环比」的空间，避免被裁切。
+      // 窄屏（画布 < RANK_NARROW_W）按自适应收窄：收紧类目标签（56px）与右留白（84px），
+      // 既不让柱条被压到一半，也保证「数值 + 环比」始终在条尾完整显示（不再挪进柱体内部）。
       grid: narrow
-        ? { left: 4, right: 52, top: 6, bottom: 6, containLabel: true }
+        ? { left: 4, right: 84, top: 6, bottom: 6, containLabel: true }
         : { left: 8, right: 92, top: 6, bottom: 6, containLabel: true },
       // Y 轴横向线显示，X 轴竖向线隐藏（项目图表网格线规则）
       xAxis: {
@@ -681,53 +670,20 @@ function renderHBarChart(
             position: 'right',
             distance: 4,
             // 条尾同时给出主值与环比：涨跌用颜色区分，一眼看出谁在上升。
-            // 窄屏条尾只留主值——环比挪进柱体内部（见下方叠加层），
-            // 否则右侧留白不足会把「23,752」裁成「23,」。
+            // 窄屏同样在条尾显示（仅字号略小），靠 grid 右留白（84px）保证「数值 + 环比」完整不裁切。
             formatter: (p: any) => {
-              if (narrow) return `{v|${p.value.toLocaleString()}}`
               const d = deltaText(p.data.delta)
               return `{v|${p.value.toLocaleString()}}  {${d.cls}|${d.text}}`
             },
             rich: {
-              v: { color: '#606266', fontSize: 11 },
-              up: { color: '#10b981', fontSize: 11 },
-              down: { color: '#ef4444', fontSize: 11 },
-              flat: { color: '#909399', fontSize: 11 },
-              new: { color: '#f59e0b', fontSize: 11 },
+              v: { color: '#606266', fontSize: narrow ? 10 : 11 },
+              up: { color: '#10b981', fontSize: narrow ? 10 : 11 },
+              down: { color: '#ef4444', fontSize: narrow ? 10 : 11 },
+              flat: { color: '#909399', fontSize: narrow ? 10 : 11 },
+              new: { color: '#f59e0b', fontSize: narrow ? 10 : 11 },
             },
           },
         },
-        // 窄屏专用：同长透明柱叠加（barGap -100%），把环比文字画在柱体内部靠右。
-        // 用叠加层而非改主系列标签——主系列的条尾标签位置/富文本要保持不变。
-        ...(narrow
-          ? [
-              {
-                type: 'bar',
-                barWidth: 12,
-                barGap: '-100%',
-                silent: true,
-                data: items.map((d) => ({ value: d.value, delta: d.delta })),
-                itemStyle: { color: 'transparent' },
-                label: {
-                  show: true,
-                  position: 'insideRight' as const,
-                  distance: 4,
-                  // 按「实际可用像素」判断是否放得下：固定比例阈值（如 0.25）在长尾分布下
-                  // 会误杀——活跃作者第 1 名 23,752、第 2 名 5,612 只占 23.6%，
-                  // 结果只有第 1 根显示。改为「柱子像素长 ≥ 文字宽 + 间距」才省略。
-                  formatter: (p: any) =>
-                    (p.value / maxValue) * plotWidth >= insideTextWidth
-                      ? deltaText(p.data.delta).text
-                      : '',
-                  color: '#fff',
-                  fontSize: 10,
-                  textShadowColor: 'rgba(0,0,0,0.35)',
-                  textShadowBlur: 2,
-                },
-                tooltip: { show: false },
-              },
-            ]
-          : []),
       ],
     },
     true,
