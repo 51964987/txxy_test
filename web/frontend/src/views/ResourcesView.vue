@@ -154,11 +154,6 @@ function openSourceUrl(name: string) {
   if (url) window.open(url)
 }
 
-function goSourcePosts(name: string) {
-  const title = sourceOf(name)?.title ?? name
-  void router.push({ path: '/posts', query: { q: title } })
-}
-
 /** Top10 大文件的「原帖」：rel_path 首段即目录名（= 帖子标题），据此回溯来源帖 */
 function openFileSource(file: ResourceFile) {
   openSourceUrl(String(file.rel_path).split('/')[0])
@@ -1746,15 +1741,6 @@ onBeforeUnmount(() => {
                 >
                   原帖
                 </el-button>
-                <el-button
-                  v-if="sourceOf(item.name)?.matched"
-                  link
-                  type="primary"
-                  class="del-btn"
-                  @click.stop="goSourcePosts(item.name)"
-                >
-                  看帖子
-                </el-button>
                 <el-button link type="danger" class="del-btn" @click.stop="removeFolder(item)">
                   删除目录
                 </el-button>
@@ -1770,12 +1756,6 @@ onBeforeUnmount(() => {
                       @click="openSourceUrl(item.name)"
                     >
                       原帖
-                    </el-dropdown-item>
-                    <el-dropdown-item
-                      v-if="sourceOf(item.name)?.matched"
-                      @click="goSourcePosts(item.name)"
-                    >
-                      看帖子
                     </el-dropdown-item>
                     <el-dropdown-item divided @click="removeFolder(item)">删除目录</el-dropdown-item>
                   </el-dropdown-menu>

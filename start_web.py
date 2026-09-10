@@ -16,12 +16,15 @@
 自动按优先级（TXXY_PYTHON 环境变量 → 当前解释器 → 项目 .venv → run_daily.bat
 中配置的解释器）寻找可用 Python 后重新启动自身，无需手动切换环境。
 """
+import atexit
 import importlib.util
 import os
 import re
 import subprocess
 import sys
 from typing import Protocol, cast
+
+import file_logger
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 WEB_DIR = os.path.join(BASE_DIR, "web")
@@ -128,6 +131,62 @@ def build_frontend() -> None:
         print("[警告] 前端构建失败，将以现有 dist 启动，页面可能不是最新版本。", file=sys.stderr)
 
 
+def _start_share_service() -> "subprocess.Popen[bytes] | None":
+    """以子进程方式启动分享服务，与主服务共用同一命令窗口（不再另开窗口）。
+
+    监听地址/端口沿用主服务环境变量（TXXY_WEB_HOST / TXXY_SHARE_PORT），由子进程内
+    web/config 读取，保证两服务配置一致。日志由子进程内的 file_logger 统一双写控制台
+    与 outputs/<日期>/share_*.log，不再在此单独重定向（避免重复造轮子）。
+    """
+    py = sys.executable
+    share_port = os.environ.get("TXXY_SHARE_PORT", "8090")
+    try:
+        proc = subprocess.Popen(
+            [py, "-X", "utf8", os.path.join(WEB_DIR, "share_server.py")],
+            cwd=BASE_DIR,
+            close_fds=True,
+        )
+    except OSError as e:
+        print(f"[警告] 分享服务启动失败，分享链接功能将不可用：{e}", file=sys.stderr)
+        return None
+    print(f"[分享服务] 已启动（端口 {share_port}，PID={proc.pid}；日志同屏显示并写入 outputs/ 下 share 日志文件）")
+    return proc
+
+
+def _stop_share_service(proc: "subprocess.Popen[bytes] | None") -> None:
+    """停止分享服务子进程（同一进程树，主服务退出时统一清理，避免残留孤立进程）。"""
+    if proc is None or proc.poll() is not None:
+        return
+    pid = proc.pid
+    # Windows 下 Popen.terminate/kill 均通过 TerminateProcess 结束进程；
+    # 用 taskkill /T 连带其可能产生的子进程（如 uvicorn worker）一并清理。
+    try:
+        proc.terminate()
+    except Exception:
+        pass
+    try:
+        _ = proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        try:
+            _ = proc.wait(timeout=5)
+        except Exception:
+            pass
+    if proc.poll() is None:
+        try:
+            _ = subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(pid)],
+                capture_output=True,
+                timeout=5,
+            )
+        except Exception:
+            pass
+    print("[分享服务] 已随主服务退出而停止。")
+
+
 def main() -> None:
     _ensure_python_env()
     rebuild = _should_rebuild()
@@ -141,6 +200,21 @@ def main() -> None:
             print(f"[警告] dist 不存在（{DIST_DIR}），自动执行构建")
             build_frontend()
 
+    # 清理过期日志（Web 为长驻进程，启动成功时清一次，与 file_logger 的保留期策略一致）
+    try:
+        removed = file_logger.cleanup_old_logs()
+        if removed:
+            print(f"[日志清理] 已清理 {removed} 个过期日志文件")
+    except Exception as e:  # 清理失败不应阻断启动
+        print(f"[警告] 过期日志清理失败（不影响启动）：{e}", file=sys.stderr)
+
+    # 分享服务以子进程方式随主服务同窗口启动（不再由 bat 用 start /min 另开窗口）：
+    # 监听地址/端口沿用主服务的 TXXY_WEB_HOST / TXXY_SHARE_PORT，保证两服务一致；
+    # 主服务退出时统一清理，避免留下第二个命令窗口或孤立进程。
+    share_proc = _start_share_service()
+    if share_proc is not None:
+        _ = atexit.register(_stop_share_service, share_proc)
+
     # 启动 web 服务：从显式文件路径加载 web/app.py（等价于在 web/ 目录执行 app.py，
     # 其内部 from config import / from api import 依赖 web/ 在 sys.path，故先注入）。
     # 用 importlib 而非 import app：让静态分析器能解析模块来源（避免 reportMissingImports）。
@@ -152,7 +226,12 @@ def main() -> None:
         sys.exit(1)
     web_app = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(web_app)
-    cast(_WebAppModule, cast(object, web_app)).main()
+    try:
+        # uvicorn.run 阻塞，直到主服务停止（Ctrl+C / 退出）；结束后清理分享子进程
+        cast(_WebAppModule, cast(object, web_app)).main()
+    finally:
+        if share_proc is not None:
+            _stop_share_service(share_proc)
 
 
 if __name__ == "__main__":

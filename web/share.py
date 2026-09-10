@@ -255,7 +255,9 @@ _GALLERY_TPL = """<!doctype html>
   /* 滑动轨道：等量 slide 横排，transform 平移切页；touch-action:none 交由 JS 统一处理手势；
      底部预留缩略图条高度，避免内容被遮挡 */
   #lb-track { position: fixed; inset: 0; z-index: 1001; display: flex; flex-wrap: nowrap;
-              will-change: transform; touch-action: none; padding-bottom: 72px; }
+              will-change: transform; touch-action: none; padding-bottom: 72px;
+              /* 缩略图条显示/隐藏时平滑切换底部预留，隐藏后媒体铺满视口 */
+              transition: padding-bottom .3s cubic-bezier(.22,.61,.36,1); }
   .lb-slide { flex: 0 0 100%; width: 100%; height: 100%; display: flex;
               align-items: center; justify-content: center; overflow: hidden; }
   .lb-media { max-width: 100%; max-height: 100%; object-fit: contain;
@@ -570,10 +572,14 @@ __GRID__
     var controls = [bar, strip].filter(Boolean);
     function showBar() {
       controls.forEach(function (c) { c.style.opacity = '1'; c.style.pointerEvents = 'auto'; });
+      track.style.paddingBottom = '72px';        // 缩略图条显示时预留底部空间
       if (barTimer) clearTimeout(barTimer);
       barTimer = setTimeout(hideBar, 2600);
     }
-    function hideBar() { controls.forEach(function (c) { c.style.opacity = '0'; c.style.pointerEvents = 'none'; }); }
+    function hideBar() {
+      controls.forEach(function (c) { c.style.opacity = '0'; c.style.pointerEvents = 'none'; });
+      track.style.paddingBottom = '0';           // 缩略图条隐藏后，媒体铺满整个视口（放大铺满，不再留黑边）
+    }
     lb.addEventListener('pointermove', showBar);
     lb.addEventListener('click', function () { showBar(); });
 

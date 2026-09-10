@@ -1,0 +1,366 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>文件「分享」功能逻辑说明</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f5f7fa;
+    --card: #ffffff;
+    --line: #e4e7ed;
+    --ink: #1f2d3d;
+    --muted: #909399;
+    --blue: #409eff;
+    --blue-soft: #ecf5ff;
+    --code-bg: #0f1b2d;
+    --code-ink: #e6edf3;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    font-family: system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: var(--bg);
+    color: var(--ink);
+    line-height: 1.75;
+  }
+  header.hero {
+    background: linear-gradient(135deg, #2b5876 0%, #4e4376 100%);
+    color: #fff;
+    padding: 40px 24px 32px;
+  }
+  header.hero .wrap { max-width: 1100px; margin: 0 auto; }
+  header.hero h1 { margin: 0 0 8px; font-size: 28px; }
+  header.hero p { margin: 0; opacity: .9; font-size: 15px; }
+  .container { max-width: 1100px; margin: 0 auto; padding: 24px; }
+  .toc {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 18px 22px;
+    margin-bottom: 28px;
+  }
+  .toc h2 { margin: 0 0 10px; font-size: 16px; }
+  .toc ol { margin: 0; padding-left: 20px; columns: 2; column-gap: 32px; }
+  .toc a { color: var(--blue); text-decoration: none; }
+  .toc a:hover { text-decoration: underline; }
+  section.card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 22px 26px;
+    margin-bottom: 22px;
+  }
+  section.card h2 {
+    margin: 0 0 4px;
+    font-size: 20px;
+    border-left: 4px solid var(--blue);
+    padding-left: 12px;
+  }
+  section.card h3 { font-size: 16px; margin: 22px 0 8px; color: #303133; }
+  section.card p { margin: 10px 0; }
+  code, .path {
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    background: #f0f2f5;
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-size: 13px;
+    color: #c0341d;
+  }
+  pre {
+    background: var(--code-bg);
+    color: var(--code-ink);
+    padding: 16px 18px;
+    border-radius: 10px;
+    overflow-x: auto;
+    font-size: 13px;
+    line-height: 1.6;
+  }
+  pre code { background: none; color: inherit; padding: 0; }
+  table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 14px; }
+  th, td { border: 1px solid var(--line); padding: 8px 12px; text-align: left; vertical-align: top; }
+  th { background: var(--blue-soft); color: #1d2129; }
+  .ref { background: #fafcff; border: 1px dashed #c6e2ff; border-radius: 10px; padding: 12px 16px; margin: 14px 0; }
+  .ref .label { font-weight: 600; color: var(--blue); }
+  .ref a { color: var(--blue); }
+  ul, ol { padding-left: 22px; }
+  li { margin: 4px 0; }
+  .note { color: var(--muted); font-size: 13px; }
+  .flow { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 14px 0; }
+  .flow .box {
+    background: var(--blue-soft);
+    border: 1px solid #c6e2ff;
+    border-radius: 8px;
+    padding: 8px 14px;
+    font-size: 13px;
+  }
+  .flow .arrow { color: var(--muted); font-weight: 700; }
+  .tag {
+    display: inline-block; font-size: 12px; padding: 1px 8px; border-radius: 10px;
+    background: #eef1f6; color: #606266; margin-right: 4px;
+  }
+  footer { text-align: center; color: var(--muted); font-size: 13px; padding: 24px; }
+  @media (max-width: 640px) { .toc ol { columns: 1; } .container { padding: 14px; } }
+</style>
+</head>
+<body>
+<header class="hero">
+  <div class="wrap">
+    <h1>文件「分享」功能逻辑说明</h1>
+    <p>txxy 采集·管理·展示一体化工具 —— 独立分享服务的设计、实现与业界实践对照</p>
+  </div>
+</header>
+
+<div class="container">
+  <nav class="toc">
+    <h2>目录</h2>
+    <ol>
+      <li><a href="#overview">功能概述</a></li>
+      <li><a href="#arch">总体架构（端口隔离）</a></li>
+      <li><a href="#model">分享模型：一 token 一文件集</a></li>
+      <li><a href="#index">分享索引与原子写</a></li>
+      <li><a href="#safety">路径安全（防穿越）</a></li>
+      <li><a href="#token">不可猜测的随机 token</a></li>
+      <li><a href="#ttl">有效期 TTL 与 410 Gone</a></li>
+      <li><a href="#routes">分享服务路由</a></li>
+      <li><a href="#gallery">画廊页与沉浸式查看器</a></li>
+      <li><a href="#base">分享链接基址</a></li>
+      <li><a href="#ratelimit">创建限流</a></li>
+      <li><a href="#security">安全与隔离小结</a></li>
+      <li><a href="#files">涉及文件清单</a></li>
+    </ol>
+  </nav>
+
+  <!-- 1 -->
+  <section class="card" id="overview">
+    <h2>一、功能概述</h2>
+    <p>「分享」是本项目把本地 <code>downloads/</code> 中的媒体资源以链接形式对外（主要是局域网）展示的能力，核心特征是：</p>
+    <ul>
+      <li>支持<strong>单文件</strong>分享，也支持<strong>一次性分享整个目录 / 勾选的多个文件</strong>（一个链接对应一组文件）；</li>
+      <li>分享页为<strong>画廊式只读预览</strong>（图片/视频内联预览，不含下载按钮），有效期可选 <code>1h / 24h / 7d / 30d</code>；</li>
+      <li>由运行在<strong>独立端口（默认 8090）的独立服务进程</strong>承载，与主看板（8088）完全隔离；</li>
+      <li>分享索引 <code>outputs/share_index.json</code> 由主应用写入、分享服务只读。</li>
+    </ul>
+    <p class="note">用户入口：资源管理「浏览」抽屉标题栏的「分享此目录」（经类型/名称筛选后的全部文件）、卡片/行内「分享」（单文件）。</p>
+  </section>
+
+  <!-- 2 -->
+  <section class="card" id="arch">
+    <h2>二、总体架构：端口隔离的独立服务</h2>
+    <p>分享服务是一个单独的 FastAPI 应用 <code>share_app</code>（定义在 <span class="path">web/share.py</span>），由 <span class="path">web/share_server.py</span> 作为进程入口用 uvicorn 拉起，监听 <code>SHARE_PORT</code>（默认 8090）。它<strong>不挂载任何前端 SPA 静态资源</strong>，<code>/</code> 也不返回看板。</p>
+    <div class="flow">
+      <span class="box">主看板 8088（FastAPI SPA）</span>
+      <span class="arrow">→</span>
+      <span class="box">POST /api/share 写 share_index.json</span>
+      <span class="arrow">→</span>
+      <span class="box">独立分享服务 8090（仅 /share/*）</span>
+      <span class="arrow">→</span>
+      <span class="box">访客只读画廊预览</span>
+    </div>
+    <p>这样设计的收益是「最小暴露面」：分享链接落到 8090 端口，天然拿不到 8088 的管理界面（帖子、下载任务、回收站等），即便链接被他人获取，也<strong>只暴露被显式选中的那一组文件</strong>。</p>
+    <div class="ref">
+      <span class="label">业界对照：</span>大型网盘（Google Drive、Dropbox、百度网盘）的「分享页」同样是独立域名/独立服务，与登录态的管理后台隔离，避免分享链接成为越权入口。本项目的「独立端口」是单机自用的轻量等价实现。
+    </div>
+  </section>
+
+  <!-- 3 -->
+  <section class="card" id="model">
+    <h2>三、分享模型：一个 token → 一组文件</h2>
+    <p>创建分享的入口是 <code>create_share(rel_paths, ttl)</code>：它把<strong>多个</strong> <code>downloads/</code> 内相对路径合并为<strong>一个</strong>分享链接。核心数据只有三项：</p>
+    <ul>
+      <li><code>token</code>：链接唯一标识；</li>
+      <li><code>rels</code>：相对路径列表（一组文件）；</li>
+      <li><code>expire_at</code>：过期时间戳。</li>
+    </ul>
+    <p>创建时对每个 <code>rel</code> 做规范化（反斜杠归一、去首尾斜杠）并调用 <code>resources.resolve_safe</code> 校验存在性，<strong>任一文件越界或不存在则整体失败</strong>（<code>FileNotFoundError</code>）。标题取所有路径的「最深公共目录」<code>_common_dir</code>（如 <code>a/b/c.jpg</code> 与 <code>a/b/d.jpg</code> → <code>a/b</code>）。</p>
+    <div class="ref">
+      <span class="label">业界对照：</span>这正是网盘「分享文件夹 / 多选分享」的同思路——把若干对象打包成一个分享实体，统一管控过期与撤销，而非为每文件各生成一个链接（后者难以批量失效、索引易膨胀）。参考 AWS S3「用一个 presigned URL 共享一个对象或一组带前缀的对象」、百度网盘「分享整个文件夹」。
+    </div>
+  </section>
+
+  <!-- 4 -->
+  <section class="card" id="index">
+    <h2>四、分享索引与原子写</h2>
+    <p>索引文件 <code>outputs/share_index.json</code> 的结构为：</p>
+    <pre><code>{
+  "items": [
+    { "token": "...", "rels": ["a/b.jpg", "a/c.mp4"],
+      "ttl": "7d", "created_at": 1234567890.0, "expire_at": 1235172090.0 }
+  ]
+}</code></pre>
+    <p>写入采用<strong>原子替换</strong>：先写临时文件 <code>share_index.json.tmp</code>，再 <code>os.replace</code> 落到正式路径；读取方（分享服务）无锁读取也始终看到完整文件，不会读到半截。</p>
+    <pre><code>def _save(data):
+    tmp = INDEX_FILE.with_suffix(".json.tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, INDEX_FILE)   # 原子替换：要么旧、要么新，无中间态</code></pre>
+    <p>因主应用与分享服务是<strong>两个进程</strong>，写索引还要加<strong>跨进程排他锁</strong>：用 <code>os.open(LOCK_FILE, O_CREAT | O_EXCL)</code> 创建锁文件实现忙等（超时 5s），保证并发创建分享时索引不互相覆盖。</p>
+    <div class="ref">
+      <span class="label">业界对照：</span>「写临时文件 + rename 原子替换」是 POSIX/业界标准的安全写文件模式（DB 引擎、配置热更新通用），可避免进程崩溃/并发读写导致的文件损坏。跨进程的 <code>O_EXCL</code> 锁是单用户场景下最轻量且可靠的互斥手段。
+    </div>
+  </section>
+
+  <!-- 5 -->
+  <section class="card" id="safety">
+    <h2>五、路径安全：防穿越</h2>
+    <p>分享涉及把「外部传入的相对路径」解析为磁盘真实文件并返回，<strong>路径穿越（Path Traversal / Directory Traversal）</strong>是首要风险：攻击者若能用 <code>../../etc/passwd</code> 之类路径读到 <code>downloads/</code> 之外的文件，即造成信息泄露（CWE-22）。</p>
+    <p>本项目用 <code>resources.resolve_safe(rel)</code> 兜底：把相对路径限定解析到 <code>downloads/</code> 根目录、并校验最终落点<strong>确实位于 downloads 内且为已存在文件</strong>；创建时校验一次，访问时（<code>resolve_token</code>、<code>inline_file</code>）再校验一次。</p>
+    <pre><code>def resolve_safe(rel):
+    target = _resolve_within(rel)          # 解析到 downloads/ 内并校验前缀
+    return target if target is not None and target.is_file() else None</code></pre>
+    <p>注意 <code>resolve_token</code> 在<strong>任一文件已被删除</strong>时整体返回 <code>None</code> → 链接 410（见下一节），即「文件没了，分享也失效」，不会泄露「哪些文件存在」之外的额外信息。</p>
+    <div class="ref">
+      <span class="label">业界对照：</span>OWASP 将路径遍历列为高频攻击（<a href="https://owasp.org/www-community/attacks/Path_Traversal" target="_blank" rel="noopener">Path Traversal - OWASP</a>）。通用防御有两条：(1) 对用户输入做白名单/规范化，绝不直接拼接进文件系统路径；(2) 解析后用「真实绝对路径是否仍在允许根目录内」做前缀校验。本项目 <code>_resolve_within</code> + <code>resolve_safe</code> 正是该思路的落地。
+    </div>
+  </section>
+
+  <!-- 6 -->
+  <section class="card" id="token">
+    <h2>六、不可猜测的随机 token</h2>
+    <p>token 用 <code>secrets.token_urlsafe(16)</code> 生成，约 128-bit 随机、URL 安全。它<strong>不是顺序自增 ID</strong>，因此访客无法靠「猜下一个号」枚举他人分享。</p>
+    <pre><code>token = secrets.token_urlsafe(16)   # 约 128-bit 熵，暴力枚举不可行</code></pre>
+    <div class="ref">
+      <span class="label">业界对照：</span>AWS S3 预签名 URL（presigned URL）本质就是一段带签名/随机串的临时授权链接（<a href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/using-presigned-url.html" target="_blank" rel="noopener">Using presigned URLs - Amazon S3</a>）；主流网盘分享码同样是随机不可枚举。核心原则一致：<strong>授权靠「链接本身的不可猜测性」，而非靠隐藏的 ID 空间</strong>。
+    </div>
+  </section>
+
+  <!-- 7 -->
+  <section class="card" id="ttl">
+    <h2>七、有效期 TTL 与 410 Gone</h2>
+    <p>可选档位 <code>TTL_HOURS = {"1h":1, "24h":24, "7d":168, "30d":720}</code>，默认 <code>7d</code>。<code>expire_at = now + 小时数×3600</code>。</p>
+    <p><code>resolve_token</code> 在两种情况下返回 <code>None</code>（视为链接失效）：</p>
+    <ul>
+      <li><code>expire_at &lt; now</code>：已过期；</li>
+      <li>任一文件已被删除（<code>resolve_safe</code> 返回 <code>None</code>）。</li>
+    </ul>
+    <p>返回 <code>None</code> 时接口抛 <code>HTTPException(410, "分享链接已过期或不存在")</code>。<strong>用 410 而非 404</strong>，是因为 410（Gone）语义是「曾经存在、现已永久移除」，比 404（未找到，可能从未存在）更准确地描述「该分享已失效」。</p>
+    <div class="ref">
+      <span class="label">业界对照：</span>HTTP 410 在 RFC 9110 中用于标记「资源曾存在但已被有意移除」，常用于限时资源/失效邀请。S3 presigned URL 过期后也会返回拒绝（403/失效），本质同属「限时授权 + 到期即废」。参考 <a href="https://developer.mozilla.org/zh-CN/docs/Web/HTTP/Reference/Status/410" target="_blank" rel="noopener">410 Gone - MDN</a>。
+    </div>
+  </section>
+
+  <!-- 8 -->
+  <section class="card" id="routes">
+    <h2>八、分享服务路由</h2>
+    <p>分享服务仅暴露两条路由（均不依赖前端 SPA）：</p>
+    <table>
+      <thead><tr><th>方法 / 路径</th><th>作用</th><th>关键实现</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><code>GET /share/{token}</code></td>
+          <td>画廊式预览页（目录名 + 文件网格 + 查看器 + 缩略图条）</td>
+          <td>返回 <code>HTMLResponse</code>，<code>Cache-Control: no-store</code>（动态模板，禁缓存确保改版即时生效）；<code>resolve_token</code> 失败则 410</td>
+        </tr>
+        <tr>
+          <td><code>GET /share/{token}/file?i=N</code></td>
+          <td>内联返回第 N 个文件（图片/视频浏览器预览）</td>
+          <td><code>FileResponse(..., content_disposition_type="inline")</code>；序号越界 404、文件已删 410；Starlette 原生支持 <strong>Range</strong>，视频可拖动进度条</td>
+        </tr>
+        <tr>
+          <td><code>GET /health</code></td>
+          <td>健康检查</td>
+          <td>返回 <code>{"ok": true, "service": "share"}</code></td>
+        </tr>
+      </tbody>
+    </table>
+    <div class="ref">
+      <span class="label">业界对照：</span>视频拖动进度条依赖 HTTP <strong>Range 请求</strong>与 <strong>206 Partial Content</strong>（<a href="https://developer.mozilla.org/zh-CN/docs/Web/HTTP/Guides/Range_requests" target="_blank" rel="noopener">HTTP 范围请求 - MDN</a>）。Starlette 的 <code>FileResponse</code> 对 <code>If-Range</code>/<code>Range</code> 原生支持 206，无需手动分片，是流式播放的标准做法。
+    </div>
+  </section>
+
+  <!-- 9 -->
+  <section class="card" id="gallery">
+    <h2>九、画廊页与沉浸式查看器</h2>
+    <p>预览页由 <code>_render_gallery</code> 用一份 HTML 模板（<code>_GALLERY_TPL</code）<strong>占位符替换</strong>生成（<code>__TITLE__</code>、<code>__TOKEN__</code>、<code>__GRID__</code> …），刻意不用 f-string，避免与 CSS/JS 里的大量 <code>{ }</code> 冲突。前端交互借鉴图片集合浏览的通行做法：</p>
+    <h3>① 类型筛选 + 名称搜索 + 前端分页</h3>
+    <ul>
+      <li>顶部工具栏：<span class="tag">全部</span><span class="tag">图片</span><span class="tag">视频</span><span class="tag">文本</span><span class="tag">种子</span><span class="tag">其他</span> + 文件名搜索；</li>
+      <li>前端分页每页 60 条、窗口化页码，筛选/搜索变化自动回第 1 页。</li>
+    </ul>
+    <h3>② 沉浸式 1:1 滑动查看器（Lightbox）</h3>
+    <ul>
+      <li>全屏黑底，每屏一张；图片 <code>object-fit: contain</code> 且支持滚轮/双指捏合/双击缩放与平移，视频默认最大化填充且打开即自动播放；</li>
+      <li>手指/鼠标<strong>跟手横滑</strong>翻页，松手按位移阈值吸附到相邻页；<strong>下滑或 Esc 退出</strong>；</li>
+      <li>顶栏与底部缩略图条自动隐藏、交互时浮现。</li>
+    </ul>
+    <h3>③ 底部缩略图条（Filmstrip）</h3>
+    <ul>
+      <li>横滑浏览「筛选后」的文件，与网格口径一致（翻页不会跳到非筛选类型）；当前项高亮，点击即跳转；</li>
+      <li>视频缩略图<strong>取首帧</strong>展示（进入视口才懒加载，避免裸 <code>&lt;video&gt;</code> 黑屏）：桌面端 <code>seek</code> 到 5% 取代表帧，移动端/iOS 走「静音播放 → <code>playing</code> 取帧」可靠路径；</li>
+      <li>媒体按「当前 ±2」窗口懒加载，切换/关闭时自动暂停后台视频（避免切到图片仍出声）。</li>
+    </ul>
+    <div class="ref">
+      <span class="label">业界对照：</span>
+      <ul>
+        <li>沉浸式看图/滑动翻页：PhotoSwipe、Google 相册、iOS 照片的通用形态；</li>
+        <li><strong>视频首帧 poster</strong>：YouTube / Netflix / Vimeo 均用服务端抽帧做封面，绝不渲染「无 poster 的裸 video」（即黑屏）；本项目用 canvas <code>drawImage</code> 在客户端取首帧，是「无服务端抽帧」下的等价兜底；</li>
+        <li><strong>窗口化懒加载</strong>（仅渲染可视邻域）：YouTube / Netflix 无限滑动与无限列表的标准性能手段，避免一次性建几百个媒体节点导致内存/请求风暴。</li>
+      </ul>
+    </div>
+    <p class="note">设计取舍：画廊页<strong>不含下载按钮</strong>，定位为「只读预览」而非分发源——降低分享链接被当作公开下载站的滥用风险（仍是本机/局域网内、配合随机 token 与过期时间使用）。</p>
+  </section>
+
+  <!-- 10 -->
+  <section class="card" id="base">
+    <h2>十、分享链接基址</h2>
+    <p>生成链接的基址由 <code>_share_base(request)</code> 构造，端口<strong>恒为独立分享端口 <code>SHARE_PORT</code></strong>，确保链接落到隔离的分享服务而非 8088 看板。主机名优先级：</p>
+    <ol>
+      <li>页内「参数设置 → 分享链接」<code>share_host</code>（如局域网 IP <code>192.168.1.5</code>）；</li>
+      <li>回落到环境变量 <code>TXXY_SHARE_HOST</code>；</li>
+      <li>再回落到请求 <code>Host</code> 的主机（自动适配局域网 IP / 域名）；</li>
+      <li>最后兜底 <code>config.HOST</code>。</li>
+    </ol>
+    <p>这样无论用 <code>localhost</code> 还是域名访问看板，生成的链接都可固定指向本机 IP，便于局域网他人直接打开；同时要求把 <code>TXXY_WEB_HOST</code> 设为 <code>0.0.0.0</code> 让分享服务监听所有网卡。</p>
+  </section>
+
+  <!-- 11 -->
+  <section class="card" id="ratelimit">
+    <h2>十一、创建限流</h2>
+    <p>创建分享接口挂在限流依赖 <code>ShareRateLimit = rate_limit(20, 60)</code>（固定窗口，60 秒内最多 20 次）。目的是防止分享接口被刷——既避免无意义的索引膨胀，也避免被当作遍历/探测 <code>downloads/</code> 的入口。</p>
+    <div class="ref">
+      <span class="label">业界对照：</span>任何「可被外部触发写操作 / 生成资源」的接口都应有限流（如网盘创建分享的频率限制、S3 presigned URL 的签发配额），是防 DoS 与防滥用的基础手段（本项目统一限流实现见 <span class="path">web/ratelimit.py</span>）。
+    </div>
+  </section>
+
+  <!-- 12 -->
+  <section class="card" id="security">
+    <h2>十二、安全与隔离小结</h2>
+    <table>
+      <thead><tr><th>风险面</th><th>本项目的防护</th><th>对应业界实践</th></tr></thead>
+      <tbody>
+        <tr><td>暴露管理后台</td><td>分享服务独立端口、不挂载 SPA，<code>/</code> 不返回看板</td><td>网盘分享页与后台隔离</td></tr>
+        <tr><td>链接被枚举</td><td><code>secrets.token_urlsafe(16)</code> 不可猜测 token</td><td>S3 presigned URL / 网盘随机分享码</td></tr>
+        <tr><td>路径穿越读敏感文件</td><td><code>resolve_safe</code> 限定 downloads 内且为已存在文件</td><td>OWASP 路径遍历防护</td></tr>
+        <tr><td>失效资源仍可访问</td><td>过期 / 任一文件删除 → 410 Gone</td><td>限时授权到期即废（RFC 410）</td></tr>
+        <tr><td>被当分发源滥用</td><td>只读预览（inline、无下载按钮）</td><td>只读预览页定位</td></tr>
+        <tr><td>接口被刷</td><td>创建接口限流 20/60</td><td>资源生成类接口限流</td></tr>
+        <tr><td>写冲突 / 半截文件</td><td>原子替换 + 跨进程 <code>O_EXCL</code> 锁</td><td>临时文件 + rename 安全写</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- 13 -->
+  <section class="card" id="files">
+    <h2>十三、涉及文件清单</h2>
+    <table>
+      <thead><tr><th>文件</th><th>职责</th></tr></thead>
+      <tbody>
+        <tr><td><span class="path">web/share.py</span></td><td>分享核心：<code>create_share</code>、<code>resolve_token</code>、索引读写/锁、画廊模板与路由 <code>share_app</code></td></tr>
+        <tr><td><span class="path">web/share_server.py</span></td><td>分享服务进程入口（uvicorn 监听 <code>SHARE_PORT</code>，日志经 file_logger 打 [share] 标签）</td></tr>
+        <tr><td><span class="path">web/api.py</span></td><td><code>POST /api/share</code> 创建链接、<code>_share_base</code> 构造基址、<code>ShareRateLimit</code> 限流</td></tr>
+        <tr><td><span class="path">web/resources.py</span></td><td><code>resolve_safe</code>（受控路径解析）、<code>category_of</code>（类型归类）</td></tr>
+        <tr><td><span class="path">web/config.py</span></td><td><code>SHARE_PORT</code>（默认 8090）、<code>SHARE_HOST</code>、<code>OUTPUTS_DIR</code></td></tr>
+        <tr><td><span class="path">web/frontend/src/views/ResourcesView.vue</span></td><td>前端入口：「分享」单文件 / 「分享此目录」多选，生成并复制链接</td></tr>
+      </tbody>
+    </table>
+    <p class="note">数据流向：主看板 <code>POST /api/share</code> → 写 <code>outputs/share_index.json</code> → 访客打开 <code>http://&lt;host&gt;:8090/share/{token}</code> → 独立分享服务读索引、渲染画廊、按需 <code>/share/{token}/file?i=N</code> 内联返回。两个进程通过「索引文件 + 锁」解耦，主应用只写、分享服务只读。</p>
+  </section>
+
+  <footer>
+    本文档基于 txxy 项目 <span class="path">web/share.py</span>、<span class="path">web/share_server.py</span>、<span class="path">web/api.py</span> 等源码梳理，业界实践对照引用 MDN / OWASP / AWS S3 官方文档（链接见各节「业界对照」）。
+  </footer>
+</div>
+</body>
+</html>

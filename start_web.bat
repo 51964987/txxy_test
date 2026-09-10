@@ -27,8 +27,10 @@ REM    start_web.bat --no-lan           localhost only
 REM    start_web.bat --rebuild --no-lan rebuild, localhost only
 REM
 REM  share service (port 8090 by default, env TXXY_SHARE_PORT to override) is
-REM  started automatically together with the main service, so generated share
-REM  links are reachable without running the share server manually.
+REM  started automatically together with the main service as a child process in
+REM  the SAME console window (no separate window), so generated share links are
+REM  reachable without running the share server manually; it is cleaned up when
+REM  the main service exits.
 REM ============================================================
 
 if not defined TXXY_WEB_PORT set "TXXY_WEB_PORT=8088"
@@ -147,10 +149,10 @@ echo   netsh advfirewall firewall add rule name="txxy-share-%SHAREPORT%" dir=in 
 :shfwok
 
 REM ---------------- start service ----------------
+REM 分享服务不再单独开窗口：由 start_web.py 以子进程方式同窗口拉起，
+REM 主服务退出时统一清理，避免留下第二个命令窗口或孤立进程。
 :startsvc
-echo 启动分享服务（端口 %SHAREPORT%，独立进程）...
-start "txxy-share" /min python -X utf8 web/share_server.py
-echo 启动主服务...
+echo 启动主服务（分享服务将随主服务在同一窗口内启动）...
 python -X utf8 start_web.py %ARG_BUILD%
 echo.
 echo 服务已退出

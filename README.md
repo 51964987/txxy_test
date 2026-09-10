@@ -36,7 +36,7 @@ txxy_test/
 ├── media_download.py   # 通用下载核心（Referer 降级重试 / 内容校验 / 断点续传）
 ├── init_db.py          # SQLite 数据库一次性初始化（幂等：建表 + 中文注释表 + 全量查询索引）
 ├── run_daily.bat       # Windows 计划任务批处理入口（固定工作目录）
-├── start_web.bat       # 一键启动前端展示服务（调用 start_web.py；默认局域网可访问，支持 --rebuild 重新编译、--no-lan 仅本机访问；同时拉起独立的分享服务 web/share_server.py，端口 8090）
+├── start_web.bat       # 一键启动前端展示服务（调用 start_web.py；默认局域网可访问，支持 --rebuild 重新编译、--no-lan 仅本机访问；同时以子进程方式拉起分享服务 web/share_server.py（端口 8090，与主服务同窗口运行，不再另开命令窗口），主服务退出时统一清理；两服务日志统一经 file_logger 双写控制台与 outputs/ 下日志文件（[web]/[share] 标签区分），启动时会按保留期清理过期日志）
 ├── start_web.py        # Web 启动器（默认用现有 dist 快速启动；传 true/--rebuild 重新编译前端；解释器缺依赖时自动切换）
 ├── kill_port.bat       # 按端口结束占用进程（如释放 8088 端口）
 ├── requirements.txt

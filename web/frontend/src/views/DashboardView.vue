@@ -2032,7 +2032,7 @@ function renderFidTrendChart() {
             <div v-for="(item, i) in boards?.top_likes ?? []" :key="item.fid" class="board-card" @click="goPostsWith({ fid: item.fid, sort: 'likes_desc' })">
               <span :class="rankClass(i)">{{ i + 1 }}</span>
               <el-tag size="small" type="info" class="board-tag">{{ item.name }}</el-tag>
-              <a class="title-link board-title" :title="item.title" @click.stop.prevent="openUrl(item.url)">
+              <a class="title-link board-title" :title="`${item.name} · ${item.title}`" @click.stop.prevent="openUrl(item.url)">
                 {{ item.title }}
               </a>
               <el-tooltip content="下载" placement="top" :teleported="!app.fullscreen">
@@ -2059,7 +2059,7 @@ function renderFidTrendChart() {
             <div v-for="(item, i) in boards?.top_replies ?? []" :key="item.fid" class="board-card" @click="goPostsWith({ fid: item.fid, sort: 'replies_desc' })">
               <span :class="rankClass(i)">{{ i + 1 }}</span>
               <el-tag size="small" type="info" class="board-tag">{{ item.name }}</el-tag>
-              <a class="title-link board-title" :title="item.title" @click.stop.prevent="openUrl(item.url)">
+              <a class="title-link board-title" :title="`${item.name} · ${item.title}`" @click.stop.prevent="openUrl(item.url)">
                 {{ item.title }}
               </a>
               <el-tooltip content="下载" placement="top" :teleported="!app.fullscreen">
@@ -2108,7 +2108,7 @@ function renderFidTrendChart() {
             >
               <span :class="rankClass(i)">{{ i + 1 }}</span>
               <el-tag size="small" type="info" class="board-tag">{{ item.name }}</el-tag>
-              <a class="title-link board-title" :title="item.title" @click.stop.prevent="openUrl(item.url)">
+              <a class="title-link board-title" :title="`${item.name} · ${item.title}`" @click.stop.prevent="openUrl(item.url)">
                 {{ item.title }}
               </a>
               <el-tooltip v-if="isHotTalk(item)" content="热议型：回复数不低于点赞数" placement="top" :teleported="!app.fullscreen">
@@ -2178,7 +2178,7 @@ function renderFidTrendChart() {
             >
               <span :class="rankClass(i)">{{ i + 1 }}</span>
               <el-tag size="small" type="info" class="board-tag">{{ item.name }}</el-tag>
-              <a class="title-link board-title" :title="item.title" @click.stop.prevent="openUrl(item.url)">
+              <a class="title-link board-title" :title="`${item.name} · ${item.title}`" @click.stop.prevent="openUrl(item.url)">
                 {{ item.title }}
               </a>
               <el-tooltip v-if="item.is_new" content="新入榜：今天首次进入 Top10" placement="top" :teleported="!app.fullscreen">
@@ -2716,6 +2716,16 @@ function renderFidTrendChart() {
 
 .board-tag {
   flex-shrink: 0;
+}
+
+/* 窄屏（单列，≤1100px）隐藏行内「板块」中文名：行内元素（名次/NEW/热议/发布日/下载/互动量）
+   较多，板块 tag 会挤压标题可读性。板块名已并入标题 tooltip（长按可看），且卡片空白区点击
+   下钻该版块，信息不丢失。业界（微博/知乎热榜、GitHub Trending 移动端）亦倾向紧凑分类小标
+   而非纯 tooltip，此处窄屏直接隐藏并在 tooltip 兜底，平衡可读性与信息完整性。 */
+@media (max-width: 1100px) {
+  .board-tag {
+    display: none;
+  }
 }
 
 .board-title {

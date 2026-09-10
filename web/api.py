@@ -286,9 +286,13 @@ _snap_lock = threading.Lock()
 def _mark_new_and_save(board_key: str, urls: list[str], today: str) -> set[str]:
     """对比快照，返回本次「首次入榜」的 url 集合，并回写快照。
 
-    标记规则：url 在快照中的 first_seen == 今天 → 视为新入榜。
-    因此同一天内多次刷新都保持 NEW，跨天自动消失（不需要额外的清理任务）。
+    标记规则：url 首次进入 Top10 的当天（first_seen == 今天）视为新入榜；
+    同一天内多次刷新都保持 NEW，跨天（first_seen 早于今天）自动消失，无需清理任务。
     任何异常都降级为「无新入榜」，绝不影响榜单本身。
+
+    注意：`fresh` 必须基于「写入前的旧值」判定——首次见到记今天并标 NEW，
+    当天后续刷新（旧值已 == 今天）仍标 NEW 以保住一整天，旧值早于今天则不标。
+    切勿写成 `board.get(u) != today`（会把所有历史帖每日重复标 NEW）。
     """
     try:
         with _snap_lock:
@@ -299,13 +303,19 @@ def _mark_new_and_save(board_key: str, urls: list[str], today: str) -> set[str]:
                 if isinstance(loaded, dict):
                     snap = loaded
             board = snap.get(board_key) or {}
-            fresh = {u for u in urls if board.get(u) != today}
+            fresh: set[str] = set()
             for u in urls:
-                # 首次出现记今天；已在榜的保持原值，避免跨天重复标 NEW
-                board.setdefault(u, today)
-            # 仅保留「仍在榜」与「今天新入榜」的条目，避免文件随运行时间无限膨胀
-            keep = set(urls) | fresh
-            snap[board_key] = {u: d for u, d in board.items() if u in keep}
+                prev = board.get(u)
+                if prev is None:
+                    # 首次出现：记录 first_seen = 今天，并标记 NEW
+                    board[u] = today
+                    fresh.add(u)
+                elif prev == today:
+                    # 当天早些时候已入榜：保持 NEW 一整天（同一天内多次刷新不丢失）
+                    fresh.add(u)
+                # prev 为更早的日期：已非首次入榜，不标 NEW（跨天自动消失）
+            # 仅保留「仍在榜」的条目，避免文件随运行时间无限膨胀
+            snap[board_key] = {u: d for u, d in board.items() if u in urls}
             write_json_atomic(_SNAP_FILE, snap)
             return fresh
     except Exception:

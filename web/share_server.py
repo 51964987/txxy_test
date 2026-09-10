@@ -11,11 +11,15 @@
 # 路径自举已在 share.py 内统一处理（被导入时会把 web/ 与项目根加入 sys.path），此处不再重复。
 from share import share_app
 import config
+import file_logger
 
 
 def main() -> None:
     import uvicorn
 
+    # 统一日志：经 file_logger 双写控制台 + outputs/<日期>/share_*.log，与主服务
+    # 的 [web] 标签区分。share.py 导入时已把项目根加入 sys.path，故此处可 import file_logger。
+    file_logger.setup("share")
     uvicorn.run(
         share_app,
         host=config.HOST,

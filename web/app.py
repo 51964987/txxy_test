@@ -125,6 +125,21 @@ else:
 def main():
     import uvicorn
 
+    # 路径自举：保证项目根在 sys.path，使统一的 file_logger 可被导入（start_web.py
+    # 入口已注入项目根，此处兜底支持直接 python web/app.py 运行）。
+    _root = Path(__file__).resolve().parent.parent
+    if str(_root) not in sys.path:
+        sys.path.insert(0, str(_root))
+    import file_logger
+
+    # 统一日志：经 file_logger 双写控制台 + outputs/<日期>/web_*.log；
+    # 须在 uvicorn 启动前完成，使其访问日志也一并落盘。
+    file_logger.setup("web")
+    # 请求耗时监控 logger 的 StreamHandler 在模块导入时已绑定原 stderr，
+    # 重新指向 file_logger 包装后的流，使其一并落盘。
+    for _h in _monitor_logger.handlers:
+        _h.stream = sys.stderr
+
     print(f"txxy 数据展示服务: http://{config.HOST}:{config.PORT}")
     print(f"数据库: {config.DB_FILE}  公开域名: {config.PUBLIC_ROOT}")
     uvicorn.run(app, host=config.HOST, port=config.PORT)
