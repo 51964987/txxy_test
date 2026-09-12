@@ -12,9 +12,9 @@ import {
 } from 'echarts/components'
 import type { ECharts } from 'echarts/core'
 import { ElMessage } from 'element-plus'
-import { Download } from '@element-plus/icons-vue'
+import { Download, FolderOpened, Star } from '@element-plus/icons-vue'
 import { useDownloadSubmit } from '../composables/useDownloadSubmit'
-import { api, isAborted, type BoardDaily, type Boards, type BoardSort, type FidDistItem, type Overview, type RunSummary, type TodayTop, type TodayTopItem, type TopAuthor, type TopFid, type TrendByFid, type TrendPoint } from '../api'
+import { api, formatDuration, formatSize, isAborted, type Assets, type BoardDaily, type Boards, type BoardSort, type Compare, type FidDistItem, type Health, type Overview, type PendingDownloads, type RunSummary, type TodayTop, type TodayTopItem, type TopAuthor, type TopFid, type TrendByFid, type TrendPoint } from '../api'
 import { useDashboardStore } from '../stores/dashboard'
 import { useAppStore } from '../stores/app'
 import { formatDate, formatShortTime, pad2 } from '../utils/time'
@@ -82,6 +82,9 @@ const loadingP0 = ref(false)
 // ===== P1：懒加载区块（热门榜）=====
 const boards = ref<Boards | null>(null)
 const todayTop = ref<TodayTop | null>(null)
+// 首屏「最新最热帖」KPI 专用：独立于热门榜的 todayTop（后者懒加载，滚到才拉），
+// 故单独拉一份（limit=1）保证首屏 KPI 即有数据，不与榜单排序互相干扰
+const hotTop = ref<TodayTop | null>(null)
 const monthTop = ref<TodayTop | null>(null)
 const loadingBoards = ref(false)
 
@@ -91,6 +94,13 @@ const monthSort = ref<BoardSort>('engagement')
 const loadingToday = ref(false)
 const loadingMonth = ref(false)
 const p1AreaRef = ref<HTMLDivElement | null>(null)
+
+// ===== R1-R4：采集健康条 / 周期对比 / 资产漏斗 / 待下载推荐（后端接口已就绪，前端接入）=====
+const health = ref<Health | null>(null)
+const compare = ref<Compare | null>(null)
+const assets = ref<Assets | null>(null)
+const pending = ref<PendingDownloads | null>(null)
+const loadingPending = ref(false)
 
 let trendObserver: IntersectionObserver | null = null
 let p1Observer: IntersectionObserver | null = null
@@ -264,10 +274,85 @@ function daysBetween(dateStr: string): number {
   return Math.round((today.getTime() - d.getTime()) / 86400000)
 }
 
+// ===== R1-R4：健康条 / 周期对比 / 资产漏斗的派生数据 =====
+
+/**
+ * 周期环比文案（R2）：涨绿 / 跌红 / 持平灰 / 前值为 0 无基准时橙「新增」。
+ * 返回 text 不带前缀，调用方按场景自行拼接（累计收录卡带「近7日」前缀，趋势卡头不带）。
+ */
+function cmpDelta(delta: number | null | undefined): { cls: string; color: string; text: string } {
+  if (delta === null || delta === undefined) return { cls: 'sub-new', color: '#f59e0b', text: '新增' }
+  if (delta === 0) return { cls: 'sub-neutral', color: '#909399', text: '持平' }
+  return delta > 0
+    ? { cls: 'sub-up', color: '#10b981', text: `↑${delta}%` }
+    : { cls: 'sub-down', color: '#ef4444', text: `↓${Math.abs(delta)}%` }
+}
+
+/** 近 7 日环比（累计收录卡副指标）：与活跃榜 7d 环比同一滚动窗口口径 */
+const weekCmp = computed(() => {
+  if (!compare.value) return null
+  const d = cmpDelta(compare.value.week.delta)
+  return { ...d, text: `近7日 ${d.text}` }
+})
+
+/** 近 7 日环比（全站趋势卡头统计条）：与分版块趋势 tooltip 的 7 日环比同源同窗，
+ *  避免「全站看 30 日、分版块看 7 日」的口径不对称 */
+const trendCmp = computed(() => (compare.value ? cmpDelta(compare.value.week.delta) : null))
+
+/** 最活版块的近 7 日环比（分版块卡头统计卡）：与全站卡头的周期环比形成对称，
+ *  逐版块的环比明细另附在分版块 tooltip 每行尾部（数据来自 trend_by_fid 的 delta） */
+const fidTopDelta = computed(() => {
+  const s = fidTrendStats.value
+  return s ? cmpDelta(s.topDelta) : null
+})
+
+/** 资产漏斗：收录 → 已下载帖 的转化率（R4）；无数据返回 null 不渲染 */
+const downloadRate = computed(() => {
+  const a = assets.value
+  if (!a || !a.posts_total) return null
+  return ((a.downloaded_posts / a.posts_total) * 100).toFixed(1)
+})
+
+/** 资产空态：已下载帖与本地文件均为 0 时渲染引导空态，而非生硬的「0 漏斗」。
+ *  只清任务不影响（下载履历独立留存，downloaded_posts 仍 >0）；
+ *  仅当任务 + 文件 + 履历全部清空才触发——即真正「没有任何已下载资产」的极端场景。 */
+const assetsEmpty = computed(() => {
+  const a = assets.value
+  if (!a) return false
+  return a.downloaded_posts === 0 && a.files === 0 && a.folders === 0
+})
+
+/** 健康条补充信息（R1）：悬浮展示批次明细（点击进运行记录页） */
+const healthDetail = computed(() => {
+  const h = health.value
+  if (!h) return ''
+  const parts: string[] = []
+  if (h.run_date) parts.push(`批次 ${h.run_date}${h.run_time ? ` ${h.run_time}` : ''}`)
+  if (h.duration != null) parts.push(`耗时 ${formatDuration(h.duration)}`)
+  if (h.success_rate != null) parts.push(`版块成功率 ${h.success_rate}%`)
+  if (h.latest_date) parts.push(`最新发布日 ${h.latest_date}`)
+  parts.push('点击查看运行记录')
+  return parts.join(' · ')
+})
+
 // ===== P0：首屏加载（KPI + 趋势 + 分布）=====
 async function loadP0(initial = false) {
   if (initial) loadingP0.value = true
   try {
+    // 健康条 / 周期对比 / 资产漏斗：随首屏并行加载（不阻塞主数据 await）；
+    // 失败静默保留旧值（与 runningBatch 徽标同一容错策略），下一轮刷新自动重试
+    void Promise.allSettled([
+      api.health(),
+      api.compare(),
+      api.assets(),
+      // 首屏「最新最热帖」KPI：取最新数据日互动最高帖（综合互动量口径），与热门榜榜单同源
+      api.todayTop(1, 'engagement'),
+    ]).then(([h, c, a, tt]) => {
+      if (h.status === 'fulfilled') health.value = h.value
+      if (c.status === 'fulfilled') compare.value = c.value
+      if (a.status === 'fulfilled') assets.value = a.value
+      if (tt.status === 'fulfilled') hotTop.value = tt.value
+    })
     const [o, t, f, authors, fids] = await Promise.all([
       api.overview(),
       api.trend(trendDays.value),
@@ -304,9 +389,17 @@ async function loadP0(initial = false) {
   }
 }
 
+// 上一次加载 boards 时对应的黑名单版本号；初始 -1 保证首屏必加载
+const lastBoardsVersion = ref(-1)
+
 // ===== P1：懒加载热门榜（点赞/回复/最新最热/本月最热）=====
-async function loadBoards() {
-  if (boards.value || loadingBoards.value) return
+async function loadBoards(force = false) {
+  // boards 是 Pinia 跨页面导航持久缓存：若仅按 boards.value 非空早退，
+  // 「设置页改完黑名单再回看板」会因缓存未失效而显示旧榜单（含已屏蔽帖）。
+  // 故改为校验黑名单版本号——版本不变且不强制则早退（沿用「不参与轮询刷新」设计），
+  // 版本变了（设置页增删过黑名单）则必须重拉，确保热门榜即时同步。
+  if (!force && store.blacklistVersion === lastBoardsVersion.value) return
+  if (loadingBoards.value) return
   loadingBoards.value = true
   try {
     const [b, tt, mt] = await Promise.all([
@@ -317,12 +410,45 @@ async function loadBoards() {
     boards.value = b
     todayTop.value = tt
     monthTop.value = mt
+    lastBoardsVersion.value = store.blacklistVersion
   } catch (e) {
     if (isAborted(e)) return
     if (boards.value) return // 轮询刷新（榜单已存在）失败静默，下轮重试
     void notifyError(`加载热门榜失败: ${(e as Error).message}`)
   } finally {
     loadingBoards.value = false
+  }
+}
+
+// 黑名单变更（设置页增删后 bumpBlacklist）→ 强制重拉全部卡片口径。
+// 后端 posts_filtered 视图已过滤，这里专门解决「点赞/回复最高帖等卡片不参与轮询刷新」导致的不同步。
+watch(
+  () => store.blacklistVersion,
+  () => {
+    loadBoards(true)
+    reloadTodayTop()
+    reloadMonthTop()
+    loadPending()
+    loadP0(false)
+  },
+)
+
+/**
+ * R3 待下载推荐：近 30 日互动量最高、且尚未下载到本地的帖子。
+ * 与 loadBoards 分开实现：loadBoards 首次加载后即早退（热门榜不参与轮询刷新），
+ * 而待下载列表必须随下载进度动态更新——刚下载完成的帖子要退出推荐位。
+ */
+async function loadPending() {
+  if (loadingPending.value) return
+  loadingPending.value = true
+  try {
+    pending.value = await api.pendingDownloads(8, 30)
+  } catch (e) {
+    if (isAborted(e)) return
+    if (pending.value) return // 已有数据，轮询失败静默，下轮重试
+    void notifyError(`加载待下载推荐失败: ${(e as Error).message}`)
+  } finally {
+    loadingPending.value = false
   }
 }
 
@@ -373,6 +499,8 @@ async function reloadMonthTop() {
     loadingMonth.value = false
   }
 }
+
+
 
 /** 切换排序：只重拉对应榜单，不整页刷新 */
 function onTodaySortChange(v: BoardSort) {
@@ -564,6 +692,28 @@ function goDist(fid?: string) {
   if (fid) {
     router.push({ path: '/posts', query: { fid, ...(rankDateRange(fidRange.value) ?? {}) } })
   }
+}
+
+/** R1 健康条下钻：查看运行记录明细 */
+function goRuns() {
+  router.push('/runs')
+}
+
+/** R4 资产卡入口：跳资源管理页（本地媒体资产总览） */
+function goResources() {
+  router.push('/resources')
+}
+
+/** 最新最热帖 KPI 下钻：跳转该数据日、按回复排序的帖子列表（口径与「最新最热」榜单一致） */
+function goHotPost() {
+  const item = hotTop.value?.items?.[0]
+  if (!item || !hotTop.value?.date) return
+  goPostsInRange({ fid: item.fid ?? '', sort: 'replies' }, dayRange(hotTop.value.date))
+}
+
+/** R3 待下载推荐入口：跳下载中心查看任务进度 */
+function goDownloads() {
+  router.push('/downloads')
 }
 
 function initChart(el: HTMLDivElement): ECharts {
@@ -938,6 +1088,8 @@ function autoRefreshTick() {
   const jobs: Promise<unknown>[] = []
   if (overview.value || loadingP0.value) jobs.push(loadP0(false))
   if (boards.value) jobs.push(loadBoards())
+  // 待下载推荐随轮询刷新：下载完成后相应帖子自动退出推荐（后端 5s TTL 缓存）
+  if (boards.value || pending.value) jobs.push(loadPending())
   Promise.allSettled(jobs).finally(() => {
     refreshing = false
   })
@@ -991,6 +1143,7 @@ onMounted(() => {
           p1Observer?.disconnect()
           p1Observer = null
           loadBoards()
+          loadPending()
         }
       },
       { rootMargin: '200px 0px' },
@@ -999,6 +1152,7 @@ onMounted(() => {
   } else if (!hasObserver) {
     // 兼容不支持 IntersectionObserver 的旧浏览器：直接加载
     loadBoards()
+    loadPending()
   }
 
   // 分版块趋势：懒加载（进入视口后再加载，避免首屏一次性拉取过多）
@@ -1035,7 +1189,7 @@ watch(
     rebuildCharts()
     if (!v) return
     fidTrendVisible.value = true
-    await Promise.allSettled([loadBoards(), loadFidTrend()])
+    await Promise.allSettled([loadBoards(), loadPending(), loadFidTrend()])
   },
 )
 
@@ -1098,8 +1252,9 @@ function createCarouselTimer() {
 
 async function startCarousel() {
   await loadCarouselConfig()
-  // 进入即预加载 P1 热门榜，避免轮播到 boards 时仍是骨架
+  // 进入即预加载 P1 热门榜与待下载推荐，避免轮播到 boards 时仍是骨架
   if (!boards.value) void loadBoards()
+  void loadPending()
   carouselIdx.value = 0
   scrollToSection(0)
   createCarouselTimer()
@@ -1446,6 +1601,8 @@ const fidTrendStats = computed(() => {
     fidCount: series.length,
     topName: series[topIdx].name,
     peak,
+    // 最活版块的近 7 日环比（与活跃版块榜同一滚动窗口口径）
+    topDelta: series[topIdx].delta ?? null,
   }
 })
 
@@ -1595,6 +1752,11 @@ function renderFidTrendChart() {
     })
   }
 
+  // 各版块近 7 日环比（tooltip 每行尾部）：取自接口 delta，用原始全量数据构建，
+  // 不受缩放条裁剪影响（环比是 7 日窗口口径，与当前展示区间无关）
+  const deltaByName: Record<string, number | null> = {}
+  fidTrend.value.series.forEach((s) => (deltaByName[s.name] = s.delta))
+
   const lineSeries: any[] = series.map((s, i) => {
     const color = colorForFid(s.fid)
     return {
@@ -1667,7 +1829,7 @@ function renderFidTrendChart() {
       borderWidth: 1,
       textStyle: { color: '#e6ebf5', fontSize: 12 },
       axisPointer: { type: 'line', lineStyle: { color: 'rgba(0,0,0,0.35)' } },
-      // 分版块按当日新增从大到小排序展示
+      // 分版块按当日新增从大到小排序展示；每行尾部附近 7 日环比（涨绿/跌红/持平灰/新增橙）
       formatter: (params: any) => {
         if (!Array.isArray(params) || !params.length) return ''
         const rows = [...params]
@@ -1675,10 +1837,16 @@ function renderFidTrendChart() {
           .sort((a, b) => Number(b.value) - Number(a.value))
         const date = params[0].axisValueLabel ?? params[0].axisValue ?? ''
         const lines = rows
-          .map(
-            (s) =>
-              `${s.marker}${s.seriesName}：<b>${Number(s.value).toLocaleString()}</b>`,
-          )
+          .map((s) => {
+            const d = deltaByName[s.seriesName]
+            const cmp =
+              d === null || d === undefined
+                ? '<span style="color:#f59e0b">7日 新增</span>'
+                : d === 0
+                  ? '<span style="color:#8b95a7">7日 持平</span>'
+                  : `<span style="color:${d > 0 ? '#10b981' : '#ef4444'}">7日 ${d > 0 ? '↑' : '↓'}${Math.abs(d)}%</span>`
+            return `${s.marker}${s.seriesName}：<b>${Number(s.value).toLocaleString()}</b> · ${cmp}`
+          })
           .join('<br/>')
         return `${date}<br/>${lines}`
       },
@@ -1739,8 +1907,26 @@ function renderFidTrendChart() {
 
 <template>
   <div ref="rootRef" class="dashboard" :class="{ 'is-fullscreen': app.fullscreen }" @mouseenter="onRootMouseEnter" @mouseleave="onRootMouseLeave">
+    <!-- 总览锚点（演示轮播用）：健康条 + KPI 卡同属首屏视图 -->
+    <div id="section-overview">
+      <!-- R1 采集健康条：数据源状态一眼可见；level/message 由后端统一判定，前端只上色 -->
+      <div
+        v-if="health"
+        class="health-bar"
+        :class="[`health-${health.level}`, health.run_status === 'running' ? 'health-pulse' : '']"
+        role="button"
+        tabindex="0"
+        :title="healthDetail"
+        @click="goRuns"
+        @keydown.enter="goRuns"
+      >
+        <span class="health-dot"></span>
+        <span class="health-msg">{{ health.message }}</span>
+        <span class="health-go">运行记录 ›</span>
+      </div>
+
     <!-- 统计卡片 -->
-    <div id="section-overview" class="stat-grid">
+    <div class="stat-grid">
       <template v-if="overview">
         <div class="stat-card">
           <div class="stat-icon" style="background: linear-gradient(135deg, #4f83f1, #2f6fed)">
@@ -1750,7 +1936,15 @@ function renderFidTrendChart() {
             <div class="stat-label">累计收录</div>
             <div class="stat-value"><RollingNumber :value="overview.total" /></div>
             <div class="stat-sub">
-              <span class="sub-up">近7日发布 +{{ overview.week_new.toLocaleString() }}</span>
+              <span class="sub-neutral">近7日发布 +{{ overview.week_new.toLocaleString() }}</span>
+              <el-tooltip
+                v-if="weekCmp"
+                content="近 7 日发布量相对前 7 日的涨跌（滚动窗口，与活跃榜 7 日环比同口径）"
+                placement="top"
+                :teleported="!app.fullscreen"
+              >
+                <span :class="weekCmp.cls">{{ weekCmp.text }}</span>
+              </el-tooltip>
               <span class="sub-neutral">覆盖 {{ fidDist.length }} 个版块</span>
             </div>
           </div>
@@ -1792,17 +1986,95 @@ function renderFidTrendChart() {
               <span v-if="runningBatch" class="running-badge">
                 <span class="running-dot"></span>抓取中 {{ runningBatch.progress ?? 0 }}%
               </span>
-              <span v-else :class="kpiSub.gap.cls">{{ kpiSub.gap.text }}</span>
-              <span class="sub-neutral">更新于 {{ kpiSub.updatedAt ?? '--:--' }}</span>
+              <!-- 去重：停摆/告警语义交给 R1 健康条；此处仅保留中性的「更新于」时间戳 -->
+              <span v-else class="sub-neutral">更新于 {{ kpiSub.updatedAt ?? '--:--' }}</span>
             </div>
+          </div>
+        </div>
+
+        <!-- 最新最热帖 KPI：最新数据日互动最高帖（与「最新最热」榜单同源，仅取榜首）；点击下钻该日帖子 -->
+        <div class="stat-card stat-clickable" role="button" tabindex="0" @click="goHotPost" @keydown.enter="goHotPost">
+          <div class="stat-icon" style="background: linear-gradient(135deg, #fb7185, #e11d48)">
+            <el-icon><Star /></el-icon>
+          </div>
+          <div class="stat-body">
+            <div class="stat-label">最新最热帖</div>
+            <div class="stat-value"><RollingNumber :value="hotTop?.items?.[0]?.replies ?? 0" /></div>
+            <div v-if="hotTop?.items?.[0]" class="stat-sub">
+              <span class="sub-neutral">{{ hotTop?.items?.[0]?.name }}</span>
+              <span class="sub-neutral">赞 {{ hotTop?.items?.[0]?.likes?.toLocaleString() }}</span>
+            </div>
+            <div v-else class="stat-sub"><span class="sub-neutral">暂无数据</span></div>
+          </div>
+        </div>
+
+        <!-- 媒体文件 KPI：本地媒体文件数与占用体积（与 R4 内容资产漏斗同源，点击进资源管理） -->
+        <div class="stat-card stat-clickable" role="button" tabindex="0" @click="goResources" @keydown.enter="goResources">
+          <div class="stat-icon" style="background: linear-gradient(135deg, #60a5fa, #3b82f6)">
+            <el-icon><FolderOpened /></el-icon>
+          </div>
+          <div class="stat-body">
+            <div class="stat-label">媒体文件</div>
+            <div class="stat-value"><RollingNumber :value="assets?.files ?? 0" /></div>
+            <div v-if="assets" class="stat-sub">
+              <span class="sub-neutral">{{ formatSize(assets?.size ?? 0) }}</span>
+              <span class="sub-neutral">{{ assets?.folders }} 目录</span>
+            </div>
+            <div v-else class="stat-sub"><span class="sub-neutral">暂无数据</span></div>
           </div>
         </div>
       </template>
       <template v-else>
-        <div v-for="i in 4" :key="i" class="stat-card">
+        <div v-for="i in 6" :key="i" class="stat-card">
           <el-skeleton animated :rows="3" />
         </div>
       </template>
+    </div>
+    </div>
+
+    <!-- R4 内容 → 资产漏斗：收录 → 已下载帖 → 本地文件 → 占用体积（口径与资源管理页一致） -->
+    <div class="page-card asset-card">
+      <div class="chart-head">
+        <div class="chart-head-left">
+          <span class="chart-title">内容资产</span>
+          <span class="chart-sub">收录内容沉淀为本地媒体资产的进度</span>
+        </div>
+        <div class="chart-head-right">
+          <el-link type="primary" :underline="false" class="more-link" @click="goResources">资源管理</el-link>
+        </div>
+      </div>
+      <div v-if="assets && !assetsEmpty" class="asset-flow">
+        <div class="asset-step as-posts">
+          <span class="as-label">收录帖子</span>
+          <span class="as-value">{{ assets.posts_total.toLocaleString() }}</span>
+        </div>
+        <span class="asset-arrow">
+          →
+          <em v-if="downloadRate" title="已下载帖 / 收录帖子">{{ downloadRate }}%</em>
+        </span>
+        <div class="asset-step as-downloaded">
+          <span class="as-label">已下载帖</span>
+          <span class="as-value">{{ assets.downloaded_posts.toLocaleString() }}</span>
+        </div>
+        <span class="asset-arrow">→</span>
+        <div class="asset-step as-files">
+          <span class="as-label">本地文件</span>
+          <span class="as-value">{{ assets.files.toLocaleString() }}</span>
+          <span class="as-sub">{{ assets.folders }} 个目录</span>
+        </div>
+        <span class="asset-arrow">→</span>
+        <div class="asset-step as-size">
+          <span class="as-label">占用体积</span>
+          <span class="as-value">{{ formatSize(assets.size) }}</span>
+        </div>
+      </div>
+      <div v-else-if="assets && assetsEmpty" class="asset-empty">
+        <el-icon class="ae-icon"><FolderOpened /></el-icon>
+        <div class="ae-text">尚未下载任何内容</div>
+        <div class="ae-sub">下载的帖子会沉淀为本地媒体资产并显示在此</div>
+        <el-link type="primary" :underline="false" class="ae-link" @click="goResources">去资源管理 ›</el-link>
+      </div>
+      <el-skeleton v-else animated :rows="1" style="margin-top: 12px" />
     </div>
 
     <!-- 每日发布趋势：全站趋势 + 分版块 同行各占 1/2 -->
@@ -1836,6 +2108,14 @@ function renderFidTrendChart() {
             <div class="ts-card ts-avg">
               <span class="ts-label">日均</span>
               <span class="ts-value"><RollingNumber :value="trendStats.avg" /></span>
+            </div>
+            <div
+              v-if="trendCmp"
+              class="ts-card ts-cmp"
+              title="近 7 日发布量相对前 7 日的涨跌（滚动窗口，与分版块趋势同源同窗）"
+            >
+              <span class="ts-label">近7日环比</span>
+              <span class="ts-value" :style="{ color: trendCmp.color }">{{ trendCmp.text }}</span>
             </div>
             </div>
             <el-select
@@ -1918,6 +2198,14 @@ function renderFidTrendChart() {
             <div class="ts-card ts-avg">
               <span class="ts-label">峰值日增</span>
               <span class="ts-value"><RollingNumber :value="fidTrendStats.peak" /></span>
+            </div>
+            <div
+              v-if="fidTopDelta"
+              class="ts-card ts-cmp"
+              title="最活板块近 7 日发布量相对前 7 日的涨跌（滚动窗口，与活跃版块榜环比同口径；各版块明细见图表悬浮）"
+            >
+              <span class="ts-label">最活板块7日环比</span>
+              <span class="ts-value" :style="{ color: fidTopDelta.color }">{{ fidTopDelta.text }}</span>
             </div>
           </div>
           <el-tooltip
@@ -2117,6 +2405,7 @@ function renderFidTrendChart() {
               <el-tooltip content="下载" placement="top" :teleported="!app.fullscreen">
                 <el-button link size="small" type="success" :icon="Download" class="board-download" @click.stop.prevent="downloadUrl(item.url)" />
               </el-tooltip>
+
               <el-tooltip
                 :content="`互动量 ${engagement(item)} = 点赞 ${item.likes} + 回复 ${item.replies} · ${rateText(item)}`"
                 placement="top"
@@ -2191,6 +2480,7 @@ function renderFidTrendChart() {
               <el-tooltip content="下载" placement="top" :teleported="!app.fullscreen">
                 <el-button link size="small" type="success" :icon="Download" class="board-download" @click.stop.prevent="downloadUrl(item.url)" />
               </el-tooltip>
+
               <el-tooltip
                 :content="`互动量 ${engagement(item)} = 点赞 ${item.likes} + 回复 ${item.replies}（本榜排序依据）`"
                 placement="top"
@@ -2203,6 +2493,60 @@ function renderFidTrendChart() {
             </div>
             <div v-if="!monthTop?.items?.length" class="text-muted">暂无数据</div>
           </div>
+        </div>
+      </div>
+
+      <!-- R3 待下载推荐：近 30 日互动量最高且未下载的帖子（发现 → 下载一步直达）。
+           行不可下钻：帖子页无法复现「未下载」过滤条件，下钻必然口径不一致；
+           标题打开原帖、悬浮按钮直接创建下载任务（与热门榜同一套交互）。 -->
+      <div class="page-card chart-card pending-card">
+        <div class="chart-head" style="margin-bottom: 8px">
+          <div class="chart-head-left">
+            <span class="chart-title">待下载推荐</span>
+            <el-tooltip
+              content="近 30 日互动量最高、且尚未下载到本地的帖子（已下载与下载中自动排除；下载完成后下一轮刷新自动退出推荐）"
+              placement="top"
+              :teleported="!app.fullscreen"
+            >
+              <span class="chart-sub">近30日 · 未下载 · 按互动量</span>
+            </el-tooltip>
+          </div>
+          <div class="chart-head-right">
+            <el-link type="primary" :underline="false" class="more-link" @click="goDownloads">下载中心</el-link>
+          </div>
+        </div>
+        <div v-if="loadingPending && !pending" class="pending-grid">
+          <div v-for="i in 4" :key="i" class="board-card pending-row">
+            <el-skeleton animated :rows="1" />
+          </div>
+        </div>
+        <div v-else class="pending-grid">
+          <div v-for="(item, i) in pending?.items ?? []" :key="item.url" class="board-card pending-row">
+            <span :class="rankClass(i)">{{ i + 1 }}</span>
+            <el-tag size="small" type="info" class="board-tag">{{ item.name }}</el-tag>
+            <a
+              class="title-link board-title"
+              :title="`${item.name} · ${item.title}`"
+              @click.stop.prevent="openUrl(item.url)"
+            >
+              {{ item.title }}
+            </a>
+            <span class="board-postdate" :title="`发布于 ${item.date}`">{{ item.date.slice(5) }}</span>
+            <el-tooltip content="下载" placement="top" :teleported="!app.fullscreen">
+              <el-button link size="small" type="success" :icon="Download" class="board-download" @click.stop.prevent="downloadUrl(item.url)" />
+            </el-tooltip>
+
+            <el-tooltip
+              :content="`互动量 ${item.engagement} = 点赞 ${item.likes} + 回复 ${item.replies}`"
+              placement="top"
+              :teleported="!app.fullscreen"
+            >
+              <span class="board-metric board-metric-main">
+                <el-icon><Star /></el-icon>{{ metricText(item.engagement) }}
+              </span>
+            </el-tooltip>
+          </div>
+          <div v-if="!pending?.items?.length" class="pending-empty">近 30 日高互动帖子均已下载</div>
         </div>
       </div>
 
@@ -2244,6 +2588,13 @@ function renderFidTrendChart() {
 .dashboard.is-fullscreen .chart-row,
 .dashboard.is-fullscreen .board-row {
   gap: 12px;
+  margin-bottom: 12px;
+}
+
+/* 大屏（全屏）态：健康条 / 资产卡 / 待下载卡同步收紧间距，避免挤压图表区 */
+.dashboard.is-fullscreen .health-bar,
+.dashboard.is-fullscreen .asset-card,
+.dashboard.is-fullscreen .pending-card {
   margin-bottom: 12px;
 }
 
@@ -2807,6 +3158,268 @@ function renderFidTrendChart() {
 
 .spark-bar:hover {
   background: #2f6fed;
+}
+
+/* ================= R1 采集健康条 =================
+   三态横幅：ok 绿（弱化不抢视觉）/ warn 橙 / danger 红；
+   判定口径在后端 _health_verdict 一处，前端只按 level 上色。
+   点击跳运行记录页；抓取中时圆点脉冲提示。 */
+.health-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+  padding: 8px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: box-shadow 0.15s ease;
+  min-width: 0;
+}
+
+.health-bar:hover {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.health-bar:focus-visible {
+  outline: 2px solid #2f6fed;
+  outline-offset: 2px;
+}
+
+.health-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.health-msg {
+  flex: 1;
+  min-width: 0;
+  font-weight: 500;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.health-go {
+  flex-shrink: 0;
+  font-size: 12px;
+  opacity: 0.75;
+}
+
+.health-ok {
+  background: #f0faf4;
+  border-color: #d4f0e0;
+  color: #0f7a52;
+}
+.health-ok .health-dot {
+  background: #10b981;
+  box-shadow: 0 0 6px rgba(16, 185, 129, 0.6);
+}
+
+.health-warn {
+  background: #fffaf0;
+  border-color: #ffe7ba;
+  color: #b26b00;
+}
+.health-warn .health-dot {
+  background: #f59e0b;
+  box-shadow: 0 0 6px rgba(245, 158, 11, 0.6);
+}
+
+.health-danger {
+  background: #fef1f2;
+  border-color: #ffdce0;
+  color: #be2028;
+}
+.health-danger .health-dot {
+  background: #ef4444;
+  box-shadow: 0 0 6px rgba(239, 68, 68, 0.6);
+}
+
+/* 抓取中：状态点脉冲（与 B1 running-dot 同节奏） */
+.health-pulse .health-dot {
+  animation: health-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes health-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.45;
+    transform: scale(1.5);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .health-pulse .health-dot {
+    animation: none;
+  }
+}
+
+/* 窄屏：健康条信息收窄为单行省略，「运行记录」入口保留可达 */
+@media (max-width: 640px) {
+  .health-bar {
+    font-size: 12px;
+    padding: 7px 10px;
+  }
+}
+
+/* ================= R2 周期环比色（累计收录卡副指标） ================= */
+.sub-new {
+  color: #f59e0b;
+}
+
+/* 近 30 日环比卡（趋势卡头）：沿用 ts-card 结构，色值随涨跌方向 */
+.ts-cmp {
+  border-left-color: #2f6fed;
+}
+
+/* ================= R4 内容 → 资产漏斗 =================
+   紧凑横条卡：四级漏斗 + 箭头（首级带转化率），窄屏自动换行。
+   步骤条配色沿用趋势统计卡家族色（蓝/绿/紫/橙），不另建色板。 */
+.asset-card {
+  margin-bottom: 16px;
+}
+
+/* 资产空态：无任何已下载资产时的引导态（替代生硬的「0 漏斗」），移动端同样居中 */
+.asset-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 22px 0;
+  text-align: center;
+}
+.asset-empty .ae-icon {
+  font-size: 34px;
+  color: #c0c4cc;
+}
+.asset-empty .ae-text {
+  font-size: 14px;
+  font-weight: 600;
+  color: #606266;
+}
+.asset-empty .ae-sub {
+  font-size: 12px;
+  color: #909399;
+}
+.asset-empty .ae-link {
+  margin-top: 2px;
+  font-size: 13px;
+}
+
+.asset-flow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+  min-width: 0;
+}
+
+.asset-step {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 14px;
+  border-radius: 6px;
+  background: #f7f8fa;
+  border-left: 3px solid #2f6fed;
+  min-width: 84px;
+  white-space: nowrap;
+}
+
+.as-posts {
+  border-left-color: #2f6fed;
+}
+.as-downloaded {
+  border-left-color: #10b981;
+}
+.as-files {
+  border-left-color: #8b5cf6;
+}
+.as-size {
+  border-left-color: #f59e0b;
+}
+
+.as-label {
+  font-size: 11px;
+  color: #909399;
+  line-height: 1;
+}
+
+.as-value {
+  font-size: 17px;
+  font-weight: 700;
+  color: #1f2d3d;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+
+.as-sub {
+  font-size: 10px;
+  color: #b0b3b8;
+}
+
+.asset-arrow {
+  color: #b0b3b8;
+  font-size: 14px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* 首级转化率：收录 → 已下载帖 */
+.asset-arrow em {
+  font-style: normal;
+  font-size: 11px;
+  color: #10b981;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ================= R3 待下载推荐 =================
+   桌面双列网格（8 条正好 4 行，比单列省一半纵向空间），窄屏单列。
+   行不整体下钻（帖子页无「未下载」过滤条件），故指针恢复默认。 */
+.pending-card {
+  margin-bottom: 16px;
+}
+
+.pending-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 16px;
+}
+
+@media (max-width: 1100px) {
+  .pending-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.pending-row {
+  cursor: default;
+}
+
+.pending-row:hover {
+  background: #f5f7fa;
+  box-shadow: none;
+}
+
+.pending-empty {
+  grid-column: 1 / -1;
+  color: #909399;
+  font-size: 12px;
+  padding: 10px 0;
+  text-align: center;
 }
 
 </style>

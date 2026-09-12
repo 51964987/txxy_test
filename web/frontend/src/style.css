@@ -9,7 +9,14 @@
 }
 
 html,
-body,
+body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  /* 仅保留 .main（el-main）一个滚动容器，杜绝 html/body 与 .main 双层滚动条 */
+  overflow: hidden;
+}
+
 #app {
   height: 100%;
   margin: 0;
@@ -33,7 +40,7 @@ body {
 
 .stat-grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(3, 1fr);
   gap: 16px;
   margin-bottom: 16px;
 }
@@ -92,6 +99,16 @@ body {
 
 .stat-card:hover {
   box-shadow: 0 4px 16px rgba(31, 45, 61, 0.08);
+}
+
+/* 可点击 KPI 卡（最热帖 / 媒体文件）：与图表卡一致的指针 + 键盘可达 */
+.stat-clickable {
+  cursor: pointer;
+}
+
+.stat-clickable:focus-visible {
+  outline: 2px solid #2f6fed;
+  outline-offset: 2px;
 }
 
 /* 统计卡加载态：骨架屏固定宽度，避免其内部结构瞬时撑宽引发横向滚动条闪现 */

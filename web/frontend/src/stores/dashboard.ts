@@ -14,6 +14,12 @@ export const useDashboardStore = defineStore('dashboard', () => {
   const enableAutoRefresh = ref(false)
   // 自动刷新开关（默认关闭；配置启用时初始为开启，每 30 秒静默刷新一次，逻辑在 DashboardView 中）
   const autoRefresh = ref(false)
+  // 黑名单版本号：设置页增删黑名单后 +1，供 Dashboard 监听并强制重拉卡片口径。
+  // 后端 posts_filtered 视图已过滤，此处解决「点赞/回复最高帖等卡片不参与轮询刷新」导致的不同步。
+  const blacklistVersion = ref(0)
+  function bumpBlacklist() {
+    blacklistVersion.value++
+  }
   // 最后更新时间（Dashboard 加载成功后更新）
   const updatedAtRaw = ref<string | null>(null)
 
@@ -102,5 +108,7 @@ export const useDashboardStore = defineStore('dashboard', () => {
     setCarouselActive,
     toggleCarousel,
     setCarouselPaused,
+    blacklistVersion,
+    bumpBlacklist,
   }
 })

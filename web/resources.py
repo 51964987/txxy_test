@@ -245,12 +245,15 @@ def scan() -> dict[str, Any]:
 
 
 # ---- B1 来源回溯：目录名（= 帖子页面标题）匹配 posts 表（只读查询，不写库） ----
-def source_lookup(name: str) -> dict[str, Any]:
+def source_lookup(name: str, *, exact_only: bool = False) -> dict[str, Any]:
     """按目录名回溯来源帖：精确命中优先（title 主键索引），未命中再做双向模糊匹配。
 
     目录名即下载时的页面标题，正常场景精确即可命中；目录名可能经标题清理
     （特殊字符被替换），故补充「库内标题含目录名 / 目录名含库内标题」双向 LIKE 兜底，
     多条命中时取入库时间最新一条。仅展示用途，模糊匹配不做转义特判。
+    exact_only=True 时跳过模糊兜底只做精确匹配（命中 title 主键索引，零全表扫描）：
+    供下载履历的磁盘恢复使用——模糊命中可能张冠李戴，误配会把未下载的帖子
+    错误排除出待下载推荐，宁可漏记也不误记。
     """
     name = (name or "").strip()
     if not name:
@@ -260,7 +263,7 @@ def source_lookup(name: str) -> dict[str, Any]:
         "SELECT title, fid, date, url, author, created_at FROM posts WHERE title = ? LIMIT 1",
         (name,),
     )
-    if not rows:
+    if not rows and not exact_only:
         like = f"%{name}%"
         rows = db.query(
             "SELECT title, fid, date, url, author, created_at FROM posts" +

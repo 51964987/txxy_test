@@ -61,5 +61,7 @@ backups/
 
 # 临时文件
 _*.py
-\.*\.*
+_*.png
+.*.png
 tmp_*.py
+*.err

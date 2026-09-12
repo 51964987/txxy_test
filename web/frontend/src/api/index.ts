@@ -247,7 +247,13 @@ export interface TrendPoint {
 
 export interface TrendByFid {
   dates: string[]
-  series: { fid: number; name: string; data: number[] }[]
+  series: {
+    fid: number
+    name: string
+    data: number[]
+    /** 近 7 日 vs 前 7 日发布量环比；null = 前 7 日无基准（新增版块） */
+    delta: number | null
+  }[]
 }
 
 export interface FidDistItem {
@@ -257,6 +263,81 @@ export interface FidDistItem {
   latest_date?: string | null
   today_count?: number
   yesterday_count?: number
+}
+
+/**
+ * 采集健康条（HK1 批次健康 + HK2 空窗滞后）。
+ * level / message 的判定在后端一处完成（前端只上色），避免两端各判一套阈值。
+ */
+export interface Health {
+  run_id: number | null
+  run_date: string | null
+  run_status: 'running' | 'ok' | 'error' | 'cancelled' | 'unknown'
+  run_time: string | null
+  /** 批次耗时（秒） */
+  duration: number | null
+  ok: number
+  fail: number
+  skip: number
+  running: number
+  sqlite: number
+  progress: number | null
+  success_rate: number | null
+  failed_sections: string[]
+  skipped_sections: string[]
+  latest_date: string | null
+  /** 最近入库活动时间（ISO 时间戳），与 KPI「最近入库」同源 */
+  latest_run_at: string | null
+  /** 今天 − 最新发布日（发布口径） */
+  days_lag: number | null
+  /** 今天 − 最近入库活动日（抓取是否中断的关键信号） */
+  run_lag_days: number | null
+  level: 'ok' | 'warn' | 'danger'
+  message: string
+}
+
+/** 周期对比的单个窗口：近 N 天 vs 前 N 天（滚动窗口，与活跃榜 7d 环比同源） */
+export interface CompareWindow {
+  days: number
+  cur: number
+  prev: number
+  /** 环比百分比；null = 前值为 0（无计算基准，按「新增」展示） */
+  delta: number | null
+}
+
+export interface Compare {
+  week: CompareWindow
+  month: CompareWindow
+}
+
+/** 待下载队列条目：窗口内高互动、且尚未下载到本地 */
+export interface PendingDownloadItem {
+  fid: string | null
+  name: string
+  title: string
+  url: string
+  likes: number
+  replies: number
+  engagement: number
+  date: string
+}
+
+export interface PendingDownloads {
+  days: number
+  items: PendingDownloadItem[]
+  /** 候选池规模（窗口内按互动量取样的条数） */
+  scanned: number
+  /** 候选池中命中「已下载」的条数（说明确实做了排除） */
+  downloaded: number
+}
+
+/** 内容 → 资产漏斗：收录 → 已下载帖 → 本地文件 → 占用体积 */
+export interface Assets {
+  posts_total: number
+  downloaded_posts: number
+  files: number
+  folders: number
+  size: number
 }
 
 /** 单个可设置参数的快照（后端 settings.WHITELIST 生成） */
@@ -474,6 +555,20 @@ export interface DownloadTaskDetail extends DownloadTaskSummary {
 /** 兼容别名：详情即完整任务结构 */
 export type DownloadTask = DownloadTaskDetail
 
+/** 链接黑名单项（url / author / fid 三类） */
+export interface BlacklistItem {
+  type: 'url' | 'author' | 'fid'
+  value: string
+  reason: string
+  created_at: number
+}
+
+/** 链接黑名单列表响应 */
+export interface BlacklistResp {
+  items: BlacklistItem[]
+  count: number
+}
+
 export const api = {
   config: () => get<AppConfig>('/config'),
   saveSettings: (items: Record<string, number | boolean | string[] | string>) =>
@@ -493,6 +588,11 @@ export const api = {
   trendByFid: (days: number, top = 8) =>
     get<TrendByFid>('/stats/trend_by_fid', { days, top }),
   fidDist: () => get<FidDistItem[]>('/stats/fid_dist'),
+  health: () => get<Health>('/stats/health'),
+  compare: () => get<Compare>('/stats/compare'),
+  pendingDownloads: (limit = 8, days = 30) =>
+    get<PendingDownloads>('/stats/pending_downloads', { limit, days }),
+  assets: () => get<Assets>('/stats/assets'),
   recent: (limit = 10) => get<Post[]>('/stats/recent', { limit }),
   fidMeta: () => get<FidMeta[]>('/posts/fid'),
   posts: (p: {
@@ -577,6 +677,14 @@ export const api = {
   prioritizeDownload: (id: string) => post<{ id: string }>(`/downloads/${id}/prioritize`),
   clearDownloads: () => post<{ cleared: number }>('/downloads/clear'),
   deleteDownload: (id: string) => del<{ id: string }>(`/downloads/${id}`),
+  /** 链接黑名单：列出全部（url / author / fid 三类） */
+  blacklist: () => get<BlacklistResp>('/blacklist'),
+  /** 新增黑名单项：type ∈ url|author|fid，reason 可选 */
+  addBlacklist: (type: string, value: string, reason = '') =>
+    post<{ item: BlacklistItem }>('/blacklist', { type, value, reason }),
+  /** 移除黑名单项 */
+  removeBlacklist: (type: string, value: string) =>
+    post<{ ok: boolean }>('/blacklist/remove', { type, value }),
 }
 
 /** 生成导出 CSV 的下载地址（当前筛选条件下） */

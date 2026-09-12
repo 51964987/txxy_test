@@ -168,6 +168,8 @@ onUnmounted(() => {
 
 .body {
   min-width: 0;
+  /* 保证高度链贯通到 .main（el-main）成为唯一有界滚动容器，配合全局 overflow:hidden */
+  height: 100%;
 }
 
 .header {

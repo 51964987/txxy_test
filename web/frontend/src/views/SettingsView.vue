@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { api, isAborted, type SettingItem } from '../api'
+import { api, isAborted, type BlacklistItem, type SettingItem } from '../api'
 import { useAppStore } from '../stores/app'
 import { useDashboardStore } from '../stores/dashboard'
 import { legacyCopy } from '../utils/clipboard'
@@ -208,8 +208,66 @@ function copyDraft() {
   else ElMessage.error('复制失败')
 }
 
+// ===== 链接黑名单（大屏卡片口径过滤）=====
+const blItems = ref<BlacklistItem[]>([])
+const blLoading = ref(false)
+const blType = ref<'url' | 'author' | 'fid'>('url')
+const blValue = ref('')
+const blReason = ref('')
+
+const BL_TYPE_LABEL: Record<BlacklistItem['type'], string> = {
+  url: '链接',
+  author: '作者',
+  fid: '版块',
+}
+
+async function loadBlacklist() {
+  blLoading.value = true
+  try {
+    const r = await api.blacklist()
+    blItems.value = r.items
+  } catch (e) {
+    if (isAborted(e)) return
+    ElMessage.error(`加载黑名单失败: ${(e as Error).message}`)
+  } finally {
+    blLoading.value = false
+  }
+}
+
+async function addBlacklistItem() {
+  const value = blValue.value.trim()
+  if (!value) {
+    ElMessage.warning('请填写链接 / 作者 / 版块标识')
+    return
+  }
+  try {
+    await api.addBlacklist(blType.value, value, blReason.value.trim())
+    blValue.value = ''
+    blReason.value = ''
+    ElMessage.success('已加入黑名单，大屏各卡片口径同步更新')
+    await loadBlacklist()
+    dash.bumpBlacklist()
+  } catch (e) {
+    if (isAborted(e)) return
+    ElMessage.error(`添加失败: ${(e as Error).message}`)
+  }
+}
+
+async function removeBlacklistItem(it: BlacklistItem) {
+  try {
+    await api.removeBlacklist(it.type, it.value)
+    ElMessage.success('已移除')
+    await loadBlacklist()
+    dash.bumpBlacklist()
+  } catch (e) {
+    if (isAborted(e)) return
+    ElMessage.error(`移除失败: ${(e as Error).message}`)
+  }
+}
+
 onMounted(() => {
   void load()
+  void loadBlacklist()
 })
 </script>
 
@@ -309,6 +367,46 @@ onMounted(() => {
               </template>
               <el-button link type="primary" size="small" @click="resetOne(it)">恢复默认</el-button>
             </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 链接黑名单：作用于大屏各卡片口径（累计/近7日/近30日/榜单/推荐），不影响帖子页与下载 -->
+      <div class="page-card">
+        <div class="group-title">链接黑名单（大屏卡片口径过滤）</div>
+        <div class="group-desc text-muted">
+          加入后，对应链接 / 作者 / 版块的全部帖子将从数据总览所有卡片中剔除（含已收录统计、趋势、榜单、待下载推荐）。
+          仅影响大屏看板，帖子浏览页与下载中心不受影响，可随时移除恢复。
+        </div>
+        <div class="bl-add">
+          <el-select v-model="blType" size="small" class="bl-type" style="width: 120px">
+            <el-option label="链接" value="url" />
+            <el-option label="作者" value="author" />
+            <el-option label="版块" value="fid" />
+          </el-select>
+          <el-input
+            v-model="blValue"
+            size="small"
+            class="bl-value"
+            :placeholder="blType === 'url' ? '帖子链接（如 /htm_data/.../x.html）' : blType === 'author' ? '作者名' : '版块 fid（如 5）'"
+          />
+          <el-input v-model="blReason" size="small" class="bl-reason" placeholder="备注（可选）" />
+          <el-button type="primary" size="small" :loading="blLoading" @click="addBlacklistItem">
+            加入黑名单
+          </el-button>
+        </div>
+        <div v-loading="blLoading" class="bl-list">
+          <div v-if="!blItems.length" class="text-muted bl-empty">暂无黑名单</div>
+          <div v-for="it in blItems" :key="it.type + '|' + it.value" class="bl-row">
+            <el-tag
+              size="small"
+              :type="it.type === 'url' ? 'danger' : it.type === 'author' ? 'warning' : 'info'"
+            >
+              {{ BL_TYPE_LABEL[it.type] }}
+            </el-tag>
+            <span class="bl-value-text" :title="it.value">{{ it.value }}</span>
+            <span v-if="it.reason" class="bl-reason-text text-muted">{{ it.reason }}</span>
+            <el-button link type="danger" size="small" @click="removeBlacklistItem(it)">移除</el-button>
           </div>
         </div>
       </div>
@@ -443,6 +541,61 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.bl-add {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0;
+}
+
+.bl-type {
+  flex-shrink: 0;
+}
+
+.bl-value {
+  flex: 1;
+  min-width: 240px;
+}
+
+.bl-reason {
+  width: 160px;
+}
+
+.bl-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+  min-height: 24px;
+}
+
+.bl-empty {
+  font-size: 12px;
+}
+
+.bl-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+  border-top: 1px solid var(--app-border);
+  font-size: 13px;
+}
+
+.bl-value-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: monospace;
+}
+
+.bl-reason-text {
+  font-size: 12px;
+  flex-shrink: 0;
 }
 
 @media (max-width: 767px) {

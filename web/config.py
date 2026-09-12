@@ -18,6 +18,7 @@
   TXXY_DOWNLOAD_CONCURRENCY  单任务内并行下载的 URL 数（默认 2）
   TXXY_DOWNLOAD_MAX_BATCH    单次批量提交的 URL 数量上限（默认 50）
   TXXY_DOWNLOAD_TASKS_FILE   下载任务历史持久化文件（默认 outputs/download_tasks.json）
+  TXXY_DOWNLOAD_HISTORY_FILE 下载履历持久化文件（默认 outputs/download_history.json）
 """
 import os
 from pathlib import Path
@@ -72,6 +73,16 @@ def to_display_url(url: str | None) -> str:
     """URL 归一化：历史完整 URL / 新的相对路径 → 展示用完整 URL（供 db.py 调用）"""
     return _TXXY_ENV.to_display_url(url)
 
+
+def to_storage_path(url: str | None) -> str:
+    """URL 归一化：任意形态 → 入库相对路径（/htm_data/...）。唯一实现在 txxy_env，此处只转发。
+
+    用途：下载任务里存的是完整 URL（提交时可能带本机镜像 host，如
+    http://127.0.0.1:1024/htm_data/...），而 posts.url 入库的是相对路径，
+    两侧必须先转成同一形态才能做差集（待下载队列 / 资产漏斗的口径基础）。
+    """
+    return _TXXY_ENV.to_storage_path(url)
+
 HOST = os.environ.get("TXXY_WEB_HOST", "127.0.0.1")
 PORT = int(os.environ.get("TXXY_WEB_PORT", "8088"))
 # 独立分享服务端口：完全隔离于前端 SPA（不挂载任何前端资源，/ 也不返回看板）。
@@ -96,6 +107,14 @@ DOWNLOAD_MAX_BATCH = int(os.environ.get("TXXY_DOWNLOAD_MAX_BATCH", "50"))
 # 下载任务历史持久化文件：服务重启后任务列表/状态不丢失。
 DOWNLOAD_TASKS_FILE = Path(
     os.environ.get("TXXY_DOWNLOAD_TASKS_FILE", str(BASE_DIR / "outputs" / "download_tasks.json"))
+)
+
+# 下载履历（url -> saved_dir 的持久映射）：与任务列表刻意分开——任务列表会被
+# 「清空已完成」与自动轮转裁剪，而「哪些帖子已下载过」是持久事实。此前两者混用
+# 同一份数据，清空任务后资产漏斗的「已下载帖」归零、待下载推荐重复推荐已下载帖子
+# （2026-09-11 修复）。Docker 部署时随 outputs/ 卷持久化，各端一致。
+DOWNLOAD_HISTORY_FILE = Path(
+    os.environ.get("TXXY_DOWNLOAD_HISTORY_FILE", str(BASE_DIR / "outputs" / "download_history.json"))
 )
 
 # ---------------- 资源管理：回收站（软删除） ----------------

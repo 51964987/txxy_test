@@ -25,6 +25,7 @@ for _stream in (sys.stdout, sys.stderr):
     except (AttributeError, ValueError, OSError):
         pass
 
+import blacklist
 import config
 import settings
 from api import router as api_router
@@ -77,6 +78,15 @@ def apply_saved_settings() -> None:
         settings.apply_runtime()
     except Exception as e:  # 设置应用失败不应阻断启动，回落默认值即可
         _monitor_logger.warning("应用已保存参数设置失败（回落默认值）: %s", e)
+
+
+@app.on_event("startup")
+def ensure_blacklist_schema() -> None:
+    """启动时幂等建链接黑名单表与 posts_filtered 视图（供大屏统计查询引用）。"""
+    try:
+        blacklist.ensure_schema()
+    except Exception as e:  # 黑名单缺失不应阻断主服务启动
+        _monitor_logger.warning("建立链接黑名单 schema 失败（大屏过滤将不生效）: %s", e)
 
 FRONTEND_DIST = Path(__file__).resolve().parent / "frontend" / "dist"
 

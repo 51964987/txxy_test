@@ -112,9 +112,10 @@ WHITELIST: dict[str, dict[str, Any]] = {
         "type": "array",
         "scope": "frontend",
         "options": [
-            {"value": "overview", "label": "总览首屏（KPI 指标）"},
+            {"value": "overview", "label": "总览首屏（KPI 指标 + 采集健康条）"},
             {"value": "trend", "label": "每日发布趋势 + 分版块趋势"},
             {"value": "ranks", "label": "活跃作者 / 活跃 fid 榜"},
+            {"value": "assets", "label": "待下载队列 + 内容资产漏斗"},
             {"value": "boards", "label": "热门榜（点赞/回复/最新最热/本月最热）"},
         ],
         "desc": "演示轮播依次切换的板块与顺序：勾选即纳入、上下移动调整顺序",
@@ -129,7 +130,7 @@ _lock = threading.Lock()
 _values: dict[str, Any] | None = None
 
 # 演示轮播默认板块序列（与前端 SECTION_IDS 的键对齐）；顺序即轮播切换顺序
-CAROUSEL_SECTIONS_DEFAULT: list[str] = ["overview", "trend", "ranks", "boards"]
+CAROUSEL_SECTIONS_DEFAULT: list[str] = ["overview", "trend", "ranks", "assets", "boards"]
 
 
 def _load() -> dict[str, Any]:
