@@ -320,6 +320,8 @@ export interface PendingDownloadItem {
   replies: number
   engagement: number
   date: string
+  /** 推荐状态：fresh=全新待下载；re_download=曾下载且文件已清理（可重下） */
+  state: 'fresh' | 're_download'
 }
 
 export interface PendingDownloads {

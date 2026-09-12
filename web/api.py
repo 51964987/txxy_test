@@ -239,6 +239,7 @@ class PendingDownloadItemResp(BaseModel):
     replies: int
     engagement: int
     date: str
+    state: str = "fresh"   # 推荐状态：fresh=全新待下载；re_download=曾下载且文件已清理（可重下）
 
 
 class PendingDownloadsResp(BaseModel):
@@ -621,12 +622,14 @@ def _health_verdict(
     *,
     run_status: str,
     fail: int,
+    skip: int,
     run_lag_days: int | None,
     days_lag: int | None,
     ok: int,
     total_sections: int,
     run_date: str | None,
     progress: int | None,
+    running: int,
     failed_sections: list[str],
 ) -> tuple[str, str]:
     """采集健康度判定 → (level, message)。
@@ -655,7 +658,12 @@ def _health_verdict(
     # 上面的分支会优先判为 warn；崩溃 / 僵死的 running 由 runs 降级为 error，同样落入 warn。
 
     if run_status == "running":
-        message = f"抓取中 {progress or 0}% · 已完成 {ok}/{total_sections or ok} 个版块"
+        # 进行中用「版块级明细」替代裸百分比：成功 / 失败 / 未执行 + 进行中数量，
+        # 一眼看清批次进度（与运行记录页版块状态同源）；百分比作为次信息不再作主文案。
+        message = (
+            f"成功 {ok} 个版块 / 失败 {fail} 个 / 未执行 {skip} 个"
+            f"（{running} 个进行中）"
+        )
     elif fail:
         message = f"最近批次 {fail} 个版块失败：{'、'.join(failed_sections) or '详见运行记录'}"
     elif run_lag_days is not None and run_lag_days >= 2:
@@ -740,12 +748,14 @@ def stats_health() -> HealthResp:
         level, message = _health_verdict(
             run_status=run_status,
             fail=fail,
+            skip=skip,
             run_lag_days=run_lag_days,
             days_lag=days_lag,
             ok=ok,
             total_sections=total_sections,
             run_date=run_date,
             progress=progress,
+            running=int(latest.get("running") or 0) if latest else 0,
             failed_sections=failed_sections,
         )
 
@@ -1211,16 +1221,19 @@ def stats_fid_dist() -> list[FidDistItemResp]:
 _PENDING_CANDIDATE_POOL = 400
 
 
-def _download_path_sets() -> tuple[set[str], set[str]]:
-    """(已下载的入库相对路径集合, 正在下载中的路径集合)。
+def _download_path_sets() -> tuple[set[str], set[str], set[str]]:
+    """(已下载的入库相对路径集合, 正在下载中的路径集合, 曾下载但目录已清理的路径集合)。
 
     必须归一化后再比：下载任务里存的是完整 URL（提交时可能带本机镜像 host，
     如 http://127.0.0.1:1024/htm_data/...），而 posts.url 入库的是相对路径，
     直接比字符串永远对不上——这是本功能唯一的隐蔽坑。
+    gone（曾下载但文件已被资源管理清空）用于给待下载推荐打「可重下」标记，
+    与「全新待下载」区分开，避免用户清理过文件还以为没下过。
     """
     done = {config.to_storage_path(u) for u in download_tasks.manager.downloaded_urls()}
     active = {config.to_storage_path(u) for u in download_tasks.manager.active_urls()}
-    return done, active
+    gone = {config.to_storage_path(u) for u in download_tasks.manager.gone_urls()}
+    return done, active, gone
 
 
 @router.get("/stats/pending_downloads")
@@ -1237,7 +1250,7 @@ def stats_pending_downloads(
     start = (date_cls.today() - timedelta(days=days - 1)).isoformat()
 
     def _calc():
-        done, active = _download_path_sets()
+        done, active, gone = _download_path_sets()
         rows = db.query(
             f"SELECT fid, title, url, likes, replies, date, {_N_ENGAGE} AS engage"
             " FROM posts_filtered WHERE date >= ? ORDER BY engage DESC, date DESC LIMIT ?",
@@ -1254,6 +1267,8 @@ def stats_pending_downloads(
                 continue  # 正在下载中：既不推荐重复提交，也不占用队列名额
             if len(items) >= limit:
                 break
+            # 曾下载但文件已被资源管理清空 → 标「可重下」；其余为全新待下载
+            state = "re_download" if path in gone else "fresh"
             items.append(
                 {
                     "fid": r["fid"],
@@ -1264,6 +1279,7 @@ def stats_pending_downloads(
                     "replies": _as_int(r["replies"]),
                     "engagement": _as_int(r["engage"]),
                     "date": r["date"],
+                    "state": state,
                 }
             )
         return {"days": days, "items": items, "scanned": len(rows), "downloaded": downloaded}

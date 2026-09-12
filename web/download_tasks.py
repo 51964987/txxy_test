@@ -496,6 +496,18 @@ class DownloadTaskManager:
             _, _, active = self._classify_urls_locked()
         return active
 
+    def gone_urls(self) -> set[str]:
+        """历史曾成功（ok/skip）但保存目录已不在磁盘的下载 URL 集合。
+
+        供数据总览「待下载队列」标记「曾下载·已清理」状态：这些帖子被资源管理清空过
+        文件，会重新进入推荐位，前端据此打「可重下」标记，与「全新待下载」区分开，
+        避免用户困惑「我不是下过吗」。判据与 downloaded_urls 同源自 _classify_urls_locked，
+        不另写一套，保证口径一致。
+        """
+        with self._lock:
+            _, gone, _ = self._classify_urls_locked()
+        return gone
+
     def cancel(self, tid: str) -> bool:
         """取消未完成任务（pending/running）。
 

@@ -2570,7 +2570,7 @@ function renderFidTrendChart() {
           <div class="chart-head-left">
             <span class="chart-title">待下载推荐</span>
             <el-tooltip
-              content="近 30 日互动量最高、且尚未下载到本地的帖子（已下载与下载中自动排除；下载完成后下一轮刷新自动退出推荐）"
+              content="近 30 日互动量最高、且尚未下载到本地的帖子（已下载与下载中自动排除；下载完成后下一轮刷新自动退出推荐；曾下载但文件已被清理的帖子标记为「可重下」）"
               placement="top"
               :teleported="!app.fullscreen"
             >
@@ -2597,6 +2597,12 @@ function renderFidTrendChart() {
             >
               {{ item.title }}
             </a>
+            <el-tag
+              v-if="item.state === 're_download'"
+              size="small"
+              type="warning"
+              class="board-tag re-download-tag"
+            >可重下</el-tag>
             <span class="board-postdate" :title="`发布于 ${item.date}`">{{ item.date.slice(5) }}</span>
             <el-tooltip content="下载" placement="top" :teleported="!app.fullscreen">
               <el-button link size="small" type="success" :icon="Download" class="board-download" @click.stop.prevent="downloadUrl(item.url)" />
@@ -3573,6 +3579,12 @@ function renderFidTrendChart() {
 .pending-row:hover {
   background: #f5f7fa;
   box-shadow: none;
+}
+
+/* 「可重下」标记：曾下载但文件已清理的帖子，区别于全新待下载 */
+.re-download-tag {
+  flex: 0 0 auto;
+  margin: 0 4px;
 }
 
 .pending-empty {
