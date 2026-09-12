@@ -1298,7 +1298,9 @@ def stats_assets() -> AssetsResp:
       自带签名 + TTL 增量缓存），不另写目录遍历。
     """
     def _calc():
-        done, _active = _download_path_sets()
+        # 仅用到「已下载」集合；_download_path_sets 现已返回 3 元组 (done, active, gone)，
+        # 必须按 3 元组解包，否则会 ValueError 导致接口 500（内容资产卡加载失败）。
+        done, _active, _gone = _download_path_sets()
         posts_total = int(db.query("SELECT COUNT(*) AS c FROM posts_filtered")[0]["c"])
         downloaded_posts = 0
         if done:
