@@ -41,6 +41,9 @@ OpenRateLimit = Annotated[None, Depends(ratelimit.rate_limit(10, 60))]
 VideoRateLimit = Annotated[None, Depends(ratelimit.rate_limit(300, 60))]
 # 删除 / 恢复 / 彻底删除为破坏性操作，限 10 次/分
 DeleteRateLimit = Annotated[None, Depends(ratelimit.rate_limit(10, 60))]
+# 批量删除被前端分块提交以展示进度（属一次用户意图的批量操作，非多次独立点击），
+# 放宽到 60 次/分，避免分块请求被限流 429 而中断删除流程
+BatchDeleteRateLimit = Annotated[None, Depends(ratelimit.rate_limit(60, 60))]
 # 创建分享链接：用户主动点击，限 20 次/分足够
 ShareRateLimit = Annotated[None, Depends(ratelimit.rate_limit(20, 60))]
 
@@ -263,7 +266,7 @@ class AssetsResp(BaseModel):
     files: int = 0
     folders: int = 0
     size: int = 0
-    # 按媒体类型拆分（image/video/torrent/text/other），口径来自 resources.scan()，
+    # 按媒体类型拆分（image/video/torrent/magnet/cloud/text/other），口径来自 resources.scan()，
     # 与资源管理页 B6 容量洞察同分类；前端资产卡「按类型」占比条与下钻复用
     type_breakdown: dict[str, TypeBreakdownItem] = {}
 
@@ -1870,7 +1873,7 @@ class ResourceBatchDeleteReq(BaseModel):
 
 
 @router.post("/resources/batch-delete")
-def resources_batch_delete(_: DeleteRateLimit, req: ResourceBatchDeleteReq) -> dict[str, Any]:
+def resources_batch_delete(_: BatchDeleteRateLimit, req: ResourceBatchDeleteReq) -> dict[str, Any]:
     """批量删除：逐项软删除或直接删除；单项失败不影响其余，返回删除数与失败明细。"""
     if not req.items:
         raise HTTPException(400, "未提供要删除的资源")

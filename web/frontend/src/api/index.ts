@@ -427,7 +427,7 @@ export interface ResourceFile {
   name: string
   rel_path: string
   size: number
-  category: 'image' | 'video' | 'torrent' | 'text' | 'other'
+  category: 'image' | 'video' | 'torrent' | 'magnet' | 'cloud' | 'text' | 'other'
   /** 文件修改时间（秒级时间戳）；0 或缺省 = stat 失败，不展示 */
   mtime?: number
   /** 图片像素宽（非图片或缺省为 0） */
@@ -666,11 +666,13 @@ export const api = {
     items: { path: string; is_dir: boolean }[],
     permanent: boolean,
   ) =>
-    post<{
+    // 删除是用户明确意图、允许较长等待：不设短超时（timeout:0），避免大目录 / 跨卷移动
+    // 超过默认 10s 被前端掐断，导致部分已删却误报失败
+    request<{
       ok: boolean
       deleted: number
       failed: { path: string; reason: string }[]
-    }>('/resources/batch-delete', { items, permanent }),
+    }>('/resources/batch-delete', undefined, { method: 'POST', body: { items, permanent }, dedupe: false, timeout: 0 }),
   submitDownload: (urls: string[]) => post<{ id: string; count: number }>('/downloads', { urls }),
   downloadTasks: () => get<{ tasks: DownloadTaskSummary[] }>('/downloads'),
   downloadTask: (id: string) => get<DownloadTaskDetail>(`/downloads/${id}`),

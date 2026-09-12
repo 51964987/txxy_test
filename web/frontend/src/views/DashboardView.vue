@@ -19,7 +19,7 @@ import { useDashboardStore } from '../stores/dashboard'
 import { useAppStore } from '../stores/app'
 import { formatDate, formatShortTime, pad2 } from '../utils/time'
 import { colorByIndex, colorForFid } from '../utils/fidColor'
-import { categoryColors, categoryMeta, CATEGORY_ORDER, type CategoryKey } from '../utils/category'
+import { buildTypeSegments, type CategoryKey } from '../utils/category'
 import RollingNumber from '../components/RollingNumber.vue'
 
 use([
@@ -83,9 +83,6 @@ const loadingP0 = ref(false)
 // ===== P1：懒加载区块（热门榜）=====
 const boards = ref<Boards | null>(null)
 const todayTop = ref<TodayTop | null>(null)
-// 首屏「最新最热帖」KPI 专用：独立于热门榜的 todayTop（后者懒加载，滚到才拉），
-// 故单独拉一份（limit=1）保证首屏 KPI 即有数据，不与榜单排序互相干扰
-const hotTop = ref<TodayTop | null>(null)
 const monthTop = ref<TodayTop | null>(null)
 const loadingBoards = ref(false)
 
@@ -323,33 +320,11 @@ const assetsEmpty = computed(() => {
   return a.downloaded_posts === 0 && a.files === 0 && a.folders === 0
 })
 
-/** R4 资产卡「按类型」占比：复用后端 type_breakdown（与资源管理页 B6 同口径）。
- *  仅展示有文件的类型，按固定顺序；sizePct 为该类体积占总体积的比例（占比条用），
- *  filePct 为文件数占比（图例辅助参考）。 */
-const typeRows = computed(() => {
-  const a = assets.value
-  const tb = a?.type_breakdown
-  if (!a || !tb) return []
-  const totalSize = a.size || 0
-  const totalFiles = a.files || 0
-  return CATEGORY_ORDER.map((key) => {
-    const item = tb[key]
-    const files = item?.files ?? 0
-    const size = item?.size ?? 0
-    return {
-      key,
-      label: categoryMeta[key]?.label ?? key,
-      color: categoryColors[key] ?? '#c0c4cc',
-      desc: categoryMeta[key]?.desc ?? '',
-      files,
-      size,
-      sizePct: totalSize ? Math.round((size / totalSize) * 100) : 0,
-      filePct: totalFiles ? Math.round((files / totalFiles) * 100) : 0,
-    }
-  }).filter((r) => r.files > 0)
-})
+/** R4 资产卡「类型分布（按大小）」：直接复用 utils/category 的 buildTypeSegments
+ * （与资源管理页 B6 同派生、同口径，单一实现，杜绝两边各算一遍）。 */
+const typeRows = computed(() => buildTypeSegments(assets.value))
 
-/** R4 资产卡「按类型」下钻：跳资源管理页并按该类型筛选（继承类型上下文，口径自洽） */
+/** R4 资产卡「类型分布（按大小）」下钻：跳资源管理页并按该类型筛选（继承类型上下文，口径自洽） */
 function goResourcesType(key: CategoryKey) {
   router.push({ path: '/resources', query: { type: key } })
 }
@@ -377,13 +352,10 @@ async function loadP0(initial = false) {
       api.health(),
       api.compare(),
       api.assets(),
-      // 首屏「最新最热帖」KPI：取最新数据日互动最高帖（综合互动量口径），与热门榜榜单同源
-      api.todayTop(1, 'engagement'),
-    ]).then(([h, c, a, tt]) => {
+    ]).then(([h, c, a]) => {
       if (h.status === 'fulfilled') health.value = h.value
       if (c.status === 'fulfilled') compare.value = c.value
       if (a.status === 'fulfilled') assets.value = a.value
-      if (tt.status === 'fulfilled') hotTop.value = tt.value
     })
     const [o, t, f, authors, fids] = await Promise.all([
       api.overview(),
@@ -734,13 +706,6 @@ function goRuns() {
 /** R4 资产卡入口：跳资源管理页（本地媒体资产总览） */
 function goResources() {
   router.push('/resources')
-}
-
-/** 最新最热帖 KPI 下钻：跳转该数据日、按回复排序的帖子列表（口径与「最新最热」榜单一致） */
-function goHotPost() {
-  const item = hotTop.value?.items?.[0]
-  if (!item || !hotTop.value?.date) return
-  goPostsInRange({ fid: item.fid ?? '', sort: 'replies' }, dayRange(hotTop.value.date))
 }
 
 /** R3 待下载推荐入口：下钻到帖子页，继承「近30日 · 未下载 · 按互动量」上下文（真下钻，数字自洽） */
@@ -2035,40 +2000,9 @@ function renderFidTrendChart() {
           </div>
         </div>
 
-        <!-- 最新最热帖 KPI：最新数据日互动最高帖（与「最新最热」榜单同源，仅取榜首）；点击下钻该日帖子 -->
-        <div class="stat-card stat-clickable" role="button" tabindex="0" @click="goHotPost" @keydown.enter="goHotPost">
-          <div class="stat-icon" style="background: linear-gradient(135deg, #fb7185, #e11d48)">
-            <el-icon><Star /></el-icon>
-          </div>
-          <div class="stat-body">
-            <div class="stat-label">最新最热帖</div>
-            <div class="stat-value"><RollingNumber :value="hotTop?.items?.[0]?.replies ?? 0" /></div>
-            <div v-if="hotTop?.items?.[0]" class="stat-sub">
-              <span class="sub-neutral">{{ hotTop?.items?.[0]?.name }}</span>
-              <span class="sub-neutral">赞 {{ hotTop?.items?.[0]?.likes?.toLocaleString() }}</span>
-            </div>
-            <div v-else class="stat-sub"><span class="sub-neutral">暂无数据</span></div>
-          </div>
-        </div>
-
-        <!-- 媒体文件 KPI：本地媒体文件数与占用体积（与 R4 内容资产漏斗同源，点击进资源管理） -->
-        <div class="stat-card stat-clickable" role="button" tabindex="0" @click="goResources" @keydown.enter="goResources">
-          <div class="stat-icon" style="background: linear-gradient(135deg, #60a5fa, #3b82f6)">
-            <el-icon><FolderOpened /></el-icon>
-          </div>
-          <div class="stat-body">
-            <div class="stat-label">媒体文件</div>
-            <div class="stat-value"><RollingNumber :value="assets?.files ?? 0" /></div>
-            <div v-if="assets" class="stat-sub">
-              <span class="sub-neutral">{{ formatSize(assets?.size ?? 0) }}</span>
-              <span class="sub-neutral">{{ assets?.folders }} 目录</span>
-            </div>
-            <div v-else class="stat-sub"><span class="sub-neutral">暂无数据</span></div>
-          </div>
-        </div>
       </template>
       <template v-else>
-        <div v-for="i in 6" :key="i" class="stat-card">
+        <div v-for="i in 4" :key="i" class="stat-card">
           <el-skeleton animated :rows="3" />
         </div>
       </template>
@@ -2114,7 +2048,7 @@ function renderFidTrendChart() {
       </div>
       <div v-if="typeRows.length" class="asset-types">
         <div class="at-head">
-          <span class="at-title">按类型</span>
+          <span class="at-title">类型分布（按大小）</span>
           <span class="at-hint">点击下钻到该类型</span>
         </div>
         <div class="at-bar" role="group" aria-label="各类型体积占比">
@@ -2123,7 +2057,6 @@ function renderFidTrendChart() {
             :key="r.key"
             class="at-seg"
             :style="{ width: r.sizePct + '%', background: r.color }"
-            :title="`${r.label}：${r.files} 个文件 / ${formatSize(r.size)}（体积占比 ${r.sizePct}%）`"
             role="button"
             @click="goResourcesType(r.key)"
           ></div>
@@ -2134,13 +2067,12 @@ function renderFidTrendChart() {
             :key="r.key"
             class="at-item"
             role="button"
-            :title="r.desc || undefined"
             @click="goResourcesType(r.key)"
           >
             <i class="at-dot" :style="{ background: r.color }"></i>
             <span class="at-name">{{ r.label }}</span>
             <span class="at-num">{{ r.files }} 个 · {{ formatSize(r.size) }}</span>
-            <span class="at-pct">{{ r.sizePct }}%</span>
+            <span class="at-pct">{{ r.sizePctText }}</span>
           </span>
         </div>
       </div>
@@ -2692,6 +2624,21 @@ function renderFidTrendChart() {
 
 .dashboard.is-fullscreen .board-list {
   max-height: calc(var(--chart-h) - 40px);
+}
+
+/* 移除「最新最热帖」「媒体文件」两张 KPI 后剩 4 张：桌面保持一行 4 列，窄屏（≤1024px）折 2×2、手机（≤640px）单列，各端自适应铺满（作用域内覆盖全局 .stat-grid 的 3 列，避免影响资源/下载页布局） */
+.dashboard .stat-grid {
+  grid-template-columns: repeat(4, 1fr);
+}
+@media (max-width: 1024px) {
+  .dashboard .stat-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+@media (max-width: 640px) {
+  .dashboard .stat-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* 每日发布趋势 + 版块分布：左右 1:1 等宽，与热门榜保持一致间距 */

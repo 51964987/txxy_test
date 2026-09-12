@@ -276,7 +276,7 @@
     <p>预览页由 <code>_render_gallery</code> 用一份 HTML 模板（<code>_GALLERY_TPL</code）<strong>占位符替换</strong>生成（<code>__TITLE__</code>、<code>__TOKEN__</code>、<code>__GRID__</code> …），刻意不用 f-string，避免与 CSS/JS 里的大量 <code>{ }</code> 冲突。前端交互借鉴图片集合浏览的通行做法：</p>
     <h3>① 类型筛选 + 名称搜索 + 前端分页</h3>
     <ul>
-      <li>顶部工具栏：<span class="tag">全部</span><span class="tag">图片</span><span class="tag">视频</span><span class="tag">文本</span><span class="tag">种子</span><span class="tag">其他</span> + 文件名搜索；</li>
+      <li>顶部工具栏：<span class="tag">全部</span><span class="tag">图片</span><span class="tag">视频</span><span class="tag">磁力链接</span><span class="tag">云盘清单</span><span class="tag">文本</span><span class="tag">种子</span><span class="tag">其他</span> + 文件名搜索；</li>
       <li>前端分页每页 60 条、窗口化页码，筛选/搜索变化自动回第 1 页。</li>
     </ul>
     <h3>② 沉浸式 1:1 滑动查看器（Lightbox）</h3>

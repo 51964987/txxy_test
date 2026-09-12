@@ -14,13 +14,14 @@ import {
   type ResourceSource,
   type Resources,
   type ResourceText,
+  type Assets,
   type TorrentInfo,
 } from '../api'
 import { useAppStore } from '../stores/app'
 import { useTrash } from '../composables/useTrash'
 import { formatMinuteTime } from '../utils/time'
 import { legacyCopy, copyText } from '../utils/clipboard'
-import { categoryMeta, categoryColors, categoryOptions, categoryLabel, CATEGORY_ORDER } from '../utils/category'
+import { categoryMeta, categoryColors, categoryOptions, categoryLabel, CATEGORY_ORDER, buildTypeSegments, type CategoryKey } from '../utils/category'
 
 const router = useRouter()
 const route = useRoute()
@@ -29,6 +30,7 @@ const app = useAppStore()
 const isMobile = computed(() => app.isMobile)
 
 const data = ref<Resources | null>(null)
+const assets = ref<Assets | null>(null) // B6 类型分布直接复用 R4 同款后端 type_breakdown
 const loading = ref(false)
 const loadError = ref('') // 加载失败信息（非空时展示重试界面）
 const active = ref('') // 当前展开的文件夹
@@ -36,7 +38,7 @@ const active = ref('') // 当前展开的文件夹
 const totalSizeText = computed(() => formatSize(data.value?.total_size ?? 0))
 
 // 类型元数据（标签/颜色/筛选选项）统一从 utils/category 引入，避免第二份硬编码
-const typeFilter = ref<'all' | 'image' | 'video' | 'torrent' | 'text' | 'other'>('all') // P0-2 类型筛选
+const typeFilter = ref<CategoryKey | 'all'>('all') // P0-2 类型筛选
 
 // P0-3 排序：el-table-v2 原生列排序状态（目录模式与全局结果模式共用）
 const sortState = ref<{ key: string; order: 'asc' | 'desc' | null }>({ key: '', order: null })
@@ -92,6 +94,8 @@ async function load() {
     // 加载完成后并行补齐目录级信息：来源帖（B1）；回收站数量用于工具栏角标
     void loadSources((data.value?.items ?? []).map((i) => i.name))
     void loadTrash()
+    // B6 类型分布直接复用后端 type_breakdown（与 R4「按类型」同数据源），不再本地遍历文件聚合
+    api.assets().then((a) => { assets.value = a }).catch(() => {})
   } catch (e) {
     if (isAborted(e)) return
     loadError.value = (e as Error).message
@@ -200,25 +204,24 @@ const sortedFolders = computed<ResourceItem[]>(() => {
 })
 
 // B4 目录类型构成摘要：[图 12 · 视频 2 · 种子 1]，仅列出非零类型
+// 短标签按 CATEGORY_ORDER（唯一类型清单）遍历，magnet/cloud 等新类型自动纳入，避免第二份硬编码
+const FOLDER_MIX_SHORT: Record<string, string> = {
+  image: '图', video: '视频', torrent: '种子', magnet: '磁力', cloud: '云盘', text: '文本', other: '其他',
+}
 function folderMix(item: ResourceItem): { label: string; count: number }[] {
   const counts: Record<string, number> = {}
   for (const f of item.files) counts[f.category] = (counts[f.category] ?? 0) + 1
-  return (
-    [
-      { key: 'image', label: '图' },
-      { key: 'video', label: '视频' },
-      { key: 'torrent', label: '种子' },
-      { key: 'text', label: '文本' },
-      { key: 'other', label: '其他' },
-    ] as const
-  )
-    .filter((m) => counts[m.key])
-    .map((m) => ({ label: m.label, count: counts[m.key] }))
+  return CATEGORY_ORDER
+    .filter((k) => counts[k])
+    .map((k) => ({ label: FOLDER_MIX_SHORT[k] ?? k, count: counts[k] }))
 }
 
-// B9 空壳目录：目录内只有磁力/云盘等文本清单、没有任何媒体文件（下载失败/被拦截的残留线索）
+// B9 空壳目录：目录内只有磁力/云盘/文本等清单、没有任何媒体文件（下载失败/被拦截的残留线索）
+// 非媒体类型 = 文本类清单（text / magnet / cloud），其余 image/video/torrent/other 视为有媒体
 function isMedialess(item: ResourceItem): boolean {
-  return item.files.every((f) => f.category === 'text')
+  return item.files.every(
+    (f) => f.category === 'text' || f.category === 'magnet' || f.category === 'cloud',
+  )
 }
 
 // 目录模式（P0-1/2/3 原逻辑，作用于当前展开文件夹）过滤 + 排序后的文件列表
@@ -593,7 +596,8 @@ async function openFileLocal(file: ResourceFile) {
 function openResource(file: ResourceFile, list: ResourceFile[]) {
   if (file.category === 'image') previewImage(file, list)
   else if (file.category === 'video') playVideo(file, list)
-  else if (file.category === 'text') viewText(file)
+  else if (file.category === 'text' || file.category === 'magnet' || file.category === 'cloud')
+    viewText(file)
   else if (file.category === 'torrent') showTorrent(file)
   else openFileLocal(file)
 }
@@ -744,7 +748,7 @@ const browserImageStats = computed(() => {
 const browserPageSize = computed(() =>
   browserMode.value === 'global' ? 30 : isMobile.value ? 30 : 60,
 )
-const browserTypeFilter = ref<'all' | 'image' | 'video' | 'torrent' | 'text' | 'other'>('all')
+const browserTypeFilter = ref<CategoryKey | 'all'>('all')
 const browserKeyword = ref('')
 const browserPage = ref(1)
 
@@ -925,6 +929,17 @@ const selectedDirCount = computed(() => selectedDirs.value.size)
 // 已选总数（文件 + 目录），工具栏「删除所选」计数用
 const selectedTotal = computed(() => selectedCount.value + selectedDirCount.value)
 
+// 批量删除分块大小：单块 30 项，兼顾进度粒度与单请求耗时
+const BATCH_CHUNK = 30
+// 删除进度状态：删除可能耗时（跨卷移入回收站 / 大目录直接删除），用进度条反馈处理进度，
+// 避免 UI 看起来卡死（业界网盘批量删除均展示进度）；删除进行中禁用按钮
+const deleting = ref(false)
+const deleteDone = ref(0)
+const deleteTotal = ref(0)
+const deletePercent = computed(() =>
+  deleteTotal.value ? Math.round((deleteDone.value / deleteTotal.value) * 100) : 0,
+)
+
 /** 当前作用域文件（目录模式 = 展开目录的筛选结果；全局模式 = 全部命中文件），供表格表头全选用 */
 const scopeFiles = computed<ResourceFile[]>(() =>
   globalMode.value ? globalFiles.value : filteredFiles.value,
@@ -1086,8 +1101,9 @@ async function removeFolder(item: ResourceItem) {
 }
 
 /** 批量删除已勾选的条目：文件勾选跨目录累积、目录勾选（整目录含其下全部文件），
- *  混合后一次请求整批提交。三选确认（直接删除不可恢复 / 移入回收站 / 放弃），
- *  复用 askDeleteAction。 */
+ *  混合后按块串行提交（每块一次请求，逐块更新进度条）。三选确认（直接删除不可恢复 / 移入回收站 / 放弃），
+ *  复用 askDeleteAction。单项失败不影响整批，最终汇总成功数与失败明细。
+ *  删除请求不设短超时，避免大目录 / 跨卷移动超过 10s 被前端掐断导致部分已删却误报失败。 */
 async function batchRemove() {
   const files = allFiles.value.filter((f) => selectedPaths.value.has(f.rel_path))
   const dirs = sortedFolders.value.filter((i) => selectedDirs.value.has(i.name))
@@ -1110,25 +1126,41 @@ async function batchRemove() {
   )
   if (action === 'close') return
   const permanent = action === 'confirm'
+  // 混合并拍平为提交项，按块切片串行提交
+  const all = [
+    ...files.map((f) => ({ path: f.rel_path, is_dir: false })),
+    ...dirs.map((i) => ({ path: i.name, is_dir: true })),
+  ]
+  deleting.value = true
+  deleteDone.value = 0
+  deleteTotal.value = all.length
+  let deleted = 0
+  const failed: { path: string; reason: string }[] = []
   try {
-    const r = await api.batchDeleteResource(
-      [
-        ...files.map((f) => ({ path: f.rel_path, is_dir: false })),
-        ...dirs.map((i) => ({ path: i.name, is_dir: true })),
-      ],
-      permanent,
-    )
-    if (r.failed.length) {
-      ElMessage.warning(`已删除 ${r.deleted} 个，${r.failed.length} 个失败（可能被占用）`)
+    for (let i = 0; i < all.length; i += BATCH_CHUNK) {
+      const chunk = all.slice(i, i + BATCH_CHUNK)
+      const r = await api.batchDeleteResource(chunk, permanent)
+      deleted += r.deleted
+      if (r.failed.length) failed.push(...r.failed)
+      // 进度按已提交项数推进（含本块），末块钳制到总数
+      deleteDone.value = Math.min(i + BATCH_CHUNK, all.length)
+    }
+    if (failed.length) {
+      ElMessage.warning(`已删除 ${deleted} 个，${failed.length} 个失败（可能被占用）`)
     } else {
-      ElMessage.success(`已${permanent ? '直接删除' : '移入回收站'} ${r.deleted} 个`)
+      ElMessage.success(`已${permanent ? '直接删除' : '移入回收站'} ${deleted} 个`)
     }
     clearSelection()
     await load()
     await loadTrash()
   } catch (e) {
     if (isAborted(e)) return
-    ElMessage.error(`批量删除失败: ${(e as Error).message}`)
+    // 部分已完成也要如实告知，避免用户误以为全部失败
+    ElMessage.error(
+      `批量删除中断（已完成 ${deleteDone.value}/${deleteTotal.value}）：${(e as Error).message}`,
+    )
+  } finally {
+    deleting.value = false
   }
 }
 
@@ -1185,27 +1217,9 @@ async function scrollToFolder(name: string) {
   el.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'center' })
 }
 
-// B6 容量洞察：类型分布（按大小）、Top10 目录、Top10 大文件
-const categorySegments = computed(() => {
-  const agg: Record<string, { count: number; size: number }> = {}
-  for (const f of allFiles.value) {
-    const a = (agg[f.category] ??= { count: 0, size: 0 })
-    a.count += 1
-    a.size += Number(f.size)
-  }
-  const total = allFiles.value.reduce((s, f) => s + Number(f.size), 0) || 1
-  return Object.entries(agg)
-    .map(([key, v]) => ({
-      key,
-      label: categoryMeta[key]?.label ?? key,
-      color: categoryColors[key] ?? '#c0c4cc',
-      count: v.count,
-      size: v.size,
-      pct: (v.size / total) * 100,
-      pctText: `${((v.size / total) * 100).toFixed(1)}%`,
-    }))
-    .sort((a, b) => b.size - a.size)
-})
+// B6 容量洞察：类型分布（按大小）。直接复用 buildTypeSegments（与 R4「按类型」同派生、同口径，
+// 单一实现，不再本地聚合 allFiles，确保两边数据 / 顺序 / 颜色 / 文本完全一致）。
+const categorySegments = computed(() => buildTypeSegments(assets.value))
 
 // Top10 目录：与「Top10 大文件」对标对齐（同为 Top10、同为按大小取前 10）
 const topFolders = computed<ResourceItem[]>(() =>
@@ -1383,13 +1397,15 @@ onBeforeUnmount(() => {
             v-for="seg in categorySegments"
             :key="seg.key"
             class="seg"
-            :style="{ width: `${seg.pct}%`, background: seg.color }"
+            :style="{ width: `${seg.sizePct}%`, background: seg.color }"
           ></span>
         </div>
         <div class="insight-legend">
           <span v-for="seg in categorySegments" :key="seg.key" class="legend-item">
             <i class="legend-dot" :style="{ background: seg.color }"></i>
-            {{ seg.label }} {{ formatSize(seg.size) }}（{{ seg.pctText }}）
+            <span class="legend-name">{{ seg.label }}</span>
+            <span class="legend-num">{{ seg.files }} 个 · {{ formatSize(seg.size) }}</span>
+            <span class="legend-pct">{{ seg.sizePctText }}</span>
           </span>
         </div>
       </div>
@@ -1547,10 +1563,24 @@ onBeforeUnmount(() => {
             <el-button :disabled="!canSelectAll" @click="toggleSelectAll">
               {{ allToolbarSelected ? '取消全选' : '全选当前结果' }}
             </el-button>
-            <!-- 删除所选：文件与目录勾选混合提交，未勾选时禁用；三选确认防误删 -->
-            <el-button type="danger" plain :disabled="!selectedTotal" @click="batchRemove">
+            <!-- 删除所选：文件与目录勾选混合提交，未勾选时禁用；删除进行中禁用并展示进度条 -->
+            <el-button
+              type="danger"
+              plain
+              :disabled="!selectedTotal || deleting"
+              @click="batchRemove"
+            >
               删除所选<template v-if="selectedTotal">（{{ selectedTotal }}）</template>
             </el-button>
+            <el-progress
+              v-if="deleting"
+              class="batch-progress"
+              type="line"
+              :percentage="deletePercent"
+              :stroke-width="14"
+              :text-inside="true"
+              style="width: 180px"
+            />
             <el-button type="warning" plain @click="openTrash">
               回收站<template v-if="trashItems.length">（{{ trashItems.length }}）</template>
             </el-button>
@@ -2223,6 +2253,23 @@ onBeforeUnmount(() => {
   transform: translateY(-1px);
 }
 
+/* 4 张 KPI（含回收站指标）与看板同源：桌面一行 4 列，窄屏（≤1024px）2×2、手机（≤640px）单列，各端自适应。
+   作用域内覆盖全局 .stat-grid 的 3 列，否则 4 张会折成「3+1」两行；媒体查询须在作用域内重写，
+   因带 data-v 属性的作用域规则优先级高于全局（含其媒体查询），否则窄屏不会自动折行 */
+.stat-grid {
+  grid-template-columns: repeat(4, 1fr);
+}
+@media (max-width: 1024px) {
+  .stat-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+@media (max-width: 640px) {
+  .stat-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* P0-1/P0-2 工具栏 */
 .toolbar {
   display: flex;
@@ -2537,10 +2584,10 @@ onBeforeUnmount(() => {
 
 .insight-bar {
   display: flex;
-  height: 10px;
-  border-radius: 5px;
+  height: 14px;
+  border-radius: 7px;
   overflow: hidden;
-  background: #eef1f6;
+  background: #f4f4f5;
 }
 
 .insight-bar .seg {
@@ -2551,8 +2598,8 @@ onBeforeUnmount(() => {
 .insight-legend {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px 12px;
-  margin-top: 8px;
+  gap: 6px 16px;
+  margin-top: 10px;
   font-size: 12px;
   color: #606266;
 }
@@ -2560,7 +2607,7 @@ onBeforeUnmount(() => {
 .legend-item {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
 }
 
 .legend-dot {
@@ -2568,6 +2615,22 @@ onBeforeUnmount(() => {
   height: 8px;
   border-radius: 50%;
   display: inline-block;
+}
+
+.legend-name {
+  font-weight: 600;
+}
+
+.legend-num {
+  color: #909399;
+  font-variant-numeric: tabular-nums;
+}
+
+.legend-pct {
+  color: #c0c4cc;
+  font-variant-numeric: tabular-nums;
+  min-width: 34px;
+  text-align: right;
 }
 
 .insight-line {

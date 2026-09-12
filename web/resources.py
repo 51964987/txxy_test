@@ -17,6 +17,7 @@ import json
 import math
 import os
 import shutil
+import sys
 import time
 import urllib.parse
 import uuid
@@ -29,6 +30,13 @@ from atomicfile import write_json_atomic
 import config
 import db
 import settings
+
+# 复用抓取端清单文件名常量（唯一来源，避免重复字面量）：磁力清单 magnets.txt / 云盘清单 clouds.txt，
+# category_of 据此把「文本」大类拆出 magnet / cloud 两个子类（其余 .txt/.md/.log 仍归 text）
+if str(config.BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(config.BASE_DIR))
+from extract_magnets import MAGNETS_FILENAME
+from extract_clouds import CLOUDS_FILENAME
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg"}
 VIDEO_EXTS = {".mp4", ".webm", ".flv", ".mkv", ".avi", ".mov", ".m4v", ".ts", ".m3u8"}
@@ -134,6 +142,12 @@ def category_of(name: str) -> str:
     if ext in TORRENT_EXTS:
         return "torrent"
     if ext in TEXT_EXTS:
+        # 命中抓取端清单文件名常量则拆为磁力链接 / 云盘清单，其余文本仍归 text
+        base = Path(name).name
+        if base == MAGNETS_FILENAME:
+            return "magnet"
+        if base == CLOUDS_FILENAME:
+            return "cloud"
         return "text"
     return "other"
 
@@ -186,7 +200,8 @@ def scan() -> dict[str, Any]:
     # 按媒体类型聚合（image/video/torrent/text/other）：复用 category_of 的分类，
     # 同一趟 rglob 遍历顺手累加文件数与体积，供 /stats/assets 的「按类型」占比与下钻复用
     type_breakdown: dict[str, dict[str, int]] = {
-        c: {"files": 0, "size": 0} for c in ("image", "video", "torrent", "text", "other")
+        c: {"files": 0, "size": 0}
+        for c in ("image", "video", "torrent", "magnet", "cloud", "text", "other")
     }
     for folder in sorted(root.iterdir(), key=lambda p: p.name, reverse=True):
         if not folder.is_dir():
