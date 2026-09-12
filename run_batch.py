@@ -356,6 +356,9 @@ def run_scraper(fid: str, name: str, run_id: int = 0) -> tuple[str, str, bool, i
                 log(f"无法捕获输出 [{fid}] {name}")
                 _ = proc.wait()
                 return fid, name, proc.returncode == 0, 0, 0, int(time.time() - start)
+            rows = 0
+            db_rows = 0
+            summary_status = None  # 子进程 __SUMMARY__ 上抛的权威 run_status（兼容旧版 scraper 时为 None）
             for raw_line in proc.stdout:  # pyright: ignore[reportAny]
                 # text=True 模式下每行均为 str，此处显式收窄类型以消除 Any 告警
                 if not isinstance(raw_line, str):
@@ -375,8 +378,13 @@ def run_scraper(fid: str, name: str, run_id: int = 0) -> tuple[str, str, bool, i
                             rows = int(part.split("=")[1])
                         elif part.startswith("db_rows="):
                             db_rows = int(part.split("=")[1])
+                        elif part.startswith("status="):
+                            summary_status = part.split("=", 1)[1]
             _ = proc.wait()
-            ok = proc.returncode == 0
+            # 成功以子进程权威 run_status 为准（scraper 在 __SUMMARY__ 写入 status=）：
+            # 站点不可用自动终止 / 异常 / 手动中断均不再被 returncode==0 误判为成功，
+            # 修复「0 条却标绿」假成功。旧版 scraper 无 status= 时回退到 returncode==0。
+            ok = (summary_status == "ok") if summary_status is not None else (proc.returncode == 0)
             if ok:
                 log(f"完成 [{fid}] {name}（CSV {rows} 条 / SQLite {db_rows} 条）")
             else:
@@ -502,6 +510,11 @@ def main() -> None:
             success_count = sum(1 for _, _, ok, _, _, _ in results if ok)
             failed_count = sum(1 for _, _, ok, _, _, _ in results if not ok)
             skipped_count = total - len(results)
+            # 有版块失败（非中断）即视为批次未成功完成，状态下沉为 error：
+            # 与运行记录 fail 计数一致，避免「状态 ok 却 fail>0」的矛盾（健康条据 fail>0 已判 warn，
+            # 这里让运行记录 status 本身也自洽）
+            if not cancelled and batch_status == "ok" and failed_count > 0:
+                batch_status = "error"
             total_rows = sum(rows for _, _, _, rows, _, _ in results)
             total_db_rows = sum(db for _, _, _, _, db, _ in results)
             print(f"  成功: {success_count}  失败: {failed_count}  未执行: {skipped_count}")

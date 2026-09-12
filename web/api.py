@@ -249,6 +249,12 @@ class PendingDownloadsResp(BaseModel):
     downloaded: int = 0     # 候选池中已下载命中的条数（说明队列确实排除了已下载项）
 
 
+class TypeBreakdownItem(BaseModel):
+    """单类媒体资产计数：文件数与占用体积（字节）"""
+    files: int = 0
+    size: int = 0
+
+
 class AssetsResp(BaseModel):
     """内容 → 资产漏斗（AS1）：收录 → 已下载帖 → 本地文件 → 占用体积。"""
     posts_total: int = 0
@@ -256,6 +262,9 @@ class AssetsResp(BaseModel):
     files: int = 0
     folders: int = 0
     size: int = 0
+    # 按媒体类型拆分（image/video/torrent/text/other），口径来自 resources.scan()，
+    # 与资源管理页 B6 容量洞察同分类；前端资产卡「按类型」占比条与下钻复用
+    type_breakdown: dict[str, TypeBreakdownItem] = {}
 
 
 class FidMetaResp(BaseModel):
@@ -637,11 +646,13 @@ def _health_verdict(
         (run_lag_days is not None and run_lag_days >= 2)
         or fail > 0
         or run_status == "error"
+        or run_status == "cancelled"
         or (days_lag is not None and days_lag >= 3)
     ):
         level = "warn"
-    # cancelled 单独不告警：那是用户自己按的「强制终止」，通常紧接着就会重跑；
-    # 但若其中确有失败版块（fail > 0），上面的分支仍会判为 warn。
+    # cancelled（手动中断 / 主动停止）属「非完成状态」，不再标绿：与「完成且健康」的绿区分，
+    # 统一判 warn（橙），提示「最近批次未跑完」。若中断批次本身还有失败版块（fail > 0），
+    # 上面的分支会优先判为 warn；崩溃 / 僵死的 running 由 runs 降级为 error，同样落入 warn。
 
     if run_status == "running":
         message = f"抓取中 {progress or 0}% · 已完成 {ok}/{total_sections or ok} 个版块"
@@ -1297,6 +1308,7 @@ def stats_assets() -> AssetsResp:
             "files": int(res.get("total_files") or 0),
             "folders": int(res.get("count") or 0),
             "size": int(res.get("total_size") or 0),
+            "type_breakdown": res.get("type_breakdown") or {},
         }
 
     return db.cached("assets_v1", _calc)

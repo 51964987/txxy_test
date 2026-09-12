@@ -19,6 +19,7 @@ import { useDashboardStore } from '../stores/dashboard'
 import { useAppStore } from '../stores/app'
 import { formatDate, formatShortTime, pad2 } from '../utils/time'
 import { colorByIndex, colorForFid } from '../utils/fidColor'
+import { categoryColors, categoryMeta, CATEGORY_ORDER, type CategoryKey } from '../utils/category'
 import RollingNumber from '../components/RollingNumber.vue'
 
 use([
@@ -321,6 +322,37 @@ const assetsEmpty = computed(() => {
   if (!a) return false
   return a.downloaded_posts === 0 && a.files === 0 && a.folders === 0
 })
+
+/** R4 资产卡「按类型」占比：复用后端 type_breakdown（与资源管理页 B6 同口径）。
+ *  仅展示有文件的类型，按固定顺序；sizePct 为该类体积占总体积的比例（占比条用），
+ *  filePct 为文件数占比（图例辅助参考）。 */
+const typeRows = computed(() => {
+  const a = assets.value
+  const tb = a?.type_breakdown
+  if (!a || !tb) return []
+  const totalSize = a.size || 0
+  const totalFiles = a.files || 0
+  return CATEGORY_ORDER.map((key) => {
+    const item = tb[key]
+    const files = item?.files ?? 0
+    const size = item?.size ?? 0
+    return {
+      key,
+      label: categoryMeta[key]?.label ?? key,
+      color: categoryColors[key] ?? '#c0c4cc',
+      desc: categoryMeta[key]?.desc ?? '',
+      files,
+      size,
+      sizePct: totalSize ? Math.round((size / totalSize) * 100) : 0,
+      filePct: totalFiles ? Math.round((files / totalFiles) * 100) : 0,
+    }
+  }).filter((r) => r.files > 0)
+})
+
+/** R4 资产卡「按类型」下钻：跳资源管理页并按该类型筛选（继承类型上下文，口径自洽） */
+function goResourcesType(key: CategoryKey) {
+  router.push({ path: '/resources', query: { type: key } })
+}
 
 /** 健康条补充信息（R1）：悬浮展示批次明细（点击进运行记录页） */
 const healthDetail = computed(() => {
@@ -2043,7 +2075,8 @@ function renderFidTrendChart() {
           <el-link type="primary" :underline="false" class="more-link" @click="goResources">资源管理</el-link>
         </div>
       </div>
-      <div v-if="assets && !assetsEmpty" class="asset-flow">
+      <div v-if="assets && !assetsEmpty">
+        <div class="asset-flow">
         <div class="asset-step as-posts">
           <span class="as-label">收录帖子</span>
           <span class="as-value">{{ assets.posts_total.toLocaleString() }}</span>
@@ -2067,6 +2100,39 @@ function renderFidTrendChart() {
           <span class="as-label">占用体积</span>
           <span class="as-value">{{ formatSize(assets.size) }}</span>
         </div>
+      </div>
+      <div v-if="typeRows.length" class="asset-types">
+        <div class="at-head">
+          <span class="at-title">按类型</span>
+          <span class="at-hint">点击下钻到该类型</span>
+        </div>
+        <div class="at-bar" role="group" aria-label="各类型体积占比">
+          <div
+            v-for="r in typeRows"
+            :key="r.key"
+            class="at-seg"
+            :style="{ width: r.sizePct + '%', background: r.color }"
+            :title="`${r.label}：${r.files} 个文件 / ${formatSize(r.size)}（体积占比 ${r.sizePct}%）`"
+            role="button"
+            @click="goResourcesType(r.key)"
+          ></div>
+        </div>
+        <div class="at-legend">
+          <span
+            v-for="r in typeRows"
+            :key="r.key"
+            class="at-item"
+            role="button"
+            :title="r.desc || undefined"
+            @click="goResourcesType(r.key)"
+          >
+            <i class="at-dot" :style="{ background: r.color }"></i>
+            <span class="at-name">{{ r.label }}</span>
+            <span class="at-num">{{ r.files }} 个 · {{ formatSize(r.size) }}</span>
+            <span class="at-pct">{{ r.sizePct }}%</span>
+          </span>
+        </div>
+      </div>
       </div>
       <div v-else-if="assets && assetsEmpty" class="asset-empty">
         <el-icon class="ae-icon"><FolderOpened /></el-icon>
@@ -3384,6 +3450,101 @@ function renderFidTrendChart() {
   color: #10b981;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
+}
+
+/* 按类型占比：横向占比条 + 图例（颜色复用 categoryColors 色板，不另建） */
+.asset-types {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px dashed #ebeef5;
+}
+
+.at-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.at-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #606266;
+}
+
+.at-hint {
+  font-size: 11px;
+  color: #c0c4cc;
+}
+
+.at-bar {
+  display: flex;
+  width: 100%;
+  height: 14px;
+  border-radius: 7px;
+  overflow: hidden;
+  background: #f4f4f5;
+  cursor: pointer;
+}
+
+.at-seg {
+  height: 100%;
+  min-width: 2px;
+  transition: opacity 0.15s;
+}
+
+.at-seg:hover {
+  opacity: 0.82;
+}
+
+.at-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  margin-top: 10px;
+}
+
+.at-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: #606266;
+  cursor: pointer;
+  user-select: none;
+}
+
+.at-item:hover {
+  opacity: 0.8;
+}
+
+.at-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.at-name {
+  font-weight: 600;
+}
+
+.at-num {
+  color: #909399;
+  font-variant-numeric: tabular-nums;
+}
+
+.at-pct {
+  color: #c0c4cc;
+  font-variant-numeric: tabular-nums;
+  min-width: 34px;
+  text-align: right;
+}
+
+@media (max-width: 480px) {
+  .at-legend {
+    gap: 4px 10px;
+  }
 }
 
 /* ================= R3 待下载推荐 =================

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, h, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import { ElButton, ElCheckbox, ElMessage, ElMessageBox, ElResult, ElTag } from 'element-plus'
 import type { Columns } from 'element-plus'
 import {
@@ -20,8 +20,10 @@ import { useAppStore } from '../stores/app'
 import { useTrash } from '../composables/useTrash'
 import { formatMinuteTime } from '../utils/time'
 import { legacyCopy, copyText } from '../utils/clipboard'
+import { categoryMeta, categoryColors, categoryOptions, categoryLabel, CATEGORY_ORDER } from '../utils/category'
 
 const router = useRouter()
+const route = useRoute()
 // 移动端形态沿用布局层的统一断点（<768px），页面不自建第二套判定
 const app = useAppStore()
 const isMobile = computed(() => app.isMobile)
@@ -33,32 +35,7 @@ const active = ref('') // 当前展开的文件夹
 
 const totalSizeText = computed(() => formatSize(data.value?.total_size ?? 0))
 
-const categoryMeta: Record<string, { label: string; type: string }> = {
-  image: { label: '图片', type: 'primary' },
-  video: { label: '视频', type: 'success' },
-  torrent: { label: '种子', type: 'warning' },
-  text: { label: '文本', type: 'info' },
-  other: { label: '其他', type: 'info' },
-}
-
-// 类型分布色板（B6 容量洞察用，与统计 Tag 语义对应）
-const categoryColors: Record<string, string> = {
-  image: '#2f6fed',
-  video: '#10b981',
-  torrent: '#f59e0b',
-  text: '#909399',
-  other: '#c0c4cc',
-}
-
-// 类型筛选选项（P0-2；B2 起作用域升级为全部目录）
-const categoryOptions = [
-  { label: '全部', value: 'all' },
-  { label: '图片', value: 'image' },
-  { label: '视频', value: 'video' },
-  { label: '种子', value: 'torrent' },
-  { label: '文本', value: 'text' },
-  { label: '其他', value: 'other' },
-]
+// 类型元数据（标签/颜色/筛选选项）统一从 utils/category 引入，避免第二份硬编码
 const typeFilter = ref<'all' | 'image' | 'video' | 'torrent' | 'text' | 'other'>('all') // P0-2 类型筛选
 
 // P0-3 排序：el-table-v2 原生列排序状态（目录模式与全局结果模式共用）
@@ -295,11 +272,6 @@ function highlight(text: string): string {
 // P0-3 排序变化事件（el-table-v2 原生）
 function onColumnSort(params: { key: string; order: 'asc' | 'desc' | null }) {
   sortState.value = params
-}
-
-/** 类型枚举 → 中文标签（复用筛选选项，避免第二处硬编码） */
-function categoryLabel(c: string): string {
-  return categoryOptions.find((o) => o.value === c)?.label ?? c
 }
 
 /** 文件所在路径（含子目录，如「目录名/子目录」；无子目录时即目录名），行内元信息展示用 */
@@ -723,7 +695,7 @@ const browserMode = ref<'folder' | 'global'>('folder')
 // 不跟随表格列排序状态——浏览是「按类型聚类浏览」场景，同类文件相邻更符合直觉；
 // 文件名用 zh-Hans-CN locale（与目录排序一致），中文按拼音序。
 // global 模式不重排：globalFiles 已按用户排序状态排好，抽屉与列表顺序保持一致
-const CATEGORY_ORDER: Record<string, number> = { image: 0, video: 1, torrent: 2, text: 3, other: 4 }
+const CATEGORY_RANK: Record<string, number> = { image: 0, video: 1, torrent: 2, text: 3, other: 4 }
 // 抽屉内排序：默认「类型优先」保留聚类浏览习惯；也可按名称 / 大小 / 时间 / 尺寸
 type BrowserSort = 'category' | 'name' | 'size' | 'time' | 'dimension'
 const browserSort = ref<BrowserSort>('category')
@@ -750,8 +722,8 @@ const browserFiles = computed<ResourceFile[]>(() => {
     list.sort((a, b) => area(b) - area(a))
   } else {
     list.sort((a, b) => {
-      const ca = CATEGORY_ORDER[a.category] ?? 9
-      const cb = CATEGORY_ORDER[b.category] ?? 9
+      const ca = CATEGORY_RANK[a.category] ?? 9
+      const cb = CATEGORY_RANK[b.category] ?? 9
       if (ca !== cb) return ca - cb
       return a.name.localeCompare(b.name, 'zh-Hans-CN')
     })
@@ -1339,6 +1311,12 @@ watch(active, async () => {
 onMounted(() => {
   // 先恢复上次会话状态（搜索词/筛选/排序/展开目录），再拉数据
   restoreState()
+  // 从首页资产卡「按类型」下钻进入时，按路由 query.type 强制切换类型筛选
+  // （显式导航优先于会话记忆，保证「点哪个类型就看到哪类文件」，下钻口径自洽）
+  const q = route.query.type
+  if (q != null && (CATEGORY_ORDER as ReadonlyArray<string>).includes(String(q))) {
+    typeFilter.value = String(q) as typeof typeFilter.value
+  }
   void load()
 })
 

@@ -544,6 +544,10 @@ def main() -> None:
                     print(f"[FID={FID}] 版块 第 {page} 页重试后仍失败，进度停留在第 {last_saved_page} 页（下次运行将重抓）")
                     if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
                         print(f"[FID={FID}] [终止] 连续 {consecutive_failures} 页请求失败，疑似站点不可用，停止本次抓取")
+                        # 连续请求失败 = 上游不可用，属运行失败而非成功：记为 error，
+                        # 否则 finally 会按默认 run_status="ok" 落库成「假成功」（0 条却标绿）。
+                        # 此 break 仅由连续失败触发，语义唯一，无需按已抓页数再分级。
+                        run_status = "error"
                         break
                 batch_count += 1
 
@@ -580,7 +584,9 @@ def main() -> None:
             print(f"[FID={FID}] 版块 SQLite 实际入库 {db_rows} 条（标题重复已覆盖更新）")
             # 机器汇总行：raw 模式不加时间戳，保持可解析格式
             with file_logger.raw():
-                print(f"__SUMMARY__ fid={FID} rows={total_rows} db_rows={db_rows} pages={last_saved_page}")
+                # status= 携带本次运行的权威结果（ok/error/cancelled），供 run_batch 作为成败唯一口径，
+                # 避免「站点不可用自动终止」因进程正常退出（returncode 0）被误判为成功
+                print(f"__SUMMARY__ fid={FID} rows={total_rows} db_rows={db_rows} pages={last_saved_page} status={run_status}")
             # 运行记录落库：有 run_id 时更新版块明细并（单跑）写运行汇总；
             # 否则退回原一次性记录（仅单跑且无可用记录时触发）
             _elapsed = int(time.time() - start_time)

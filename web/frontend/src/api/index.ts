@@ -338,6 +338,8 @@ export interface Assets {
   files: number
   folders: number
   size: number
+  /** 按媒体类型拆分（image/video/torrent/text/other）的文件数与体积（字节） */
+  type_breakdown: Record<string, { files: number; size: number }>
 }
 
 /** 单个可设置参数的快照（后端 settings.WHITELIST 生成） */

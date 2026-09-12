@@ -183,6 +183,11 @@ def scan() -> dict[str, Any]:
     items: list[dict[str, Any]] = []
     total_files = 0
     total_size = 0
+    # 按媒体类型聚合（image/video/torrent/text/other）：复用 category_of 的分类，
+    # 同一趟 rglob 遍历顺手累加文件数与体积，供 /stats/assets 的「按类型」占比与下钻复用
+    type_breakdown: dict[str, dict[str, int]] = {
+        c: {"files": 0, "size": 0} for c in ("image", "video", "torrent", "text", "other")
+    }
     for folder in sorted(root.iterdir(), key=lambda p: p.name, reverse=True):
         if not folder.is_dir():
             continue
@@ -200,6 +205,9 @@ def scan() -> dict[str, Any]:
                         mtime = 0
                     folder_size += size
                     category = category_of(f.name)
+                    _tb = type_breakdown[category]
+                    _tb["files"] += 1
+                    _tb["size"] += size
                     entry: dict[str, Any] = {
                         "name": f.name,
                         "rel_path": str(f.relative_to(root)).replace("\\", "/"),
@@ -237,6 +245,7 @@ def scan() -> dict[str, Any]:
         "total_files": total_files,
         "total_size": total_size,
         "items": items,
+        "type_breakdown": type_breakdown,
     }
     _cache_signature = sig
     _cache_payload = payload
