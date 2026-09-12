@@ -482,6 +482,34 @@ def _build_filters(
     return (" AND ".join(where) if where else "1=1"), params
 
 
+def _apply_undownloaded(clause: str, params: list[str]) -> tuple[str, list[str]]:
+    """追加「未下载」过滤：排除已下载（目录仍在磁盘）与正在下载中的链接。
+
+    与 /stats/pending_downloads 同一套判定（_download_path_sets），保证从「待下载推荐」
+    下钻到帖子页后，列表是把推荐口径（近 N 日 · 未下载 · 按互动量）展开后的全量明细，
+    数字严格自洽。帖子 url 可能是入库相对路径、也可能是展示域名完整 URL，
+    两种形态都要排除（与 pending 的候选集构造方式一致）。
+    """
+    done, active, _gone = _download_path_sets()
+    excluded: set[str] = set()
+    for u in done:
+        excluded.add(u)
+        excluded.add(config.to_display_url(u))
+    for u in active:
+        excluded.add(u)
+        excluded.add(config.to_display_url(u))
+    if not excluded:
+        return clause, params  # 没有任何已下载记录，无需过滤
+    # SQLite 单条语句变量上限 999：分块拼接 NOT IN（参考 pending 的分块做法）
+    not_in: list[str] = []
+    items = list(excluded)
+    for i in range(0, len(items), 400):
+        part = items[i : i + 400]
+        not_in.append("url NOT IN (" + ",".join("?" * len(part)) + ")")
+        params.extend(part)
+    return f"({clause}) AND {' AND '.join(not_in)}", params
+
+
 def _as_int(value: object) -> int:
     """站点原始文本 → 整数（点赞 / 回复的展示口径）。
 
@@ -1405,6 +1433,7 @@ def posts_list(
     date_to: str | None = None,
     q: str | None = None,
     author: str | None = None,
+    undownloaded: Annotated[bool, Query()] = False,
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=200)] = 50,
     sort: Annotated[str, Query()] = "date_desc",
@@ -1420,6 +1449,10 @@ def posts_list(
     """
     order = _resolve_order(sort, sort_by, sort_order)
     clause, params = _build_filters(fid, date_from, date_to, q, author)
+    if undownloaded:
+        # 下钻「待下载推荐」继承的上下文：排除已下载（目录仍在）与下载中链接，
+        # 与 /stats/pending_downloads 同口径（仅看 done ∪ active，gone 视为「可重下」保留）。
+        clause, params = _apply_undownloaded(clause, params)
     if adv:
         try:
             adv_sql, adv_params = query_builder.compile_adv(adv)
@@ -1456,12 +1489,15 @@ def posts_export(
     date_from: str | None = None,
     date_to: str | None = None,
     q: str | None = None,
+    undownloaded: Annotated[bool, Query()] = False,
     sort: Annotated[str, Query()] = "date_desc",
     sort_by: Annotated[str | None, Query()] = None,
     sort_order: Annotated[str | None, Query(pattern="^(asc|desc)$")] = None,
 ) -> StreamingResponse:
     order = _resolve_order(sort, sort_by, sort_order)
     clause, params = _build_filters(fid, date_from, date_to, q)
+    if undownloaded:
+        clause, params = _apply_undownloaded(clause, params)
     sql = (
         f"SELECT title, fid, date, url, likes, author, replies, created_at, update_at, update_date FROM posts WHERE {clause}" +
         f" ORDER BY {order}"

@@ -605,6 +605,9 @@ export const api = {
     date_to?: string
     q?: string
     author?: string
+    /** 是否仅看「未下载」：排除已下载（目录仍在）与下载中的帖子，
+     *  与数据总览「待下载推荐」下钻同口径（gone 视为「可重下」仍保留） */
+    undownloaded?: boolean
     /** 高级查询条件：条件树 JSON（可视化构建器）或表达式文本（高级模式），
      *  与 fid/日期/关键词/作者 这些基础筛选按 AND 合并 */
     adv?: string

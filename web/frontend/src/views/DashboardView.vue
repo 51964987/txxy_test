@@ -743,9 +743,20 @@ function goHotPost() {
   goPostsInRange({ fid: item.fid ?? '', sort: 'replies' }, dayRange(hotTop.value.date))
 }
 
-/** R3 待下载推荐入口：跳下载中心查看任务进度 */
-function goDownloads() {
-  router.push('/downloads')
+/** R3 待下载推荐入口：下钻到帖子页，继承「近30日 · 未下载 · 按互动量」上下文（真下钻，数字自洽） */
+function goPendingPosts() {
+  const to = new Date()
+  const from = new Date()
+  from.setDate(from.getDate() - 29) // 近 30 日（含今天）
+  router.push({
+    path: '/posts',
+    query: {
+      date_from: `${to.getFullYear()}-${pad2(from.getMonth() + 1)}-${pad2(from.getDate())}`,
+      date_to: `${to.getFullYear()}-${pad2(to.getMonth() + 1)}-${pad2(to.getDate())}`,
+      undownloaded: '1',
+      sort: 'engagement_desc',
+    },
+  })
 }
 
 function initChart(el: HTMLDivElement): ECharts {
@@ -2563,8 +2574,9 @@ function renderFidTrendChart() {
       </div>
 
       <!-- R3 待下载推荐：近 30 日互动量最高且未下载的帖子（发现 → 下载一步直达）。
-           行不可下钻：帖子页无法复现「未下载」过滤条件，下钻必然口径不一致；
-           标题打开原帖、悬浮按钮直接创建下载任务（与热门榜同一套交互）。 -->
+           行内「下载」按钮直接创建下载任务（与热门榜同一套交互）；标题打开原帖；
+           卡片头「查看全部」下钻到帖子页，继承「近30日 · 未下载 · 按互动量」上下文，
+           列表为该筛选的全量明细，数字自洽。 -->
       <div class="page-card chart-card pending-card">
         <div class="chart-head" style="margin-bottom: 8px">
           <div class="chart-head-left">
@@ -2578,7 +2590,7 @@ function renderFidTrendChart() {
             </el-tooltip>
           </div>
           <div class="chart-head-right">
-            <el-link type="primary" :underline="false" class="more-link" @click="goDownloads">下载中心</el-link>
+            <el-link type="primary" :underline="false" class="more-link" @click="goPendingPosts">查看全部 ›</el-link>
           </div>
         </div>
         <div v-if="loadingPending && !pending" class="pending-grid">

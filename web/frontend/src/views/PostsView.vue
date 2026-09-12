@@ -37,6 +37,8 @@ const filters = reactive({
   dateRange: null as [string, string] | null,
   q: '',
   author: '',
+  /** 仅看「未下载」：来自数据总览「待下载推荐」下钻，与推荐同口径 */
+  undownloaded: false,
 })
 const page = ref(1)
 const pageSize = ref(50)
@@ -310,6 +312,7 @@ async function load() {
       date_to: filters.dateRange?.[1],
       q: queryText.value || undefined,
       author: filters.author || undefined,
+      undownloaded: filters.undownloaded || undefined,
       adv: advParam() || undefined,
       page: page.value,
       page_size: pageSize.value,
@@ -338,6 +341,7 @@ function doReset() {
   filters.dateRange = null
   filters.q = ''
   filters.author = ''
+  filters.undownloaded = false
   queryText.value = ''
   page.value = 1
   colSort.value = { by: 'date', order: 'desc' }
@@ -421,6 +425,17 @@ const activeFilters = computed(() => {
       },
     })
   }
+  if (filters.undownloaded) {
+    list.push({
+      key: 'undownloaded',
+      label: '未下载',
+      clear: () => {
+        filters.undownloaded = false
+        page.value = 1
+        load()
+      },
+    })
+  }
   // 排序：仅非默认（日期倒序）时进摘要条，避免每条都显示噪音；清除即还原默认
   if (!(colSort.value.by === 'date' && colSort.value.order === 'desc')) {
     list.push({
@@ -461,6 +476,7 @@ function doExport() {
       date_to: filters.dateRange?.[1],
       q: queryText.value || undefined,
       author: filters.author || undefined,
+      undownloaded: filters.undownloaded ? '1' : undefined,
       adv: advParam() || undefined,
       sort_by: colSort.value.order ? colSort.value.by : undefined,
       sort_order: colSort.value.order ?? undefined,
@@ -511,6 +527,11 @@ onMounted(() => {
     // 作者数据适配到关键词输入框：回填作者名，使关键词（标题/作者）搜索立即生效
     filters.q = qauthor
     queryText.value = qauthor
+  }
+  // 数据总览「待下载推荐」下钻：继承「未下载」上下文（仅看未下载帖子）
+  const qUndl = route.query.undownloaded
+  if (qUndl === '1' || qUndl === 'true') {
+    filters.undownloaded = true
   }
   loadFidMeta()
   load()
