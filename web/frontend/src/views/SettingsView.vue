@@ -18,8 +18,9 @@ const items = ref<SettingItem[]>([])
 // 表单草稿：key -> 值（保存前不写回 items，避免未保存就改了回显）
 const draft = ref<Record<string, number | boolean | string[] | string>>({})
 
-/** 分组：与后端白名单顺序一致，按业务域切分（业界设置页通行做法） */
-const GROUPS: { title: string; desc: string; keys: string[] }[] = [
+/** 分组：与后端白名单顺序一致，按业务域切分（业界设置页通行做法）。
+ *  desc 可选：组内各项已有自述时不再重复加组级说明（「内容资产」组即如此，2026-09-13 文案收敛） */
+const GROUPS: { title: string; desc?: string; keys: string[] }[] = [
   {
     title: '下载',
     desc: '并发与节流直接影响源站压力，过高可能触发限流或封禁',
@@ -39,8 +40,8 @@ const GROUPS: { title: string; desc: string; keys: string[] }[] = [
     keys: ['trash_keep_days', 'resources_scan_ttl'],
   },
   {
+    // 不写组级说明：两项的 desc 已各自说清作用，组级再讲一遍「三档对应 / 长尾稀释」即为重复
     title: '内容资产',
-    desc: '数据总览「内容资产」卡的目标进度（分层沉淀率的三档与之对应，全库档会被长尾稀释）',
     keys: ['asset_goal_scope', 'asset_goal_rate'],
   },
   {
@@ -305,7 +306,7 @@ onMounted(() => {
 
       <div v-for="g in GROUPS" :key="g.title" class="page-card">
         <div class="group-title">{{ g.title }}</div>
-        <div class="group-desc text-muted">{{ g.desc }}</div>
+        <div v-if="g.desc" class="group-desc text-muted">{{ g.desc }}</div>
         <div class="setting-list">
           <div v-for="it in groupItems(g.keys)" :key="it.key" class="setting-row">
             <div class="sr-main">

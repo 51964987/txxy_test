@@ -442,14 +442,22 @@ function onStateClick(r: AssetStateRow) {
   if (r.clickable) goPendingPosts()
 }
 
-/** 目标缺口说明：明确「还差多少帖」的口径，并说明为何该数字不下钻（避免与缺口下钻混淆） */
+/** 目标进度说明：一行结构化「口径 · 目标 · 当前 → 缺口」（卡面已省字，明细按需展开）。
+ *  不写「为何不下钻」——那是实现约束，属代码注释与文档，不是用户决策所需信息 */
 const goalTip = computed(() => {
   const g = assets.value?.goal
   if (!g) return ''
+  const head = `目标档 ${g.scope_label} · 目标 ${g.target_rate}% · 当前 ${g.downloaded}/${g.total}`
+  return g.reached ? `${head}（已达成）` : `${head} → 还差 ${g.remain} 帖`
+})
+
+/** 进度条无障碍文案：卡面文字收敛后，完整口径（含分母与档位）只在此处完整保留 */
+const goalAria = computed(() => {
+  const g = assets.value?.goal
+  if (!g) return '沉淀目标进度'
   return (
-    `目标范围内（${g.scope_label}）达到 ${g.target_rate}% 覆盖率还需沉淀 ${g.remain} 帖。`
-    + '该口径按互动量取前 N 名，帖子页没有对应筛选条件，故不提供下钻；'
-    + '需要看可下钻的沉淀缺口，请点状态行的「近 N 日缺口」'
+    `沉淀目标档 ${g.scope_label}，目标 ${g.target_rate}%，`
+    + `当前 ${g.current_rate}%（${g.downloaded} / ${g.total}）`
   )
 })
 
@@ -2472,22 +2480,33 @@ function renderFidTrendChart() {
         </div>
       </div>
 
-      <!-- 目标进度（SLO 式）：进度必须相对目标，否则百分比不可行动 -->
+      <!-- 目标进度（SLO 式 / Grafana stat-vs-target 形态）：常驻只留行首标签 + 目标值小字 + 主值 + 缺口，
+           档位名与 downloaded/total 明细下沉到 tooltip 与下方「分层沉淀率」的目标档高亮——
+           同一卡内同一数字不复述三遍（2026-09-13 文案收敛，见 docs/数据总览大屏设计与优化总览.md §20.6） -->
       <div class="asset-goal">
         <div class="ag-head">
           <span class="ag-title">
-            沉淀目标 · {{ assets.goal.scope_label }} {{ assets.goal.target_rate }}%
+            沉淀目标
+            <em class="ag-target">{{ assets.goal.target_rate }}%</em>
           </span>
-          <span class="ag-now">
-            当前 {{ assets.goal.current_rate }}%（{{ assets.goal.downloaded }} / {{ assets.goal.total }}）
-          </span>
+          <span class="ag-now" :title="goalTip">{{ assets.goal.current_rate }}%</span>
           <span v-if="assets.goal.reached" class="ag-done">已达成</span>
           <!-- 目标缺口不做下钻：目标口径是「该档全量帖子」，帖子页无法表达（无互动量阈值筛选），
-               强行下钻必然口径不一致；可下钻的缺口是下方状态行的「近 N 日缺口」（口径可表达） -->
-          <span v-else class="ag-remain" :title="goalTip">还差 {{ assets.goal.remain }} 帖</span>
+               强行下钻必然口径不一致；可下钻的缺口是下方状态行的「近 N 日缺口」。
+               该理由属实现约束，只留在代码注释与文档，不写进面向用户的文案 -->
+          <span v-else class="ag-remain" :title="goalTip">
+            还差 {{ assets.goal.remain.toLocaleString() }} 帖
+          </span>
         </div>
-        <div class="ag-bar" role="progressbar" :aria-valuenow="assets.goal.current_rate" aria-valuemin="0" aria-valuemax="100">
-          <div class="ag-fill" :style="{ width: goalBarWidth }"></div>
+        <div
+          class="ag-bar"
+          role="progressbar"
+          :aria-label="goalAria"
+          :aria-valuenow="assets.goal.current_rate"
+          aria-valuemin="0"
+          aria-valuemax="100"
+        >
+          <div class="ag-fill" :class="{ 'is-reached': assets.goal.reached }" :style="{ width: goalBarWidth }"></div>
           <span class="ag-mark" :style="{ left: assets.goal.target_rate + '%' }"></span>
         </div>
       </div>
@@ -2515,10 +2534,17 @@ function renderFidTrendChart() {
         </el-tooltip>
       </div>
 
-      <!-- 分层沉淀率：全库会被长尾稀释，分档才可行动 -->
+      <!-- 分层沉淀率：全库会被长尾稀释，分档才可行动。当前目标档高亮——
+           目标行已省去档位名，分母口径由这里唯一表达（分母必须可解释，见项目专属约束第 12 条） -->
       <div class="asset-coverage">
         <span class="ac-label">分层沉淀率</span>
-        <span v-for="c in assets.coverage" :key="c.key" class="ac-item">
+        <span
+          v-for="c in assets.coverage"
+          :key="c.key"
+          class="ac-item"
+          :class="{ 'is-goal': c.key === assets.goal.scope }"
+          :title="c.key === assets.goal.scope ? `当前目标档（${c.downloaded} / ${c.total.toLocaleString()}）` : undefined"
+        >
           {{ c.label }} <b>{{ c.rate }}%</b>
           <em>{{ c.downloaded }}/{{ c.total.toLocaleString() }}</em>
         </span>
@@ -4085,10 +4111,22 @@ function renderFidTrendChart() {
   font-weight: 600;
   color: #1f2d3d;
 }
-.ag-now {
+/* 目标值小字：紧贴行首标签（读作「沉淀目标 50%」，业界 stat-vs-target 的「of N% target」形态）。
+   不写「目标」二字——行首标签已含，避免「沉淀目标 目标 50%」叠字；档位名同样不复述 */
+.ag-target {
+  margin-left: 6px;
   font-size: 12px;
-  color: #606266;
+  font-style: normal;
+  font-weight: 400;
+  color: #909399;
+}
+/* 主值：层次「值大 / 目标小 / 缺口次要」，与业界 SLO 面板一致 */
+.ag-now {
+  font-size: 15px;
+  font-weight: 600;
+  color: #1f2d3d;
   font-variant-numeric: tabular-nums;
+  cursor: help;
 }
 .ag-done {
   font-size: 12px;
@@ -4113,6 +4151,10 @@ function renderFidTrendChart() {
   border-radius: 4px;
   background: linear-gradient(90deg, #2f6fed, #10b981);
   transition: width 0.3s;
+}
+/* 达成后整条转绿：用颜色代替「已达成」之外的第二个文字标签（业界阈值型面板惯例） */
+.ag-fill.is-reached {
+  background: linear-gradient(90deg, #34d399, #10b981);
 }
 /* 目标刻度：竖向短线标出目标位置，让「当前」与「目标」同尺度可比 */
 .ag-mark {
@@ -4188,6 +4230,14 @@ function renderFidTrendChart() {
 .ac-item b {
   color: #2f6fed;
   font-variant-numeric: tabular-nums;
+}
+/* 当前目标档高亮：目标行已省去档位名，分母口径由这里唯一表达（底色 + 左侧色条） */
+.ac-item.is-goal {
+  padding: 1px 7px;
+  border-radius: 4px;
+  background: #eef2fb;
+  box-shadow: inset 2px 0 0 #2f6fed;
+  color: #1f2d3d;
 }
 .ac-item em {
   font-style: normal;

@@ -86,24 +86,26 @@ WHITELIST: dict[str, dict[str, Any]] = {
         "scope": "immediate",
         "desc": "签名未变时距上次扫描超过该值即重扫；越小越实时、越大越省 IO",
     },
+    # 目标档位的取舍理由放注释而非 desc：全库档分母含全部长尾帖，百分比被稀释到 0.x% 后看不动
+    # （实测 0.09% vs Top500 3.4%，差 38 倍）。desc 只留「这是什么 / 与谁一致」的短句，
+    # 「推荐哪档」改由选项 label 承载（比让用户读一句建议更快，2026-09-13 文案收敛）。
     "asset_goal_scope": {
         "label": "沉淀目标范围",
         "type": "enum",
         "options": [
             {"value": "all", "label": "全库收录"},
             {"value": "engaged", "label": "互动≥10"},
-            {"value": "top", "label": "互动 Top500"},
+            {"value": "top", "label": "互动 Top500（推荐）"},
         ],
         "scope": "immediate",
-        "desc": "数据总览「内容资产」卡的目标进度以哪一档为分母。全库会被长尾稀释（长期停在 0.x%），"
-                "建议选 Top500 这类高价值档；三档与卡片上的分层沉淀率一一对应",
+        "desc": "卡片目标分母档位，与卡片「分层沉淀率」三档一致",
     },
     "asset_goal_rate": {
         "label": "沉淀目标覆盖率（%）",
         "min": 1,
         "max": 100,
         "scope": "immediate",
-        "desc": "目标范围内希望沉淀到本地的比例；卡片据此显示进度条与「还差多少帖」",
+        "desc": "目标覆盖率，卡片据此显示进度与缺口",
     },
     "share_host": {
         "label": "分享链接固定主机名/IP",
