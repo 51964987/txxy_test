@@ -39,6 +39,8 @@ const filters = reactive({
   author: '',
   /** 仅看「未下载」：来自数据总览「待下载推荐」下钻，与推荐同口径 */
   undownloaded: false,
+  /** 仅看「已下载」：来自数据总览「内容资产」卡「已沉淀帖」下钻，与卡片数字严格自洽 */
+  downloaded: false,
 })
 const page = ref(1)
 const pageSize = ref(50)
@@ -65,10 +67,12 @@ const tableRef = ref<{ sort: (p: string, o: string) => void; clearSort: () => vo
  * 表格容器的**实测可用宽度**（用 ResizeObserver 而非视口宽度——侧边栏折叠、
  * 窗口缩放、系统缩放都会改变它，视口宽度推算是算不准的）。
  *
- * el-table 各列 min-width 合计约 970px，容器一旦小于它就会出现横向滚动条。
+ * el-table 各列 min-width 合计约 986px，容器一旦小于它就会出现横向滚动条。
  * 故按实测宽度分级隐藏低优先级列，保证任何宽度下都不横向滚动。
  * 阈值取「隐藏该列后剩余列的下限合计」：
- *   全列 970 → 隐藏发布时间 874 → 再隐藏作者 798 → 再隐藏回复 732 → 再隐藏点赞 666。
+ *   全列 986 → 隐藏发布时间 874 → 再隐藏作者 798 → 再隐藏回复 732 → 再隐藏点赞 666。
+ * 注：全列下限由 970 变为 986，只因发布时间列 96 → 112（修绝对日期换行，见该列注释）；
+ * 其余阈值都不含发布时间列，故不受影响。
  */
 const tableBoxRef = ref<HTMLElement | null>(null)
 const tableWidth = ref(1200)
@@ -88,7 +92,7 @@ onBeforeUnmount(() => tableRo?.disconnect())
 const colVisible = computed(() => {
   const w = tableWidth.value
   return {
-    time: w >= 970,
+    time: w >= 986,
     author: w >= 874,
     replies: w >= 798,
     likes: w >= 732,
@@ -313,6 +317,7 @@ async function load() {
       q: queryText.value || undefined,
       author: filters.author || undefined,
       undownloaded: filters.undownloaded || undefined,
+      downloaded: filters.downloaded || undefined,
       adv: advParam() || undefined,
       page: page.value,
       page_size: pageSize.value,
@@ -342,6 +347,7 @@ function doReset() {
   filters.q = ''
   filters.author = ''
   filters.undownloaded = false
+  filters.downloaded = false
   queryText.value = ''
   page.value = 1
   colSort.value = { by: 'date', order: 'desc' }
@@ -436,6 +442,17 @@ const activeFilters = computed(() => {
       },
     })
   }
+  if (filters.downloaded) {
+    list.push({
+      key: 'downloaded',
+      label: '已下载',
+      clear: () => {
+        filters.downloaded = false
+        page.value = 1
+        load()
+      },
+    })
+  }
   // 排序：仅非默认（日期倒序）时进摘要条，避免每条都显示噪音；清除即还原默认
   if (!(colSort.value.by === 'date' && colSort.value.order === 'desc')) {
     list.push({
@@ -477,6 +494,7 @@ function doExport() {
       q: queryText.value || undefined,
       author: filters.author || undefined,
       undownloaded: filters.undownloaded ? '1' : undefined,
+      downloaded: filters.downloaded ? '1' : undefined,
       adv: advParam() || undefined,
       sort_by: colSort.value.order ? colSort.value.by : undefined,
       sort_order: colSort.value.order ?? undefined,
@@ -532,6 +550,11 @@ onMounted(() => {
   const qUndl = route.query.undownloaded
   if (qUndl === '1' || qUndl === 'true') {
     filters.undownloaded = true
+  }
+  // 数据总览「内容资产」卡「已沉淀帖」下钻：继承「已下载」上下文（仅看已落盘帖子）
+  const qDl = route.query.downloaded
+  if (qDl === '1' || qDl === 'true') {
+    filters.downloaded = true
   }
   loadFidMeta()
   load()
@@ -730,7 +753,10 @@ onMounted(() => {
         <el-table-column v-if="colVisible.replies" prop="replies" label="回复" min-width="66" align="center" sortable="custom">
           <template #default="{ row }">{{ row.replies || '-' }}</template>
         </el-table-column>
-        <el-table-column v-if="colVisible.time" prop="created_at" label="发布时间" width="96" sortable="custom">
+        <!-- 宽度按「内容最宽形态」定：本列展示 formatRelativeTime，超过 7 天会回落为
+             YYYY-MM-DD（自然宽 77.8px @14px），固定列宽不参与剩余空间分配，96px 时
+             内容盒仅 72px（左右内边距各 12px）→ 日期在连字符处断成两行（2026-09-13 修复前实测） -->
+        <el-table-column v-if="colVisible.time" prop="created_at" label="发布时间" width="112" sortable="custom">
           <template #default="{ row }">
             <el-tooltip :content="formatFullTime(row.created_at)" placement="top">
               <span class="text-muted">{{ formatRelativeTime(row.created_at) }}</span>

@@ -37,6 +37,9 @@ if str(config.BASE_DIR) not in sys.path:
     sys.path.insert(0, str(config.BASE_DIR))
 from extract_magnets import MAGNETS_FILENAME
 from extract_clouds import CLOUDS_FILENAME
+# 目录名 ↔ 帖子标题的唯一规范化实现（抓取端生成目录名用的就是它）：
+# 目录名 = sanitize_title(标题)，比对时必须用同一函数，否则长标题 / 含非法字符的标题永远匹配不上
+from extract_torrents import sanitize_title
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg"}
 VIDEO_EXTS = {".mp4", ".webm", ".flv", ".mkv", ".avi", ".mov", ".m4v", ".ts", ".m3u8"}
@@ -181,7 +184,14 @@ def _signature(root: Path) -> str:
 def scan() -> dict[str, Any]:
     root = config.DOWNLOADS_DIR
     if not root.is_dir():
-        return {"count": 0, "total_files": 0, "total_size": 0, "items": []}
+        return {
+            "count": 0,
+            "total_files": 0,
+            "total_size": 0,
+            "empty_dirs": 0,
+            "items": [],
+            "type_breakdown": {},
+        }
 
     global _cache_signature, _cache_payload, _cache_time
     # TTL 每次调用时读设置：设置页改动下一次扫描即生效
@@ -197,6 +207,9 @@ def scan() -> dict[str, Any]:
     items: list[dict[str, Any]] = []
     total_files = 0
     total_size = 0
+    # 空目录数（file_count=0）：资产卡「空壳」口径——下载失败/取消后在磁盘上留下的空壳，
+    # 与「对账」用的「有内容但未被履历认领」互斥，两者不重叠计数
+    empty_dirs = 0
     # 按媒体类型聚合（image/video/torrent/text/other）：复用 category_of 的分类，
     # 同一趟 rglob 遍历顺手累加文件数与体积，供 /stats/assets 的「按类型」占比与下钻复用
     type_breakdown: dict[str, dict[str, int]] = {
@@ -245,6 +258,8 @@ def scan() -> dict[str, Any]:
             mtime = 0
         total_files += len(files)
         total_size += folder_size
+        if not files:
+            empty_dirs += 1
         items.append(
             {
                 "name": folder.name,
@@ -259,6 +274,7 @@ def scan() -> dict[str, Any]:
         "count": len(items),
         "total_files": total_files,
         "total_size": total_size,
+        "empty_dirs": empty_dirs,
         "items": items,
         "type_breakdown": type_breakdown,
     }
@@ -269,15 +285,15 @@ def scan() -> dict[str, Any]:
 
 
 # ---- B1 来源回溯：目录名（= 帖子页面标题）匹配 posts 表（只读查询，不写库） ----
-def source_lookup(name: str, *, exact_only: bool = False) -> dict[str, Any]:
+def source_lookup(name: str) -> dict[str, Any]:
     """按目录名回溯来源帖：精确命中优先（title 主键索引），未命中再做双向模糊匹配。
 
     目录名即下载时的页面标题，正常场景精确即可命中；目录名可能经标题清理
-    （特殊字符被替换），故补充「库内标题含目录名 / 目录名含库内标题」双向 LIKE 兜底，
+    （特殊字符被替换 / 截断），故补充「库内标题含目录名 / 目录名含库内标题」双向 LIKE 兜底，
     多条命中时取入库时间最新一条。仅展示用途，模糊匹配不做转义特判。
-    exact_only=True 时跳过模糊兜底只做精确匹配（命中 title 主键索引，零全表扫描）：
-    供下载履历的磁盘恢复使用——模糊命中可能张冠李戴，误配会把未下载的帖子
-    错误排除出待下载推荐，宁可漏记也不误记。
+
+    注：本函数用于**展示**（容错优先）；「哪些目录属于哪个帖子」这类**判定**口径
+    必须走 match_dirs_to_posts（精确、可判定），两者不可互相替代。
     """
     name = (name or "").strip()
     if not name:
@@ -287,7 +303,7 @@ def source_lookup(name: str, *, exact_only: bool = False) -> dict[str, Any]:
         "SELECT title, fid, date, url, author, created_at FROM posts WHERE title = ? LIMIT 1",
         (name,),
     )
-    if not rows and not exact_only:
+    if not rows:
         like = f"%{name}%"
         rows = db.query(
             "SELECT title, fid, date, url, author, created_at FROM posts" +
@@ -308,6 +324,42 @@ def source_lookup(name: str, *, exact_only: bool = False) -> dict[str, Any]:
         "author": r["author"] or "",
         "url": db.normalize_url(r["url"]),
     }
+
+
+def match_dirs_to_posts(names: set[str]) -> dict[str, str]:
+    """把「下载目录名」映射回来源帖 URL（目录名 ↔ 帖子映射判定口径的唯一实现）。
+
+    为什么不能直接拿「目录名 == 帖子标题」比对：
+    目录名 = sanitize_title(标题)，该函数会做「非法字符替换为 _、去除首尾空白与结尾点号、
+    截断 80 字符」三件事；只要标题被改动过（含非法字符或超过 80 字），目录名就不再等于标题。
+    实测两个长标题帖（库内 99 / 90 字）的目录名被截断为 80 字，用「全等」判据永远匹配不上，
+    导致资产漏斗的「已沉淀帖」少计、这些帖子被待下载推荐重复推荐。
+
+    实现取舍：SQL 无法表达替换 + 截断规则，故做一次流式全表扫描（ORDER BY title 走 title
+    主键索引，顺序确定），按 sanitize_title(标题) == 目录名 精确比对；命中即记录，
+    待匹配集合清空则立即结束。**仅在确有「未认领目录」时才被调用**，正常情况下零开销。
+
+    返回 {目录名: URL}；按 title 升序取首个命中（前 80 字完全相同的两条帖子无法区分，
+    宁可漏记不误记——与履历恢复的既有原则一致）。
+    """
+    todo = {n for n in names if n}
+    if not todo:
+        return {}
+
+    out: dict[str, str] = {}
+    rows = db.iter_query("SELECT title, url FROM posts ORDER BY title")
+    try:
+        for r in rows:
+            key = sanitize_title(r["title"] or "")
+            if key in todo:
+                out[key] = r["url"]
+                todo.discard(key)
+                if not todo:
+                    break
+    finally:
+        # 提前 break 时显式关闭生成器，立即释放只读连接（不等 GC）
+        rows.close()
+    return out
 
 
 # ---- 受控路径解析（限定 downloads/ 内） ----

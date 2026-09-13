@@ -86,6 +86,25 @@ WHITELIST: dict[str, dict[str, Any]] = {
         "scope": "immediate",
         "desc": "签名未变时距上次扫描超过该值即重扫；越小越实时、越大越省 IO",
     },
+    "asset_goal_scope": {
+        "label": "沉淀目标范围",
+        "type": "enum",
+        "options": [
+            {"value": "all", "label": "全库收录"},
+            {"value": "engaged", "label": "互动≥10"},
+            {"value": "top", "label": "互动 Top500"},
+        ],
+        "scope": "immediate",
+        "desc": "数据总览「内容资产」卡的目标进度以哪一档为分母。全库会被长尾稀释（长期停在 0.x%），"
+                "建议选 Top500 这类高价值档；三档与卡片上的分层沉淀率一一对应",
+    },
+    "asset_goal_rate": {
+        "label": "沉淀目标覆盖率（%）",
+        "min": 1,
+        "max": 100,
+        "scope": "immediate",
+        "desc": "目标范围内希望沉淀到本地的比例；卡片据此显示进度条与「还差多少帖」",
+    },
     "share_host": {
         "label": "分享链接固定主机名/IP",
         "type": "text",
@@ -167,6 +186,10 @@ def _env_or_default(key: str) -> Any:
         return config.SHARE_HOST
     if key == "enable_auto_refresh":
         return config.ENABLE_AUTO_REFRESH
+    if key == "asset_goal_scope":
+        return config.ASSET_GOAL_SCOPE
+    if key == "asset_goal_rate":
+        return config.ASSET_GOAL_RATE
     # 以下默认值定义在项目根 download_files.py（CLI 与 Web 同源）
     if key == "download_interval":
         return download_files.DOWNLOAD_INTERVAL
@@ -230,6 +253,11 @@ def _clamp(key: str, value: Any) -> Any:
             if v in allowed and v not in seen:
                 seen.append(v)
         return seen
+    if t == "enum":
+        # 单选枚举：非法值一律回落默认值（不抛错），避免前端旧缓存 / 手改文件写入脏值
+        allowed = {o["value"] for o in spec.get("options", [])}
+        v = str(value)
+        return v if v in allowed else _env_or_default(key)
     try:
         num = float(value)
     except (TypeError, ValueError):

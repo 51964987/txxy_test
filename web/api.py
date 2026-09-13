@@ -3,6 +3,7 @@ import asyncio
 import csv
 import io
 import json
+import shutil
 import threading
 from datetime import date as date_cls
 from datetime import timedelta
@@ -108,13 +109,6 @@ class TodayTopItemResp(BaseModel):
     is_new: bool = False
 
 
-class BoardDailyResp(BaseModel):
-    """本月最热的每日互动量（卡头 sparkline 用）。"""
-
-    date: str
-    value: int
-
-
 class TodayTopResp(BaseModel):
     date: str
     items: list[TodayTopItemResp]
@@ -122,8 +116,6 @@ class TodayTopResp(BaseModel):
     total: int = 0
     # 时间窗内有数据的天数（today_top 恒为 1 / month_top=当月已入库天数），用于月初样本提示
     days: int = 0
-    # 每日互动量分布（仅 month_top 填充，供 sparkline 展示本月热度走势）
-    daily: list[BoardDailyResp] = []
 
 
 class TodayFidsItemResp(BaseModel):
@@ -165,8 +157,13 @@ class TopFidResp(BaseModel):
 
 
 class TrendPointResp(BaseModel):
+    """单日趋势点：`metric=posts` 时为发帖量，`metric=engagement` 时为互动量合计。
+
+    字段名用中性的 `value` 而非 `count`：同一接口承载两种口径，叫 count 会让
+    「互动量」这种非计数口径在调用方读起来自相矛盾（内部接口，不做兼容别名）。
+    """
     date: str
-    count: int
+    value: int
 
 
 class TrendByFidResp(BaseModel):
@@ -212,6 +209,9 @@ class HealthResp(BaseModel):
     run_lag_days: int | None = None      # 今天 − 最近入库活动日（抓取是否中断的关键信号）
     level: str = "ok"                    # ok / warn / danger
     message: str = ""                    # 一句话结论（前端直接展示，判定逻辑只在后端一处）
+    # ---- 资产停滞（2026-09-13）：最近一次新增本地资产距今的天数 ----
+    # 采集正常但长期无新增资产时并入健康判定（阈值 _ASSET_STALL_DAYS，只此一处）
+    asset_stall_days: int | None = None
 
 
 class CompareWindowResp(BaseModel):
@@ -259,8 +259,71 @@ class TypeBreakdownItem(BaseModel):
     size: int = 0
 
 
+class AssetsCoverageItem(BaseModel):
+    """分层沉淀率单档：分母可解释，避免全库长尾把百分比稀释成不可行动的数字。"""
+    key: str = "all"          # all / engaged / top
+    label: str = ""
+    total: int = 0            # 该档分母（帖子数）
+    downloaded: int = 0       # 该档已沉淀帖数
+    rate: float = 0.0         # 百分比，保留 2 位
+
+
+class AssetsStateResp(BaseModel):
+    """资产五态摘要（库存以外的状态才是「进度感」的来源）。"""
+    active: int = 0            # 在途：排队 / 下载中
+    failed: int = 0            # 失败：最近一次尝试失败且此后未成功（持久于履历）
+    re_download: int = 0       # 可重下：曾成功但目录已被清理
+    empty_dirs: int = 0        # 空壳：目录在、文件数为 0
+    gap_recent: int = 0        # 缺口：近 gap_days 内互动≥1 且未沉淀的帖子数
+    gap_days: int = 30
+    recent_posts: int = 0      # 上述窗口内新增沉淀帖数（与 gap 同窗，便于对照）
+
+
+class AssetsReconcileResp(BaseModel):
+    """对账：磁盘实际目录 vs 被履历认领的目录（差值是「未认领」，需要能看见）。"""
+    claimed: int = 0
+    unclaimed: int = 0
+    empty: int = 0
+
+
+class AssetsFidItem(BaseModel):
+    """分版块沉淀情况：暴露「沉淀高度集中在少数版块」这一事实。"""
+    fid: str | None = None
+    name: str = ""
+    total: int = 0
+    downloaded: int = 0
+    rate: float = 0.0
+
+
+class AssetsGrowthPoint(BaseModel):
+    """资产增长曲线单点：某日首次沉淀的帖数与体积（体积按当前占用估算）。"""
+    date: str
+    posts: int = 0
+    size: int = 0
+
+
+class AssetsGoalResp(BaseModel):
+    """沉淀目标（SLO 式进度）：目标档位 + 目标覆盖率 + 当前值 + 剩余缺口。"""
+    scope: str = "top"
+    scope_label: str = ""
+    target_rate: int = 50
+    current_rate: float = 0.0
+    total: int = 0
+    downloaded: int = 0
+    remain: int = 0            # 距目标还差多少帖
+    reached: bool = False
+
+
 class AssetsResp(BaseModel):
-    """内容 → 资产漏斗（AS1）：收录 → 已下载帖 → 本地文件 → 占用体积。"""
+    """内容 → 资产漏斗（AS1）：收录 → 已沉淀帖 → 本地文件（+ 沉淀进度）。
+
+    口径要点（2026-09-13 扩展，见《内容资产沉淀进度调研与建议.md》）：
+    - 漏斗只保留同量纲的三级（计数）；占用体积移到独立存储视图，不再混进漏斗；
+    - 分母必须分层（coverage）：全库会被长尾稀释，单看一个百分比不可行动；
+    - 状态（state）补「在途 / 失败 / 可重下 / 空壳 / 缺口」，回答「沉淀是否在推进」；
+    - 对账（reconcile）暴露「磁盘目录 vs 被认领目录」的差（rclone check 式双边核对）；
+    - 增长（growth）与目标（goal）给「进度」补上时间轴与目标基准。
+    """
     posts_total: int = 0
     downloaded_posts: int = 0
     files: int = 0
@@ -269,6 +332,15 @@ class AssetsResp(BaseModel):
     # 按媒体类型拆分（image/video/torrent/magnet/cloud/text/other），口径来自 resources.scan()，
     # 与资源管理页 B6 容量洞察同分类；前端资产卡「按类型」占比条与下钻复用
     type_breakdown: dict[str, TypeBreakdownItem] = {}
+    # ---- 沉淀进度（2026-09-13 新增）----
+    coverage: list[AssetsCoverageItem] = []         # 分层沉淀率（全库 / 互动≥N / TopN）
+    state: AssetsStateResp = AssetsStateResp()      # 五态摘要 + 缺口
+    reconcile: AssetsReconcileResp = AssetsReconcileResp()
+    by_fid: list[AssetsFidItem] = []                # 分版块沉淀率（集中度信号）
+    growth: list[AssetsGrowthPoint] = []            # 资产增长曲线（按首次落盘日）
+    goal: AssetsGoalResp = AssetsGoalResp()         # 沉淀目标（SLO 式进度）
+    disk_total: int = 0                             # 存储卷总容量（字节）
+    disk_free: int = 0                              # 存储卷可用容量（字节）
 
 
 class FidMetaResp(BaseModel):
@@ -485,32 +557,70 @@ def _build_filters(
     return (" AND ".join(where) if where else "1=1"), params
 
 
+def _url_forms(paths: set[str]) -> list[str]:
+    """把归一化路径集合展开为「库里可能出现的两种形态」（相对路径 + 展示域名完整 URL）。
+
+    帖子 url 新数据入库为相对路径 `/htm_data/...`，历史数据里还并存带域名完整 URL，
+    只要做 URL 比对（判重 / 下钻过滤 / 资产漏斗）就必须同时覆盖两种形态，
+    否则会出现「明明下过却还推荐」的错判。
+    """
+    out: set[str] = set()
+    for p in paths:
+        out.add(p)
+        out.add(config.to_display_url(p))
+    return list(out)
+
+
+def _apply_url_match(
+    clause: str,
+    params: list[str],
+    values: list[str],
+    *,
+    negate: bool,
+) -> tuple[str, list[str]]:
+    """按 URL 集合追加 IN（命中）/ NOT IN（排除）过滤，分块拼接规避变量数上限。
+
+    实测本机 SQLite 3.42 的单语句变量上限为 32766（不是老文档里的 999），
+    每块 400 个参数 → 单条语句可容纳约 80 块（3.2 万个 URL）；
+    多块之间 IN 用 OR、NOT IN 用 AND 连接，语义与「集合运算」一致。
+    """
+    if not values:
+        return clause, params
+    op = "NOT IN" if negate else "IN"
+    parts: list[str] = []
+    for i in range(0, len(values), 400):
+        part = values[i : i + 400]
+        parts.append(f"url {op} (" + ",".join("?" * len(part)) + ")")
+        params.extend(part)
+    joiner = " AND " if negate else " OR "
+    return f"({clause}) AND ({joiner.join(parts)})", params
+
+
 def _apply_undownloaded(clause: str, params: list[str]) -> tuple[str, list[str]]:
     """追加「未下载」过滤：排除已下载（目录仍在磁盘）与正在下载中的链接。
 
     与 /stats/pending_downloads 同一套判定（_download_path_sets），保证从「待下载推荐」
     下钻到帖子页后，列表是把推荐口径（近 N 日 · 未下载 · 按互动量）展开后的全量明细，
-    数字严格自洽。帖子 url 可能是入库相对路径、也可能是展示域名完整 URL，
-    两种形态都要排除（与 pending 的候选集构造方式一致）。
+    数字严格自洽。
     """
     done, active, _gone = _download_path_sets()
-    excluded: set[str] = set()
-    for u in done:
-        excluded.add(u)
-        excluded.add(config.to_display_url(u))
-    for u in active:
-        excluded.add(u)
-        excluded.add(config.to_display_url(u))
+    excluded = _url_forms(done | active)
     if not excluded:
         return clause, params  # 没有任何已下载记录，无需过滤
-    # SQLite 单条语句变量上限 999：分块拼接 NOT IN（参考 pending 的分块做法）
-    not_in: list[str] = []
-    items = list(excluded)
-    for i in range(0, len(items), 400):
-        part = items[i : i + 400]
-        not_in.append("url NOT IN (" + ",".join("?" * len(part)) + ")")
-        params.extend(part)
-    return f"({clause}) AND {' AND '.join(not_in)}", params
+    return _apply_url_match(clause, params, excluded, negate=True)
+
+
+def _apply_downloaded(clause: str, params: list[str]) -> tuple[str, list[str]]:
+    """追加「已下载」过滤：只保留已落盘（目录仍在磁盘）的帖子。
+
+    与 _apply_undownloaded 严格对称（同一集合、同一归一化），供资产卡「已沉淀帖」下钻：
+    卡片显示多少条，明细页就必须是多少条——这是「数字自洽」的硬校验。
+    无任何已下载记录时返回 0=1（结果为空），而不是「不过滤」。
+    """
+    done, _active, _gone = _download_path_sets()
+    if not done:
+        return "0=1", params
+    return _apply_url_match(clause, params, _url_forms(done), negate=False)
 
 
 def _as_int(value: object) -> int:
@@ -662,13 +772,15 @@ def _health_verdict(
     progress: int | None,
     running: int,
     failed_sections: list[str],
+    asset_stall_days: int | None = None,
 ) -> tuple[str, str]:
     """采集健康度判定 → (level, message)。
 
     阈值只有这一处，前端不再各判一套（否则会出现「条是绿的、卡是红的」）。
 
     判定优先级：入库中断（抓取停了，数据不会再增长，最严重）
-    ＞ 批次失败（有版块没抓到）＞ 发布空窗（入库正常但站点当期无新帖，仅提示）。
+    ＞ 批次失败（有版块没抓到）＞ 发布空窗（入库正常但站点当期无新帖，仅提示）
+    ＞ 资产停滞（采集一切正常，只是久未沉淀新的本地资产）。
 
     抽成纯函数的理由：真实数据长期处于正常态，warn / danger 分支无法自然复现，
     内联在查询流程里就只能靠推演；独立后可用等价脚本逐分支实测（见交付说明）。
@@ -683,6 +795,9 @@ def _health_verdict(
         or run_status == "cancelled"
         or (days_lag is not None and days_lag >= 3)
     ):
+        level = "warn"
+    # 资产停滞：仅在仍为 ok 时升级，绝不掩盖更严重的采集问题（数据源断了优先报采集）
+    if level == "ok" and asset_stall_days is not None and asset_stall_days >= _ASSET_STALL_DAYS:
         level = "warn"
     # cancelled（手动中断 / 主动停止）属「非完成状态」，不再标绿：与「完成且健康」的绿区分，
     # 统一判 warn（橙），提示「最近批次未跑完」。若中断批次本身还有失败版块（fail > 0），
@@ -705,6 +820,8 @@ def _health_verdict(
         message = "最近批次被手动中断"
     elif days_lag is not None and days_lag >= 3:
         message = f"最新发布日距今 {days_lag} 天（入库正常，站点当期无新帖）"
+    elif asset_stall_days is not None and asset_stall_days >= _ASSET_STALL_DAYS:
+        message = f"已 {asset_stall_days} 天无新增本地资产（采集正常）"
     elif total_sections:
         message = f"最近批次 {run_date or '—'} 正常 · {ok}/{total_sections} 个版块成功"
     else:
@@ -776,6 +893,18 @@ def stats_health() -> HealthResp:
             except ValueError:
                 run_lag_days = None
 
+        # 资产停滞：最近一次「首次落盘」距今天数（取最小值）；时间不可考的条目不参与判定，
+        # 履历为空时为 None（未知，不产生告警——没有数据不等于停滞）
+        asset_stall_days: int | None = None
+        seen_days: list[int] = []
+        for ts in download_tasks.manager.asset_snapshot()["first_at"].values():
+            try:
+                seen_days.append((today - date_cls.fromisoformat(str(ts)[:10])).days)
+            except ValueError:
+                continue
+        if seen_days:
+            asset_stall_days = min(seen_days)
+
         level, message = _health_verdict(
             run_status=run_status,
             fail=fail,
@@ -788,6 +917,7 @@ def stats_health() -> HealthResp:
             progress=progress,
             running=int(latest.get("running") or 0) if latest else 0,
             failed_sections=failed_sections,
+            asset_stall_days=asset_stall_days,
         )
 
         return {
@@ -811,9 +941,10 @@ def stats_health() -> HealthResp:
             "run_lag_days": run_lag_days,
             "level": level,
             "message": message,
+            "asset_stall_days": asset_stall_days,
         }
 
-    return db.cached("health_v1", _calc)
+    return db.cached("health_v2", _calc)
 
 
 def _window_pair(days: int) -> dict[str, Any]:
@@ -1065,7 +1196,11 @@ def stats_month_top(
     """本月最热帖（最新数据月份内），热门榜「本月最热」栏用。
 
     sort: engagement=点赞+回复综合（默认）/ likes=点赞 / replies=回复 / hot=时间衰减热度。
-    额外返回 daily（每日互动量，供卡头 sparkline）与 is_new（新入榜，对比快照）。
+    额外返回 total/days（当月帖数与覆盖天数，供卡头口径 tooltip）与 is_new（新入榜，对比快照）。
+
+    说明（2026-09-13）：原先还返回 `daily`（当月每日互动量）供卡头 sparkline，现已移除——
+    榜单卡只做列表展示，互动量趋势抽出为趋势区的独立图表（走 `/stats/trend?metric=engagement`，
+    近 N 日滚动窗口），避免同一卡片里混装「当月 Top10 帖」与「全站每日互动量」两个口径。
     """
     order = _BOARD_SORTS.get(sort, _BOARD_SORTS["engagement"])
 
@@ -1091,15 +1226,6 @@ def stats_month_top(
             days = conn.execute(
                 "SELECT COUNT(DISTINCT date) AS c FROM posts_filtered WHERE substr(date, 1, 7) = ?", (month,)
             ).fetchone()["c"]
-            # 每日互动量：卡头 sparkline，用发布日分组（与榜单时间窗同口径）
-            daily = [
-                {"date": r["date"], "value": _as_int(r["v"])}
-                for r in conn.execute(
-                    f"SELECT date, SUM({_N_ENGAGE}) AS v" +
-                    " FROM posts_filtered WHERE substr(date, 1, 7) = ? GROUP BY date ORDER BY date",
-                    (month,),
-                )
-            ]
         finally:
             conn.close()
         urls = [db.normalize_url(r["url"]) for r in rows]
@@ -1110,7 +1236,6 @@ def stats_month_top(
             "date": month,
             "total": total,
             "days": days,
-            "daily": daily,
             "items": [
                 {
                     "fid": r["fid"],
@@ -1126,26 +1251,42 @@ def stats_month_top(
             ],
         }
 
-    return db.cached(f"month_top_v3:{sort}:{limit}", _calc)
+    # 缓存 key 由 v3 → v4：响应体去掉了 daily 字段，避免 5s 内旧结构继续返回给前端
+    return db.cached(f"month_top_v4:{sort}:{limit}", _calc)
 
 
 @router.get("/stats/trend")
-def stats_trend(days: Annotated[int, Query(ge=1, le=365)] = 30) -> list[TrendPointResp]:
+def stats_trend(
+    days: Annotated[int, Query(ge=1, le=365)] = 30,
+    metric: Annotated[str, Query(pattern="^(posts|engagement)$")] = "posts",
+) -> list[TrendPointResp]:
+    """每日趋势：`metric=posts` 发帖量（默认）/ `metric=engagement` 互动量（点赞 + 回复）。
+
+    两种口径共用同一窗口（最近 days 天，含今天）与同一补零逻辑，保证「全站发布趋势」
+    与「每日互动量趋势」两张图的横轴严格对齐——并排图口径不一致是本项目踩过的坑
+    （§19.1：一张看 30 日、一张看 7 日）。
+
+    注意最后一天是「今天」：当日抓取尚未覆盖全天，该点数据天然不完整。
+    前端对该点做未完整标注，并把统计卡（峰值/谷值/日均）排除当天计算——否则「谷值」
+    永远落在今天，统计卡失去意义。
+    """
     start = (date_cls.today() - timedelta(days=days - 1)).isoformat()
 
     def _calc():
+        col = "COUNT(*)" if metric == "posts" else f"SUM({_N_ENGAGE})"
         rows = db.query(
-            "SELECT date, COUNT(*) AS c FROM posts_filtered WHERE date >= ? GROUP BY date ORDER BY date ASC",
+            f"SELECT date, {col} AS v FROM posts_filtered WHERE date >= ?"
+            " GROUP BY date ORDER BY date ASC",
             (start,),
         )
-        by_date = {r["date"]: r["c"] for r in rows}
+        by_date = {r["date"]: int(r["v"] or 0) for r in rows}
         out: list[dict[str, Any]] = []
         for i in range(days):
             d = (date_cls.today() - timedelta(days=days - 1 - i)).isoformat()
-            out.append({"date": d, "count": by_date.get(d, 0)})
+            out.append({"date": d, "value": by_date.get(d, 0)})
         return out
 
-    return db.cached(f"trend_{days}", _calc)
+    return db.cached(f"trend_v2:{metric}:{days}", _calc)
 
 
 @router.get("/stats/trend_by_fid")
@@ -1251,28 +1392,105 @@ def stats_fid_dist() -> list[FidDistItemResp]:
 # 覆盖「值得下载」的范围，且差集在 Python 侧完成（帖子存相对路径，任务存完整 URL）。
 _PENDING_CANDIDATE_POOL = 400
 
+# 沉淀率的分层档位（固定口径，不做页内可调）：互动门槛与 TopN 规模。
+# 依据：全库沉淀率会被长尾（零互动帖占 6 成以上）稀释到不可行动，分层后才能看出真实进度。
+_ASSET_ENGAGED_MIN = 10
+_ASSET_TOP_N = 500
+# 资产增长曲线 / 沉淀缺口的默认时间窗（天），可由 /stats/assets?days= 覆盖
+_ASSET_GROWTH_DAYS = 30
+# 资产停滞告警阈值（天）：采集正常但连续这段时间没有新增本地资产 → 采集健康条升 warn。
+# 与采集侧阈值同处一处判定（前端只上色），避免两端各判一套。
+_ASSET_STALL_DAYS = 14
 
-def _download_path_sets() -> tuple[set[str], set[str], set[str]]:
-    """(已下载的入库相对路径集合, 正在下载中的路径集合, 曾下载但目录已清理的路径集合)。
 
-    必须归一化后再比：下载任务里存的是完整 URL（提交时可能带本机镜像 host，
+def _asset_snapshot() -> dict[str, Any]:
+    """下载侧资产状态（唯一入口）：已落盘 / 在途 / 已清理 / 失败 / 已认领目录 / 首次落盘时间。
+
+    必须归一化后再比：下载任务与履历里存的是提交时的完整 URL（可能带本机镜像 host，
     如 http://127.0.0.1:1024/htm_data/...），而 posts.url 入库的是相对路径，
     直接比字符串永远对不上——这是本功能唯一的隐蔽坑。
-    gone（曾下载但文件已被资源管理清空）用于给待下载推荐打「可重下」标记，
-    与「全新待下载」区分开，避免用户清理过文件还以为没下过。
+
+    一次调用取回全部口径（底层 download_tasks.asset_snapshot 只持锁一次、只校验一遍目录），
+    避免待下载队列、资产漏斗、帖子页筛选各自扫描一遍导致口径漂移。
     """
-    done = {config.to_storage_path(u) for u in download_tasks.manager.downloaded_urls()}
-    active = {config.to_storage_path(u) for u in download_tasks.manager.active_urls()}
-    gone = {config.to_storage_path(u) for u in download_tasks.manager.gone_urls()}
-    return done, active, gone
+    snap = download_tasks.manager.asset_snapshot()
+    return {
+        "done": {config.to_storage_path(u) for u in snap["alive"]},
+        "active": {config.to_storage_path(u) for u in snap["active"]},
+        "gone": {config.to_storage_path(u) for u in snap["gone"]},
+        "claimed_dirs": snap["claimed_dirs"],
+        "first_at": {config.to_storage_path(u): str(v) for u, v in snap["first_at"].items()},
+        "dir_of": {config.to_storage_path(u): str(v) for u, v in snap["dir_of"].items()},
+        "failures": snap["failures"],
+    }
+
+
+def _download_path_sets() -> tuple[set[str], set[str], set[str]]:
+    """(已落盘的入库相对路径集合, 正在下载中的路径集合, 曾成功但目录已清理的路径集合)。
+
+    供待下载队列与帖子页「未下载 / 已下载」筛选使用；实现只有 _asset_snapshot 一处。
+    """
+    snap = _asset_snapshot()
+    return snap["done"], snap["active"], snap["gone"]
+
+
+def _pct(part: int, total: int) -> float:
+    """百分比（保留 2 位）；分母为 0 返回 0.0，避免除零。"""
+    return round(part / total * 100, 2) if total else 0.0
+
+
+def _count_posts_by_paths(
+    paths: set[str], extra_sql: str = "", extra_params: tuple[Any, ...] = ()
+) -> int:
+    """统计 posts_filtered 中命中给定路径集合（入库相对路径）的帖子数。
+
+    同时匹配「相对路径」与「展示域名完整 URL」两种库内形态（历史数据两种并存）；
+    按 400 个变量分块查询，规避 SQLite 单语句变量数上限（本机实测 32766）。
+    """
+    values = _url_forms(paths)
+    if not values:
+        return 0
+    total = 0
+    for i in range(0, len(values), 400):
+        part = values[i : i + 400]
+        sql = (
+            "SELECT COUNT(*) AS c FROM posts_filtered WHERE url IN ("
+            + ",".join("?" * len(part))
+            + ")"
+            + (f" AND {extra_sql}" if extra_sql else "")
+        )
+        total += int(db.query(sql, tuple(part) + extra_params)[0]["c"])
+    return total
+
+
+def _count_by_fid(paths: set[str]) -> dict[str, int]:
+    """命中给定路径集合的帖子按 fid 计数（分版块沉淀率用）。"""
+    values = _url_forms(paths)
+    if not values:
+        return {}
+    out: dict[str, int] = {}
+    for i in range(0, len(values), 400):
+        part = values[i : i + 400]
+        sql = (
+            "SELECT fid, COUNT(*) AS c FROM posts_filtered WHERE url IN ("
+            + ",".join("?" * len(part))
+            + ") GROUP BY fid"
+        )
+        for r in db.query(sql, tuple(part)):
+            key = str(r["fid"])
+            out[key] = out.get(key, 0) + int(r["c"])
+    return out
 
 
 @router.get("/stats/pending_downloads")
 def stats_pending_downloads(
-    limit: Annotated[int, Query(ge=1, le=30)] = 8,
+    limit: Annotated[int, Query(ge=1, le=30)] = 10,
     days: Annotated[int, Query(ge=1, le=365)] = 30,
 ) -> PendingDownloadsResp:
     """待下载队列（FD1）：时间窗内互动量最高、且**尚未下载到本地**的帖子。
+
+    limit 默认 10（2026-09-13 由 8 上调）：数据总览该卡与「本月最热」同为 10 条，
+    列表超出 360px 即滚动。
 
     「已下载」= 下载记录 ok/skip 且保存目录仍在磁盘（与提交前判重同一判据）——
     只看历史状态会把「用户已清理掉文件」的帖子也算成已完成，从此不再推荐。
@@ -1319,48 +1537,184 @@ def stats_pending_downloads(
 
 
 @router.get("/stats/assets")
-def stats_assets() -> AssetsResp:
-    """内容 → 资产漏斗（AS1）：收录 → 已下载帖 → 本地文件数 → 占用体积。
+def stats_assets(
+    days: Annotated[int, Query(ge=1, le=365)] = _ASSET_GROWTH_DAYS,
+) -> AssetsResp:
+    """内容 → 资产漏斗（AS1）：收录 → 已沉淀帖 → 本地文件，并给出**沉淀进度**。
 
-    - 已下载帖数：下载记录中「已落盘且文件仍在」的 URL 与 posts 取交集
-      （口径与提交前判重、待下载队列一致）；候选值同时含「入库相对路径」与
-      「展示域名完整 URL」两种形态，以兼容历史写完整 URL 的旧数据；
-    - 文件数 / 体积 / 目录数取自 resources.scan()（与资源管理页同一实现，
-      自带签名 + TTL 增量缓存），不另写目录遍历。
+    口径（详见《内容资产沉淀进度调研与建议.md》，业界对照：\\*arr 的 Wanted/Missing、
+    rclone check 的双边对账、Grafana 的 stat-vs-target、DAMS 的 ingestion completeness）：
+
+    - 漏斗只保留三级且同量纲（计数）；体积改由 disk_total/disk_free + type_breakdown 承载；
+    - coverage 分层沉淀率：全库 / 互动≥N / 全站互动 TopN——全库数字被长尾稀释，单看不行动；
+    - state 五态：库存 / 在途 / 失败 / 可重下 / 空壳 + 缺口（缺口口径与帖子页「未下载」筛选一致）；
+    - reconcile 对账：磁盘实际目录 vs 被履历认领的目录（差值 = 未认领，需可见）；
+    - growth 增长曲线 / goal 目标进度：给「进度」补上时间轴与目标基准；
+    - 已沉淀帖数：履历 ∪ 任务中「已落盘且文件仍在」的 URL 与 posts 取交集
+      （与提交判重、待下载队列同一判据）；文件数 / 体积 / 类型占比 / 空壳数取自
+      resources.scan()（同一实现，自带签名 + TTL 增量缓存），不另写目录遍历。
     """
     def _calc():
-        # 仅用到「已下载」集合；_download_path_sets 现已返回 3 元组 (done, active, gone)，
-        # 必须按 3 元组解包，否则会 ValueError 导致接口 500（内容资产卡加载失败）。
-        done, _active, _gone = _download_path_sets()
-        posts_total = int(db.query("SELECT COUNT(*) AS c FROM posts_filtered")[0]["c"])
-        downloaded_posts = 0
-        if done:
-            candidates: set[str] = set()
-            for p in done:
-                candidates.add(p)
-                candidates.add(config.to_display_url(p))
-            values = list(candidates)
-            # 分块查询：SQLite 单条语句的变量数有上限（默认 999），超出会直接报错
-            chunk = 400
-            for i in range(0, len(values), chunk):
-                part = values[i : i + chunk]
-                sql = (
-                    "SELECT COUNT(*) AS c FROM posts_filtered WHERE url IN ("
-                    + ",".join("?" * len(part))
-                    + ")"
-                )
-                downloaded_posts += int(db.query(sql, tuple(part))[0]["c"])
+        snap = _asset_snapshot()
+        done = snap["done"]
+        active = snap["active"]
+        gone = snap["gone"]
         res = resources.scan()
+
+        posts_total = int(db.query("SELECT COUNT(*) AS c FROM posts_filtered")[0]["c"])
+        downloaded_posts = _count_posts_by_paths(done)
+
+        # ---- 分层沉淀率：三档固定口径（全库 / 互动≥N / 全站互动 TopN）----
+        engaged_total = int(
+            db.query(
+                f"SELECT COUNT(*) AS c FROM posts_filtered WHERE {_N_ENGAGE} >= ?",
+                (_ASSET_ENGAGED_MIN,),
+            )[0]["c"]
+        )
+        engaged_done = _count_posts_by_paths(
+            done, f"{_N_ENGAGE} >= ?", (_ASSET_ENGAGED_MIN,)
+        )
+        top_rows = db.query(
+            f"SELECT url FROM posts_filtered ORDER BY {_N_ENGAGE} DESC, date DESC LIMIT ?",
+            (_ASSET_TOP_N,),
+        )
+        top_done = sum(1 for r in top_rows if config.to_storage_path(r["url"]) in done)
+        coverage = [
+            {
+                "key": "all",
+                "label": "全库收录",
+                "total": posts_total,
+                "downloaded": downloaded_posts,
+                "rate": _pct(downloaded_posts, posts_total),
+            },
+            {
+                "key": "engaged",
+                "label": f"互动≥{_ASSET_ENGAGED_MIN}",
+                "total": engaged_total,
+                "downloaded": engaged_done,
+                "rate": _pct(engaged_done, engaged_total),
+            },
+            {
+                "key": "top",
+                "label": f"互动 Top{_ASSET_TOP_N}",
+                "total": len(top_rows),
+                "downloaded": top_done,
+                "rate": _pct(top_done, len(top_rows)),
+            },
+        ]
+
+        # ---- 五态：库存以外的状态才是「进度感」来源 ----
+        start = (date_cls.today() - timedelta(days=days - 1)).isoformat()
+        window_total = int(
+            db.query(
+                f"SELECT COUNT(*) AS c FROM posts_filtered WHERE date >= ? AND {_N_ENGAGE} >= 1",
+                (start,),
+            )[0]["c"]
+        )
+        # 缺口 = 窗口内有互动但未落盘（排除在途）的帖子数；口径与帖子页「未下载」筛选严格一致，
+        # 下钻后条数必然吻合（数字自洽）
+        window_pending = _count_posts_by_paths(
+            done | active, f"date >= ? AND {_N_ENGAGE} >= 1", (start,)
+        )
+        recent_posts = sum(
+            1 for ts in snap["first_at"].values() if str(ts)[:10] >= start
+        )
+        empty_dirs = int(res.get("empty_dirs") or 0)
+        state = {
+            "active": len(active),
+            "failed": len(snap["failures"]),
+            "re_download": _count_posts_by_paths(gone),
+            "empty_dirs": empty_dirs,
+            "gap_recent": max(0, window_total - window_pending),
+            "gap_days": days,
+            "recent_posts": recent_posts,
+        }
+
+        # ---- 对账：磁盘目录 = 已认领 + 未认领 + 空壳（三者互斥，不重复计数）----
+        folders = int(res.get("count") or 0)
+        claimed = len(snap["claimed_dirs"])
+        reconcile = {
+            "claimed": claimed,
+            "unclaimed": max(0, folders - empty_dirs - claimed),
+            "empty": empty_dirs,
+        }
+
+        # ---- 分版块沉淀率（暴露集中度：沉淀往往高度集中在少数版块）----
+        fid_total = {
+            str(r["fid"]): int(r["c"])
+            for r in db.query("SELECT fid, COUNT(*) AS c FROM posts_filtered GROUP BY fid")
+        }
+        fid_done = _count_by_fid(done)
+        by_fid = [
+            {
+                "fid": fid,
+                "name": config.fid_name(fid),
+                "total": total,
+                "downloaded": fid_done.get(fid, 0),
+                "rate": _pct(fid_done.get(fid, 0), total),
+            }
+            for fid, total in fid_total.items()
+        ]
+        by_fid.sort(key=lambda x: (-x["rate"], -x["total"]))
+
+        # ---- 增长曲线：按「首次落盘日」聚合帖数与体积 ----
+        # 体积按目录当前占用估算（不是沉淀当日的快照），仅用于表达量级；时间不可考的条目不进曲线
+        dir_size = {it["name"]: int(it["total_size"]) for it in res["items"]}
+        buckets: dict[str, list[int]] = {}
+        for url, ts in snap["first_at"].items():
+            day = str(ts)[:10]
+            if len(day) != 10 or day < start:
+                continue
+            b = buckets.setdefault(day, [0, 0])
+            b[0] += 1
+            b[1] += dir_size.get(snap["dir_of"].get(url, ""), 0)
+        growth = [
+            {"date": d, "posts": v[0], "size": v[1]} for d, v in sorted(buckets.items())
+        ]
+
+        # ---- 目标进度（SLO 式）：目标档位 + 目标覆盖率（设置页可调，默认 Top500 / 50%）----
+        scope = str(settings.get("asset_goal_scope", config.ASSET_GOAL_SCOPE))
+        target_rate = settings.get_int("asset_goal_rate", config.ASSET_GOAL_RATE)
+        target = next((c for c in coverage if c["key"] == scope), coverage[0])
+        need = (target_rate * target["total"] + 99) // 100
+        remain = max(0, need - target["downloaded"])
+        goal = {
+            "scope": target["key"],
+            "scope_label": target["label"],
+            "target_rate": target_rate,
+            "current_rate": target["rate"],
+            "total": target["total"],
+            "downloaded": target["downloaded"],
+            "remain": remain,
+            "reached": remain == 0,
+        }
+
+        # ---- 存储容量：剩余空间（业界做法：存储与计数分列两个视图）----
+        disk_total = disk_free = 0
+        try:
+            du = shutil.disk_usage(config.DOWNLOADS_DIR)
+            disk_total, disk_free = int(du.total), int(du.free)
+        except OSError:
+            pass  # 取不到容量不影响其余指标（0 = 未知，前端不渲染该行）
+
         return {
             "posts_total": posts_total,
             "downloaded_posts": downloaded_posts,
             "files": int(res.get("total_files") or 0),
-            "folders": int(res.get("count") or 0),
+            "folders": folders,
             "size": int(res.get("total_size") or 0),
             "type_breakdown": res.get("type_breakdown") or {},
+            "coverage": coverage,
+            "state": state,
+            "reconcile": reconcile,
+            "by_fid": by_fid,
+            "growth": growth,
+            "goal": goal,
+            "disk_total": disk_total,
+            "disk_free": disk_free,
         }
 
-    return db.cached("assets_v1", _calc)
+    return db.cached(f"assets_v2:{days}", _calc)
 
 
 @router.get("/stats/recent")
@@ -1437,6 +1791,7 @@ def posts_list(
     q: str | None = None,
     author: str | None = None,
     undownloaded: Annotated[bool, Query()] = False,
+    downloaded: Annotated[bool, Query()] = False,
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=200)] = 50,
     sort: Annotated[str, Query()] = "date_desc",
@@ -1456,6 +1811,9 @@ def posts_list(
         # 下钻「待下载推荐」继承的上下文：排除已下载（目录仍在）与下载中链接，
         # 与 /stats/pending_downloads 同口径（仅看 done ∪ active，gone 视为「可重下」保留）。
         clause, params = _apply_undownloaded(clause, params)
+    if downloaded:
+        # 下钻资产卡「已沉淀帖」继承的上下文：只保留已落盘帖子，与卡片数字严格自洽
+        clause, params = _apply_downloaded(clause, params)
     if adv:
         try:
             adv_sql, adv_params = query_builder.compile_adv(adv)
@@ -1492,15 +1850,33 @@ def posts_export(
     date_from: str | None = None,
     date_to: str | None = None,
     q: str | None = None,
+    author: str | None = None,
     undownloaded: Annotated[bool, Query()] = False,
+    downloaded: Annotated[bool, Query()] = False,
+    adv: Annotated[str | None, Query()] = None,
     sort: Annotated[str, Query()] = "date_desc",
     sort_by: Annotated[str | None, Query()] = None,
     sort_order: Annotated[str | None, Query(pattern="^(asc|desc)$")] = None,
 ) -> StreamingResponse:
+    """导出 CSV：筛选口径必须与帖子浏览页列表**逐项一致**。
+
+    历史问题：前端导出已带上 author / adv 参数，但本接口此前未声明这两个入参，
+    FastAPI 会静默忽略未声明的查询参数——表现为「列表按作者筛过，导出的 CSV 却是全部」，
+    且不报错、无提示。此处与列表页对齐（含新增的 downloaded），杜绝静默丢条件。
+    """
     order = _resolve_order(sort, sort_by, sort_order)
-    clause, params = _build_filters(fid, date_from, date_to, q)
+    clause, params = _build_filters(fid, date_from, date_to, q, author)
     if undownloaded:
         clause, params = _apply_undownloaded(clause, params)
+    if downloaded:
+        clause, params = _apply_downloaded(clause, params)
+    if adv:
+        try:
+            adv_sql, adv_params = query_builder.compile_adv(adv)
+        except query_builder.QueryError as e:
+            raise HTTPException(400, f"高级查询条件有误：{e}") from e
+        clause = f"({clause}) AND {adv_sql}"
+        params = params + adv_params
     sql = (
         f"SELECT title, fid, date, url, likes, author, replies, created_at, update_at, update_date FROM posts WHERE {clause}" +
         f" ORDER BY {order}"

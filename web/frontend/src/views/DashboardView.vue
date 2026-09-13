@@ -8,13 +8,14 @@ import {
   DataZoomComponent,
   GridComponent,
   LegendComponent,
+  MarkLineComponent,
   TooltipComponent,
 } from 'echarts/components'
 import type { ECharts } from 'echarts/core'
 import { ElMessage } from 'element-plus'
 import { Download, FolderOpened, Star } from '@element-plus/icons-vue'
 import { useDownloadSubmit } from '../composables/useDownloadSubmit'
-import { api, formatDuration, formatSize, isAborted, type Assets, type BoardDaily, type Boards, type BoardSort, type Compare, type FidDistItem, type Health, type Overview, type PendingDownloads, type RunSummary, type TodayTop, type TodayTopItem, type TopAuthor, type TopFid, type TrendByFid, type TrendPoint } from '../api'
+import { api, formatDuration, formatSize, isAborted, type Assets, type Boards, type BoardSort, type Compare, type FidDistItem, type Health, type Overview, type PendingDownloads, type RunSummary, type TodayTop, type TodayTopItem, type TopAuthor, type TopFid, type TrendByFid, type TrendPoint } from '../api'
 import { useDashboardStore } from '../stores/dashboard'
 import { useAppStore } from '../stores/app'
 import { formatDate, formatShortTime, pad2 } from '../utils/time'
@@ -31,6 +32,10 @@ use([
   TooltipComponent,
   LegendComponent,
   DataZoomComponent,
+  // 标线组件必须显式注册：ECharts 按需引入模式下未注册的组件会被静默忽略
+  // （2026-09-13 修复：分版块图「联动聚焦日」的 markLine 此前从未注册，标线实际不渲染；
+  //  互动量趋势图的「今日未完整」虚线同样依赖它）
+  MarkLineComponent,
 ])
 
 const router = useRouter()
@@ -106,6 +111,15 @@ let p1Observer: IntersectionObserver | null = null
 const trendRef = shallowRef<HTMLDivElement | null>(null)
 const trendChart = shallowRef<ECharts | null>(null)
 
+// 每日互动量趋势（与「全站发布趋势」同窗口、同一天数，趋势区第三张图）：
+// 2026-09-13 从「本月最热」卡内抽出——榜单卡只做列表，互动量趋势单独成图。
+// 数据量小（近 28 日实测 66ms），随首屏 P0 一起加载，不做懒加载。
+const trendEng = ref<TrendPoint[]>([])
+const trendEngRef = shallowRef<HTMLDivElement | null>(null)
+const trendEngChart = shallowRef<ECharts | null>(null)
+const trendEngCardRef = ref<HTMLDivElement | null>(null)
+let lastTrendEngKey = ''
+
 // ===== 活跃作者 / 活跃版块 榜（随首屏加载，横向条形图）=====
 /** 活跃榜统计口径：all=累计 / 7d=近 7 日 / 30d=近 30 日 */
 type RankRange = 'all' | '7d' | '30d'
@@ -168,15 +182,29 @@ const linkedFid = ref<{ name: string; color: string } | null>(null)
 const fidColorByName = ref<Record<string, string>>({})
 // 反向联动：点总趋势某天 -> 分版块同天高亮（垂直标线）
 const linkedDay = ref<string | null>(null)
-// 联动区间：全站趋势的缩放条（dataZoom）选区，分版块图按同一日期区间裁剪
+// 联动区间：单指标趋势图（全站发布 / 每日互动量）的缩放条（dataZoom）选区。
+// 两张单指标图双向同步视窗；分版块图按同一日期区间裁剪
 // （后端 trend_by_fid 只支持 days=最近N天，无日期区间参数，故在前端按选区裁剪已加载的数据）
 const trendZoomRange = ref<{ start: string; end: string } | null>(null)
+
+/**
+ * 选区徽标文案：同年只显示 MM-DD（紧凑），**跨年必须带年份**。
+ * 365 天窗口必然跨年（如 2025-09-30 ~ 2026-08-27），只取 MM-DD 会读成「起止倒序」
+ * （实测徽标曾显示「跟随趋势区间：09-30 ~ 08-27」，看起来像选区反了）。
+ */
+const zoomRangeLabel = computed(() => {
+  const r = trendZoomRange.value
+  if (!r) return ''
+  return r.start.slice(0, 4) === r.end.slice(0, 4)
+    ? `${r.start.slice(5)} ~ ${r.end.slice(5)}`
+    : `${r.start} ~ ${r.end}`
+})
 
 // ===== 单卡片全屏（复用 useAppStore 的元素级全屏，与整页「大屏」共用状态）=====
 const trendCardRef = ref<HTMLDivElement | null>(null)
 const fidTrendCardRef = ref<HTMLDivElement | null>(null)
 /** 当前处于卡片全屏的卡片：伪全屏降级时需要它来加 fixed 覆盖层样式 */
-const fsCard = ref<'trend' | 'fid' | null>(null)
+const fsCard = ref<'trend' | 'fid' | 'eng' | null>(null)
 
 /** 分版块卡片渲染出来后（overview 加载完成）再挂懒加载 observer。
  *  mounted 时卡片尚未渲染（骨架屏分支），直接 observe(null) 会静默失败。
@@ -216,17 +244,33 @@ let refreshTimer: ReturnType<typeof setInterval> | null = null
 let pageVisible = true
 let refreshing = false
 
-const trendStats = computed(() => {
-  if (!trend.value.length) return null
-  const counts = trend.value.map((t) => t.count)
-  const max = Math.max(...counts)
-  const min = Math.min(...counts)
-  const maxDate = trend.value[counts.indexOf(max)]?.date ?? ''
-  const minDate = trend.value[counts.indexOf(min)]?.date ?? ''
-  const total = counts.reduce((s, v) => s + v, 0)
-  const avg = Math.round(total / counts.length)
-  return { max, min, maxDate, minDate, total, avg }
-})
+/**
+ * 每日趋势统计（峰值 / 谷值 / 日均）：**排除最后一天（今天）**。
+ *
+ * 今天只含当日凌晨批次的抓取，数据天然不完整——实测发布量 322 / 前一日 1007（32%）、
+ * 互动量 1,215 / 前一日 12,207（10%）。若纳入计算，「谷值」会永远落在今天、日均被系统性拉低，
+ * 统计卡失去参考价值；图表上今天的点单独做「未完整」标注（见 buildDayLineOption）。
+ * 发布量与互动量两张图共用此实现，避免并排两卡对同一指标各算一套口径。
+ */
+function daySeriesStats(points: TrendPoint[]) {
+  const full = points.slice(0, -1) // 去掉今天
+  if (!full.length) return null
+  const values = full.map((t) => t.value)
+  const max = Math.max(...values)
+  const min = Math.min(...values)
+  const total = values.reduce((s, v) => s + v, 0)
+  return {
+    max,
+    min,
+    maxDate: full[values.indexOf(max)]?.date ?? '',
+    minDate: full[values.indexOf(min)]?.date ?? '',
+    total,
+    avg: Math.round(total / values.length),
+  }
+}
+
+const trendStats = computed(() => daySeriesStats(trend.value))
+const trendEngStats = computed(() => daySeriesStats(trendEng.value))
 
 // 指标卡副指标：环比 / 活跃率 / 数据新鲜度
 const kpiSub = computed(() => {
@@ -329,6 +373,124 @@ function goResourcesType(key: CategoryKey) {
   router.push({ path: '/resources', query: { type: key } })
 }
 
+/** 资产卡「已沉淀帖」下钻：只保留已落盘帖子（卡片多少条，列表就多少条——数字自洽的硬校验） */
+function goPostsDownloaded() {
+  router.push({ path: '/posts', query: { downloaded: '1' } })
+}
+
+/** 资产状态行（C3）：库存以外的状态才是「是否在推进」的信号；缺口项可下钻 */
+interface AssetStateRow {
+  key: string
+  label: string
+  num: number
+  color: string
+  cls: string
+  title: string
+  clickable?: boolean
+}
+
+const stateRows = computed<AssetStateRow[]>(() => {
+  const s = assets.value?.state
+  if (!s) return []
+  return [
+    {
+      key: 'active',
+      label: '在途',
+      num: s.active,
+      color: '#2f6fed',
+      cls: '',
+      title: '排队中 / 正在下载的帖数（随自动刷新即时更新）',
+    },
+    {
+      key: 'failed',
+      label: '失败',
+      num: s.failed,
+      color: '#f56c6c',
+      cls: s.failed ? 'is-bad' : '',
+      title: '最近一次下载失败、此后未成功的帖数（持久记录，清空任务中心不会丢）',
+    },
+    {
+      key: 're_download',
+      label: '可重下',
+      num: s.re_download,
+      color: '#e6a23c',
+      cls: '',
+      title: '曾下载成功、但文件已被资源管理清理的帖数',
+    },
+    {
+      key: 'empty_dirs',
+      label: '空壳',
+      num: s.empty_dirs,
+      color: '#909399',
+      cls: '',
+      title: '目录存在但 0 个文件的残留（多为下载失败 / 取消留下）',
+    },
+    {
+      key: 'gap',
+      label: `近${s.gap_days}日缺口`,
+      num: s.gap_recent,
+      color: '#f59e0b',
+      cls: '',
+      clickable: true,
+      title: '该窗口内有互动、但尚未沉淀到本地的帖子数（点击下钻缺口明细）',
+    },
+  ]
+})
+
+/** 状态项点击：缺口项下钻到帖子页（与「未下载」筛选同口径；其余项无动作） */
+function onStateClick(r: AssetStateRow) {
+  if (r.clickable) goPendingPosts()
+}
+
+/** 目标缺口说明：明确「还差多少帖」的口径，并说明为何该数字不下钻（避免与缺口下钻混淆） */
+const goalTip = computed(() => {
+  const g = assets.value?.goal
+  if (!g) return ''
+  return (
+    `目标范围内（${g.scope_label}）达到 ${g.target_rate}% 覆盖率还需沉淀 ${g.remain} 帖。`
+    + '该口径按互动量取前 N 名，帖子页没有对应筛选条件，故不提供下钻；'
+    + '需要看可下钻的沉淀缺口，请点状态行的「近 N 日缺口」'
+  )
+})
+
+/** 对账提示（C10）：磁盘目录 = 已认领 + 未认领 + 空壳（三者互斥，不重复计数） */
+const reconcileTip = computed(() => {
+  const a = assets.value
+  if (!a) return ''
+  return (
+    `磁盘目录 ${a.folders} 个 = 已认领 ${a.reconcile.claimed} + 未认领 ${a.reconcile.unclaimed} + 空壳 ${a.reconcile.empty}。`
+    + '「未认领」= 目录有内容但未与任何收录帖对上（目录名是标题清理 + 截断 80 字后的结果，正常应为 0）'
+  )
+})
+
+/** 分版块沉淀集中度：只取确有沉淀的版块（其余为 0，无需占位），悬浮看明细 */
+const fidTop = computed(() => (assets.value?.by_fid ?? []).filter((f) => f.downloaded > 0))
+const fidTip = computed(() =>
+  fidTop.value.map((f) => `${f.name} ${f.downloaded} 帖 / 沉淀率 ${f.rate}%`).join(' · '),
+)
+
+/** 目标进度条宽度：以「目标刻度」为满格（当前覆盖率 / 目标覆盖率），超出由「已达成」表达 */
+const goalBarWidth = computed(() => {
+  const g = assets.value?.goal
+  if (!g || !g.target_rate) return '0%'
+  return `${Math.min(100, Math.round((g.current_rate / g.target_rate) * 100))}%`
+})
+
+/** 近 N 日新增沉淀的体积合计（体积按目录当前占用估算，非沉淀当日快照） */
+const recentSize = computed(() =>
+  (assets.value?.growth ?? []).reduce((sum, p) => sum + p.size, 0),
+)
+
+/** 增长迷你柱：高度按窗口内峰值归一（最小 4% 保基线，便于看出哪天断档） */
+const growthBars = computed(() => {
+  const g = assets.value?.growth ?? []
+  const max = Math.max(1, ...g.map((p) => p.posts))
+  return g.map((p) => ({ h: Math.max(4, Math.round((p.posts / max) * 100)) }))
+})
+const growthTip = computed(() =>
+  (assets.value?.growth ?? []).map((p) => `${p.date} +${p.posts} 帖`).join(' · '),
+)
+
 /** 健康条补充信息（R1）：悬浮展示批次明细（点击进运行记录页） */
 const healthDetail = computed(() => {
   const h = health.value
@@ -357,19 +519,23 @@ async function loadP0(initial = false) {
       if (c.status === 'fulfilled') compare.value = c.value
       if (a.status === 'fulfilled') assets.value = a.value
     })
-    const [o, t, f, authors, fids] = await Promise.all([
+    const [o, t, te, f, authors, fids] = await Promise.all([
       api.overview(),
       api.trend(trendDays.value),
+      // 互动量趋势与发布趋势同窗口、同一次请求发出（互相等待无意义，且保证两图横轴对齐）
+      api.trend(trendDays.value, 'engagement'),
       api.fidDist(),
       api.topAuthors(10, authorRange.value),
       api.topFids(10, fidRange.value),
     ])
     overview.value = o
     trend.value = t
+    trendEng.value = te
     fidDist.value = f
     topAuthors.value = authors
     topFids.value = fids
     trendCache.set(trendDays.value, t)
+    trendEngCache.set(trendDays.value, te)
     // B1 抓取中徽标（B1）：失败不影响总览主流程，静默置空
     try {
       const runs = await api.runs()
@@ -380,6 +546,7 @@ async function loadP0(initial = false) {
     store.setUpdatedAt(o.latest_run_at ?? null)
     await nextTick()
     renderTrendChart()
+    renderTrendEngChart()
     renderAuthorChart()
     renderFidChart()
     // 首屏：等折线逐点描线动画完成后再启动趋势 tooltip 轮播（非首屏自动刷新不中断当前轮播）
@@ -446,7 +613,13 @@ async function loadPending() {
   if (loadingPending.value) return
   loadingPending.value = true
   try {
-    pending.value = await api.pendingDownloads(8, 30)
+    // 取 10 条：与「本月最热」同为 10 条，列表超出 360px 即滚动（.board-list 同款）
+    pending.value = await api.pendingDownloads(10, 30)
+    // 本卡与「每日互动量趋势」同行等高：清单行数决定整行高度，左侧图表区（flex 自适应）
+    // 的可用高度随之变化。ECharts 不会自己监听容器尺寸，容器变高后画布停在旧高度会露白，
+    // 故每次拿到新清单后主动让它重新量一次尺寸。
+    await nextTick()
+    trendEngChart.value?.resize()
   } catch (e) {
     if (isAborted(e)) return
     if (pending.value) return // 已有数据，轮询失败静默，下轮重试
@@ -539,27 +712,190 @@ function isHotTalk(item: TodayTopItem) {
   return Number.isFinite(r) ? r >= 1 : Number(item.replies ?? 0) > 0
 }
 
-/** sparkline 柱高：按当月峰值归一化，最小 8% 保证矮柱可见 */
-function sparkHeight(v: number) {
-  const max = Math.max(...(monthTop.value?.daily ?? []).map((d) => d.value), 1)
-  return `${Math.max(8, Math.round((v / max) * 100))}%`
-}
-
-/** sparkline 单点 tooltip */
-function sparkText(d: BoardDaily) {
-  return `${d.date} 互动量 ${d.value}`
-}
-
 /** P1-8：各图表数据指纹缓存，数据未变化时跳过重复 setOption，避免轮询期间空重绘 */
 let lastTrendKey = ''
 let lastFidTrendKey = ''
 
+/**
+ * 单指标每日折线图的 option 构造（「全站发布趋势」与「每日互动量趋势」共用，唯一实现）。
+ *
+ * 共用而非各写一份：两图除口径文案与配色外完全同构（网格线规范、tooltip 皮肤、轴配置、
+ * 数据缩放、「今日未完整」标注）。硬编码两份意味着这些规范每次调整都要改两处，必然漏改一处。
+ *
+ * 今日点处理：窗口最后一天是「今天」，只含当日凌晨批次的抓取，数据天然不完整
+ * （实测发布量 322 / 前一日 1007、互动量 1,215 / 前一日 12,207）。故对该点：
+ * ① 用 markArea 打一层浅色底标出「这一格数据未完整」；② tooltip 追加说明。
+ * 统计卡（峰值/谷值/日均）另在 daySeriesStats 里排除今天。
+ */
+function buildDayLineOption(
+  points: TrendPoint[],
+  opts: {
+    seriesName: string
+    valueLabel: string
+    unit: string
+    color: string
+    /** 联动聚焦日（YYYY-MM-DD）：任一张图点击某天后，三张图都画同日标线 */
+    markDate?: string | null
+  },
+): Record<string, unknown> {
+  const data = points.map((p) => p.value)
+  const needZoom = points.length > 31
+  const lastIdx = data.length - 1
+  const lastLabel = points[lastIdx]?.date.slice(5) ?? ''
+  const { color, unit } = opts
+  // 标线集合：① 今日未完整（末端，橙虚线）；② 联动聚焦日（蓝实线）。
+  // 聚焦日与末端同一天时不重复画——末端线已在那里，避免两条线叠在一起。
+  // X 轴是 MM-DD 分类轴（days ≤ 365，窗口内各 MM-DD 唯一），故用标签定位即可。
+  const focusLabel = opts.markDate ? opts.markDate.slice(5) : ''
+  const marks: Record<string, unknown>[] = []
+  if (lastLabel) marks.push({ xAxis: lastLabel })
+  if (focusLabel && focusLabel !== lastLabel) {
+    marks.push({
+      xAxis: focusLabel,
+      lineStyle: { color: '#2f6fed', type: 'solid', width: 1 },
+      label: {
+        show: true,
+        formatter: '聚焦日',
+        color: '#2f6fed',
+        fontSize: 10,
+        position: 'insideEndTop',
+      },
+    })
+  }
+  return {
+    // 大屏态关闭过渡动画：图表放大后重绘成本更高，避免逐点描线拖慢轮询
+    animation: !app.fullscreen,
+    tooltip: {
+      trigger: 'axis',
+      ...tipMount(),
+      z: 99999,
+      // tooltip 皮肤与「分版块发布对比」保持一致（富格式内容保留）
+      backgroundColor: 'rgba(20,28,48,0.92)',
+      borderColor: 'rgba(255,255,255,0.12)',
+      borderWidth: 1,
+      textStyle: { color: '#e6ebf5', fontSize: 12 },
+      axisPointer: { type: 'line', lineStyle: { color: 'rgba(0,0,0,0.35)' } },
+      formatter: (params: any[]) => {
+        const p = params[0]
+        if (!p) return ''
+        const idx = p.dataIndex
+        const cur = data[idx]
+        const trendUp = idx > 0 && cur >= data[idx - 1]
+        const diffColor = trendUp ? '#10b981' : '#ef4444'
+        const trendIcon = trendUp ? '▲' : '▼'
+        let html = `<div style="font-weight:600;font-size:13px;color:#a8c5ff;margin-bottom:6px">${p.axisValue}</div>`
+        html += `<div style="display:flex;align-items:baseline;gap:6px;margin-bottom:4px">`
+        html += `<span style="color:#8b95a7;font-size:12px">${opts.valueLabel}</span>`
+        html += `<span style="font-size:20px;font-weight:700;color:#fff;font-variant-numeric:tabular-nums">${cur.toLocaleString()}</span>`
+        if (unit) html += `<span style="color:#8b95a7;font-size:12px">${unit}</span>`
+        html += `</div>`
+        if (idx > 0) {
+          const prev = data[idx - 1]
+          const diff = cur - prev
+          const pct = prev > 0 ? ((diff / prev) * 100).toFixed(1) : '—'
+          html += `<div style="display:flex;align-items:center;gap:4px;font-size:12px;margin-bottom:2px">`
+          html += `<span style="color:#8b95a7">较上日</span>`
+          html += `<span style="color:${diffColor};font-weight:600">${trendIcon} ${diff >= 0 ? '+' : ''}${diff}</span>`
+          html += `<span style="color:${diffColor};opacity:0.85">(${diff >= 0 ? '+' : ''}${pct}%)</span>`
+          html += `</div>`
+        }
+        if (idx >= 6) {
+          const slice = data.slice(idx - 6, idx + 1)
+          const weekAvg = Math.round(slice.reduce((s, v) => s + v, 0) / slice.length)
+          html += `<div style="margin-top:6px;padding-top:6px;border-top:1px solid rgba(255,255,255,0.1);font-size:12px;color:#8b95a7">`
+          html += `<span>7日均</span> <span style="color:#a8c5ff;font-weight:600">${weekAvg.toLocaleString()}</span>`
+          html += unit ? ` <span>${unit}</span>` : ''
+          html += `</div>`
+        }
+        if (idx === lastIdx) {
+          html += `<div style="margin-top:6px;padding-top:6px;border-top:1px solid rgba(255,255,255,0.1);font-size:11px;color:#f0b775">`
+          html += `今日数据未完整（当日抓取尚未覆盖全天），不计入峰值/谷值/日均`
+          html += `</div>`
+        }
+        return html
+      },
+    },
+    grid: { left: 44, right: 20, top: 30, bottom: needZoom ? 46 : 28 },
+    xAxis: {
+      type: 'category',
+      boundaryGap: false,
+      data: points.map((t) => t.date.slice(5)),
+      axisLine: { lineStyle: { color: 'rgba(0,0,0,0.25)' } },
+      axisTick: { show: false },
+      axisLabel: { color: '#6b7280', fontSize: 11, hideOverlap: true },
+      // 不显示 X 轴（竖向）网格线
+      splitLine: { show: false },
+    },
+    yAxis: {
+      type: 'value',
+      min: 0,
+      minInterval: 1,
+      axisLine: { show: false },
+      axisTick: { show: false },
+      axisLabel: { color: '#6b7280', fontSize: 11, formatter: (v: number) => String(Math.round(v)) },
+      // 显示 Y 轴（横向）网格线
+      splitLine: { show: true, lineStyle: { color: 'rgba(0,0,0,0.08)' } },
+    },
+    dataZoom: needZoom
+      ? [
+          { type: 'inside', start: 0, end: 100 },
+          { type: 'slider', height: 18, bottom: 8, start: 0, end: 100 },
+        ]
+      : [],
+    series: [
+      {
+        name: opts.seriesName,
+        type: 'line',
+        smooth: true,
+        symbol: 'circle',
+        symbolSize: 4,
+        showSymbol: false,
+        emphasis: { focus: 'series' },
+        // 允许「点折线」触发 click（默认 false，且本图 showSymbol: false 不渲染符号——
+        // 两者叠加会让「点击某天联动」实际上点不中任何东西，实测扫描点击全部落空）
+        triggerLineEvent: true,
+        data,
+        lineStyle: { width: 2, color, shadowColor: color, shadowBlur: 6 },
+        itemStyle: { color },
+        areaStyle: {
+          opacity: 0.06,
+          color: new graphic.LinearGradient(0, 0, 0, 1, [
+            { offset: 0, color },
+            { offset: 1, color: 'rgba(255,255,255,0)' },
+          ]),
+        },
+        // 标注：① 今日未完整（末端橙虚线）；② 联动聚焦日（蓝实线）。
+        // 两条线同属 markLine，用 data 数组 + 逐项 lineStyle/label 覆盖（数组第一项的样式
+        // 由 series.markLine 上的同名配置提供）。
+        // 实测教训：最初用 markArea 打浅色底，但 markArea 的 data 必须是「坐标对」
+        // （[[起点, 终点]]），只给单个对象会让 ECharts 读 undefined.coord 抛错，
+        // 进而中断后续渲染（当时活跃榜两张图也一起空白）。markLine 接受单个对象，语义也够。
+        markLine: marks.length
+          ? {
+              silent: true,
+              symbol: 'none',
+              label: {
+                show: true,
+                formatter: '今日未完整',
+                color: '#c98a2b',
+                fontSize: 10,
+                position: 'end',
+              },
+              lineStyle: { color: '#e6a23c', type: 'dashed', width: 1 },
+              data: marks,
+            }
+          : undefined,
+      },
+    ],
+  }
+}
+
 function renderTrendChart() {
   if (trendRef.value) {
-    // P1-8：数据指纹（含联动配色依赖），无变化跳过 setOption
+    // P1-8：数据指纹（含联动配色 / 聚焦日依赖），无变化跳过 setOption
     const trendKey =
-      trend.value.map((t) => `${t.date}:${t.count}`).join('|') +
-      `|${linkedFid.value?.color ?? ''}`
+      trend.value.map((t) => `${t.date}:${t.value}`).join('|') +
+      `|${linkedFid.value?.color ?? ''}|${linkedDay.value ?? ''}`
     if (trendKey === lastTrendKey) return
     lastTrendKey = trendKey
 
@@ -574,122 +910,71 @@ function renderTrendChart() {
         fidTrendChart.value?.dispatchAction({ type: 'hideTip' })
         tipSyncing = false
       })
-      // 反向联动 click 同样仅注册一次，避免数据刷新后重复绑定累积
-      trendChart.value.on('click', (params: any) => {
-        trendTipPaused = true
-        const idx = params.dataIndex
-        const point = trend.value[idx]
-        if (point) {
-          // 反向联动：点总趋势某天 -> 分版块同天高亮（取消下钻，仅保留联动）
-          linkedDay.value = point.date
-          renderFidTrendChart()
-        }
-      })
+      // 点某天 → 三图都标该日（linkedDay 是唯一状态，另两图点某天同样走 focusDay）。
+      // 点击后暂停本图 tooltip 轮播：用户正在看某天，不要被轮播抢走
+      bindPlotClick(
+        trendChart.value,
+        () => trend.value.map((t) => t.date),
+        () => {
+          trendTipPaused = true
+        },
+      )
       // 缩放条（dataZoom）选区联动：拖选后分版块图按同一区间裁剪，
       // 此前未监听该事件，导致选了区间后另一张图纹丝不动
       trendChart.value.on('datazoom', () => applyTrendZoom())
     }
     // 联动配色：当分版块图例聚焦某版块时，全站趋势同步换为该版块色
     const base = linkedFid.value?.color ?? '#2f6fed'
-    const data = trend.value.map((t) => t.count)
-    const needZoom = trend.value.length > 31
-    trendChart.value.setOption({
-      // 大屏态关闭过渡动画：图表放大后重绘成本更高，避免逐点描线拖慢轮询
-      animation: !app.fullscreen,
-      tooltip: {
-        trigger: 'axis',
-        ...tipMount(),
-        z: 99999,
-        // tooltip 皮肤与「分版块发布对比」保持一致（富格式内容保留）
-        backgroundColor: 'rgba(20,28,48,0.92)',
-        borderColor: 'rgba(255,255,255,0.12)',
-        borderWidth: 1,
-        textStyle: { color: '#e6ebf5', fontSize: 12 },
-        axisPointer: { type: 'line', lineStyle: { color: 'rgba(0,0,0,0.35)' } },
-        formatter: (params: any[]) => {
-          const p = params[0]
-          if (!p) return ''
-          const idx = p.dataIndex
-          const cur = data[idx]
-          const trendUp = idx > 0 && cur >= data[idx - 1]
-          const diffColor = trendUp ? '#10b981' : '#ef4444'
-          const trendIcon = trendUp ? '▲' : '▼'
-          let html = `<div style="font-weight:600;font-size:13px;color:#a8c5ff;margin-bottom:6px">${p.axisValue}</div>`
-          html += `<div style="display:flex;align-items:baseline;gap:6px;margin-bottom:4px">`
-          html += `<span style="color:#8b95a7;font-size:12px">发布</span>`
-          html += `<span style="font-size:20px;font-weight:700;color:#fff;font-variant-numeric:tabular-nums">${cur.toLocaleString()}</span>`
-          html += `<span style="color:#8b95a7;font-size:12px">条</span>`
-          html += `</div>`
-          if (idx > 0) {
-            const prev = data[idx - 1]
-            const diff = cur - prev
-            const pct = prev > 0 ? ((diff / prev) * 100).toFixed(1) : '—'
-            html += `<div style="display:flex;align-items:center;gap:4px;font-size:12px;margin-bottom:2px">`
-            html += `<span style="color:#8b95a7">较上日</span>`
-            html += `<span style="color:${diffColor};font-weight:600">${trendIcon} ${diff >= 0 ? '+' : ''}${diff}</span>`
-            html += `<span style="color:${diffColor};opacity:0.85">(${diff >= 0 ? '+' : ''}${pct}%)</span>`
-            html += `</div>`
-          }
-          if (idx >= 6) {
-            const slice = data.slice(idx - 6, idx + 1)
-            const weekAvg = Math.round(slice.reduce((s, v) => s + v, 0) / slice.length)
-            html += `<div style="margin-top:6px;padding-top:6px;border-top:1px solid rgba(255,255,255,0.1);font-size:12px;color:#8b95a7">`
-            html += `<span>7日均</span> <span style="color:#a8c5ff;font-weight:600">${weekAvg.toLocaleString()}</span> <span>条</span>`
-            html += `</div>`
-          }
-          return html
-        },
-      },
-      grid: { left: 44, right: 20, top: 30, bottom: needZoom ? 46 : 28 },
-      xAxis: {
-        type: 'category',
-        boundaryGap: false,
-        data: trend.value.map((t) => t.date.slice(5)),
-        axisLine: { lineStyle: { color: 'rgba(0,0,0,0.25)' } },
-        axisTick: { show: false },
-        axisLabel: { color: '#6b7280', fontSize: 11, hideOverlap: true },
-        // 不显示 X 轴（竖向）网格线
-        splitLine: { show: false },
-      },
-      yAxis: {
-        type: 'value',
-        min: 0,
-        minInterval: 1,
-        axisLine: { show: false },
-        axisTick: { show: false },
-        axisLabel: { color: '#6b7280', fontSize: 11, formatter: (v: number) => String(Math.round(v)) },
-        // 显示 Y 轴（横向）网格线
-        splitLine: { show: true, lineStyle: { color: 'rgba(0,0,0,0.08)' } },
-      },
-      dataZoom: needZoom
-        ? [
-            { type: 'inside', start: 0, end: 100 },
-            { type: 'slider', height: 18, bottom: 8, start: 0, end: 100 },
-          ]
-        : [],
-      series: [
-        {
-          name: '发布帖子',
-          type: 'line',
-          smooth: true,
-          symbol: 'circle',
-          symbolSize: 4,
-          showSymbol: false,
-          emphasis: { focus: 'series' },
-          data,
-          lineStyle: { width: 2, color: base, shadowColor: base, shadowBlur: 6 },
-          itemStyle: { color: base },
-          areaStyle: {
-            opacity: 0.06,
-            color: new graphic.LinearGradient(0, 0, 0, 1, [
-              { offset: 0, color: base },
-              { offset: 1, color: 'rgba(255,255,255,0)' },
-            ]),
-          },
-        },
-      ],
-    })
+    trendChart.value.setOption(
+      buildDayLineOption(trend.value, {
+        seriesName: '发布帖子',
+        valueLabel: '发布',
+        unit: '条',
+        color: base,
+        markDate: linkedDay.value,
+      }),
+    )
   }
+}
+
+/**
+ * 每日互动量趋势（与「全站发布趋势」同窗口、同一天数）。
+ *
+ * 口径：互动量 = 点赞 + 回复（与热门榜排序口径同源，后端 stats_trend 的 engagement 分支）。
+ * 定位：回答「这个站哪天最热闹」，与「全站发布趋势」（发帖量 = 供给侧活动）并排对照。
+ *
+ * 联动边界（2026-09-13 修正）：
+ * - **不参与**「全站 ⟷ 分版块」的 Tooltip 双向联动与自动轮播——三图同时弹 tooltip 会让
+ *   联动逻辑与视觉失控，本图独立读数即可；
+ * - **参与**缩放选区联动：它与全站图是同一类单指标折线（共用 buildDayLineOption、
+ *   同样在 >31 点时出现滑动条），而「三图同一窗口、横轴严格对齐」是既有承诺，
+ *   可视区间也必须一致 —— 此前该图完全没接线（既不监听 datazoom 也不消费 trendZoomRange），
+ *   表现为同日同样输入 365 天、全站拖动滑动条后只有分版块联动、本图纹丝不动。
+ *   现在与全站图**双向同步视窗**（applyTrendZoom）。
+ */
+function renderTrendEngChart() {
+  if (!trendEngRef.value) return
+  const key = trendEng.value.map((t) => `${t.date}:${t.value}`).join('|') + `|${linkedDay.value ?? ''}`
+  if (key === lastTrendEngKey) return
+  lastTrendEngKey = key
+  trendEngChart.value ??= initChart(trendEngRef.value)
+  // 缩放选区联动：三图双向同步视窗（仅注册一次，避免数据刷新后重复绑定累积）
+  if (!trendEngBound) {
+    trendEngBound = true
+    trendEngChart.value.on('datazoom', () => applyTrendZoom('eng'))
+    // 聚焦日联动同样是三图双向：本图点某天 → 三图同标该日
+    // （Tooltip 联动仍刻意不参与，见上方函数头说明）
+    bindPlotClick(trendEngChart.value, () => trendEng.value.map((t) => t.date))
+  }
+  trendEngChart.value.setOption(
+    buildDayLineOption(trendEng.value, {
+      seriesName: '互动量',
+      valueLabel: '互动量',
+      unit: '',
+      color: '#8b5cf6',
+      markDate: linkedDay.value,
+    }),
+  )
 }
 
 function goDist(fid?: string) {
@@ -1015,6 +1300,7 @@ function onResize() {
     renderFidChart(true)
   }
   trendChart.value?.resize()
+  trendEngChart.value?.resize()
   fidTrendChart.value?.resize()
   authorChart.value?.resize()
   fidChart.value?.resize()
@@ -1025,14 +1311,16 @@ function onResize() {
  * 与整页「大屏」共用同一 fullscreen 状态，退出走 Esc 或再次点击按钮。
  * 尺寸变化由 ResizeObserver + watch(app.fullscreen) 的 rebuildCharts 兜底。
  */
-async function onCardFullscreen(which: 'trend' | 'fid'): Promise<void> {
+async function onCardFullscreen(which: 'trend' | 'fid' | 'eng'): Promise<void> {
   if (app.fullscreen) {
     fsCard.value = null
     await app.exitFullscreen()
     return
   }
   fsCard.value = which
-  await app.enterFullscreen(which === 'trend' ? trendCardRef.value : fidTrendCardRef.value)
+  const target =
+    which === 'trend' ? trendCardRef.value : which === 'fid' ? fidTrendCardRef.value : trendEngCardRef.value
+  await app.enterFullscreen(target)
 }
 
 /**
@@ -1043,17 +1331,21 @@ async function onCardFullscreen(which: 'trend' | 'fid'): Promise<void> {
 function rebuildCharts(): void {
   trendChart.value?.dispose()
   trendChart.value = null
+  trendEngChart.value?.dispose()
+  trendEngChart.value = null
   fidTrendChart.value?.dispose()
   fidTrendChart.value = null
   authorChart.value?.dispose()
   authorChart.value = null
   fidChart.value?.dispose()
   fidChart.value = null
-  // 「事件仅注册一次」的保护标记需复位，否则新实例不再绑定双向 Tooltip 联动
+  // 「事件仅注册一次」的保护标记需复位，否则新实例不再绑定双向 Tooltip 联动 / 缩放联动
   trendTipSynced = false
   fidTipSynced = false
+  trendEngBound = false
   // 清空 P1-8 数据指纹，强制重新 setOption（动画开关也在 option 中）
   lastTrendKey = ''
+  lastTrendEngKey = ''
   lastFidTrendKey = ''
   lastAuthorKey = ''
   lastFidKey = ''
@@ -1061,6 +1353,7 @@ function rebuildCharts(): void {
   rankNarrow = null
   stopTrendCarousel()
   renderTrendChart()
+  renderTrendEngChart()
   renderFidTrendChart()
   renderAuthorChart()
   renderFidChart()
@@ -1096,8 +1389,9 @@ function autoRefreshTick() {
   const jobs: Promise<unknown>[] = []
   if (overview.value || loadingP0.value) jobs.push(loadP0(false))
   if (boards.value) jobs.push(loadBoards())
-  // 待下载推荐随轮询刷新：下载完成后相应帖子自动退出推荐（后端 5s TTL 缓存）
-  if (boards.value || pending.value) jobs.push(loadPending())
+  // 待下载推荐如今是首屏卡（与互动量趋势同行），随轮询刷新：下载完成后相应帖子自动退出
+  // 推荐位（后端 5s TTL 缓存）。loadPending 自带在途防重入，失败由下一轮自动重试。
+  jobs.push(loadPending())
   Promise.allSettled(jobs).finally(() => {
     refreshing = false
   })
@@ -1141,8 +1435,11 @@ function onVisibilityChange() {
 onMounted(() => {
   // P0：立即加载首屏
   loadP0(true)
+  // 待下载推荐已移入首屏（与互动量趋势同行），必须随 P0 一起取数，
+  // 否则卡片直到热门榜进入视口（P1）才加载，首屏会长时间空着
+  loadPending()
 
-  // P1：热门榜 + 最近抓取 懒加载（IntersectionObserver，rootMargin 预取）
+  // P1：热门榜 懒加载（IntersectionObserver，rootMargin 预取）
   const hasObserver = typeof IntersectionObserver !== 'undefined'
   if (hasObserver && p1AreaRef.value) {
     p1Observer = new IntersectionObserver(
@@ -1151,7 +1448,6 @@ onMounted(() => {
           p1Observer?.disconnect()
           p1Observer = null
           loadBoards()
-          loadPending()
         }
       },
       { rootMargin: '200px 0px' },
@@ -1160,7 +1456,6 @@ onMounted(() => {
   } else if (!hasObserver) {
     // 兼容不支持 IntersectionObserver 的旧浏览器：直接加载
     loadBoards()
-    loadPending()
   }
 
   // 分版块趋势：懒加载（进入视口后再加载，避免首屏一次性拉取过多）
@@ -1383,6 +1678,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('resize', onResize)
   document.removeEventListener('visibilitychange', onVisibilityChange)
   trendChart.value?.dispose()
+  trendEngChart.value?.dispose()
 })
 
 function openUrl(url: string) {
@@ -1448,6 +1744,11 @@ let trendTipSynced = false
 let fidTipSynced = false
 // 防止双向联动时 showTip 事件递归派发
 let tipSyncing = false
+// 缩放选区 / 聚焦日联动（2026-09-13）：每日互动量趋势图的 datazoom + click 监听同样只注册一次
+let trendEngBound = false
+// 防止「同步派发的 dataZoom」回声：dispatchAction 会同步触发目标图自己的 datazoom 事件，
+// 不挡住就会两张单指标图互相触发（与 tipSyncing 同一思路）
+let zoomSyncing = false
 function syncTipTo(target: any, params: any) {
   const idx = params?.dataIndex
   if (idx == null || !target) return
@@ -1457,6 +1758,8 @@ function syncTipTo(target: any, params: any) {
   tipSyncing = false
 }
 const trendCache = new Map<number, TrendPoint[]>()
+// 互动量趋势同维度缓存（切回已看过的天数时不重新请求，与发布趋势一致）
+const trendEngCache = new Map<number, TrendPoint[]>()
 
 function stopTrendCarousel() {
   if (trendTipTimer) {
@@ -1541,21 +1844,31 @@ async function loadTrendOnly(prevLen?: number) {
   trendLoading = true
   stopTrendCarousel()
   const cached = trendCache.get(trendDays.value)
-  if (cached) {
+  const cachedEng = trendEngCache.get(trendDays.value)
+  if (cached && cachedEng) {
     trend.value = cached
+    trendEng.value = cachedEng
     await nextTick()
     renderTrendChart()
+    renderTrendEngChart()
     startTrendCarousel(0, prevLen)
     trendLoading = false
     return
   }
   trendSwitching.value = true
   try {
-    const data = await api.trend(trendDays.value)
+    // 发布量与互动量同一窗口一起拉取：两张图横轴必须严格对齐（并排图口径不一致是踩过的坑）
+    const [data, dataEng] = await Promise.all([
+      cached ?? api.trend(trendDays.value),
+      cachedEng ?? api.trend(trendDays.value, 'engagement'),
+    ])
     trendCache.set(trendDays.value, data)
+    trendEngCache.set(trendDays.value, dataEng)
     trend.value = data
+    trendEng.value = dataEng
     await nextTick()
     renderTrendChart()
+    renderTrendEngChart()
     startTrendCarousel(400, prevLen)
   } catch (e) {
     if (isAborted(e)) return
@@ -1579,8 +1892,9 @@ function onTrendDaysChange() {
     trendDayOptions.value = [...trendDayOptions.value, n]
   }
   trendDays.value = n
-  // 天数变了，旧的缩放选区不再有意义（数据点数量与日期都已改变）
-  trendZoomRange.value = null
+  // 天数变了，旧的缩放选区不再有意义（数据点数量与日期都已改变）：
+  // 复用 clearTrendZoom —— 两张单指标图一起复位，避免只清状态留下一张图停在旧区间
+  clearTrendZoom()
   loadTrendOnly()
   // 分版块由全站趋势联动下钻：已加载或可见时同步刷新
   if (fidTrendVisible.value || fidTrend.value.dates.length) {
@@ -1654,37 +1968,127 @@ function clearFidLink() {
   renderTrendChart()
 }
 
-/** 清除反向联动（点总趋势某天） */
+/**
+ * 「点击某天」→ 聚焦该日（三张趋势图共用，唯一实现）。
+ *
+ * 为什么不用 series 的 click 事件（本项目两条实测教训，缺一都点不中）：
+ * ① 折线的命中区就是 `lineStyle.width`（2px）。实测在固定列上扫 14 次点击只命中 1 次，
+ *    用户几乎点不到，「点击某天联动」等于不可用；
+ * ② 即使命中，`triggerLineEvent` 给的是「点中折线/填充区」的 series 事件，
+ *    **`dataIndex` 为 undefined**（dataIndex 是「点中某个符号」的语义，本图 `showSymbol: false`
+ *    不渲染符号）——旧代码 `trend.value[undefined]` 必然落空（实测 15/15 全落空）。
+ *
+ * 故改在 zr 层监听：点绘图区内该列的**任意位置**都聚焦那一天（宽容得多），
+ * 用 `containPixel({ gridIndex: 0 })` 判定，天然排除底部缩放条与图例区，不会误触。
+ */
+function bindPlotClick(chart: ECharts, dates: () => string[], onBefore?: () => void): void {
+  chart.getZr().on('click', (e: { offsetX?: number; offsetY?: number }) => {
+    const x = e?.offsetX
+    const y = e?.offsetY
+    if (typeof x !== 'number' || typeof y !== 'number') return
+    if (!chart.containPixel({ gridIndex: 0 }, [x, y])) return
+    // convertFromPixel 在分类轴上返回索引（可能带小数），四舍五入到最近的一天
+    const i = Math.round(Number(chart.convertFromPixel({ xAxisIndex: 0 }, x)))
+    const ds = dates()
+    if (!Number.isFinite(i) || !ds[i]) return
+    onBefore?.()
+    focusDay(ds[i])
+  })
+}
+
+/**
+ * 聚焦某一天（三图共用同一条状态 linkedDay）：
+ * 三张趋势图**任一**点击某天都走这里 → 三图都画该日标线（
+ * 单指标图靠 buildDayLineOption 的 markDate，分版块靠既有 markLine）。
+ * 与 clearDayLink 成对，禁止在别处再写一份「设 linkedDay + 重绘」。
+ */
+function focusDay(date: string): void {
+  linkedDay.value = date
+  renderFidTrendChart()
+  renderTrendChart()
+  renderTrendEngChart()
+}
+
+/** 清除「聚焦某天」（点总趋势某天）：状态只有 linkedDay 一处，三图都要重绘去掉标线 */
 function clearDayLink() {
   linkedDay.value = null
   renderFidTrendChart()
+  renderTrendChart()
+  renderTrendEngChart()
 }
 
-/** 读取趋势图缩放条的当前选区，换算为日期区间并存到 trendZoomRange，
- *  再让分版块图按该区间重绘——两图口径保持一致。
- *  选区覆盖全部数据点时不设区间（等同于未筛选），避免无谓裁剪。 */
-function applyTrendZoom(): void {
-  const chart = trendChart.value
-  if (!chart || !trend.value.length) return
-  const dz = (chart.getOption() as { dataZoom?: any[] }).dataZoom?.[0]
+/** 分版块图「本次实际渲染」的日期序列（可能已被共享区间裁剪）。
+ *  分版块滑动条的选区索引只能映射回这份日期——回传共享区间时才不会错位。 */
+let fidRenderedDates: string[] = []
+
+/** 参与缩放联动的三张图的 实例 + 日期序列（缩放选区「读哪张、同步到哪张」都走这里）。
+ *  注意：分版块给的是**实际渲染的（已裁剪）日期**，另两张是完整窗口日期。 */
+function linkedChart(key: 'trend' | 'eng' | 'fid'): { chart: ECharts | null; dates: string[] } {
+  if (key === 'trend') return { chart: trendChart.value, dates: trend.value.map((t) => t.date) }
+  if (key === 'eng') return { chart: trendEngChart.value, dates: trendEng.value.map((t) => t.date) }
+  return { chart: fidTrendChart.value, dates: fidRenderedDates }
+}
+
+/**
+ * 缩放选区联动（三图**双向**，2026-09-13）：
+ * 读取 `source` 图缩放条的选区 → 换算为日期区间 → ① 同步另外两张单指标图的视窗
+ * （dispatchAction('dataZoom')，不带 dataZoomIndex = 作用于它的 inside + slider 两个组件，
+ * **只移视窗不改数据**，滑动条语义完整）；② 分版块图按该区间裁剪数据。
+ * 任一图拖动/滚轮缩放，另外两张都会跟随；选区覆盖全部数据点 = 未筛选（清空区间）。
+ *
+ * 分版块作为来源的特殊处理：它的数据本身已被共享区间裁剪，其滑动条只表示
+ * 「在裁剪区间内再看一段」。故当它的选区覆盖「它当前全部数据」时（= 裁剪后的满区间，
+ * 例如裁剪后我们把它的滑动条复位为满宽），不视为区间变更，直接返回，避免自我触发。
+ *
+ * 防回声：`zoomSyncing` 挡住 dispatchAction 引发的同名事件（ECharts 同步派发），
+ * 否则三张图会互相触发成环。
+ */
+function applyTrendZoom(source: 'trend' | 'eng' | 'fid' = 'trend'): void {
+  if (zoomSyncing) return // 同步派发的回声
+  const src = linkedChart(source)
+  if (!src.chart || !src.dates.length) return
+  const dz = (src.chart.getOption() as { dataZoom?: any[] }).dataZoom?.[0]
   if (!dz) return
-  const n = trend.value.length
+  const n = src.dates.length
   // 未拖动过（百分比模式，无 startValue）时按比例换算索引；拖动后直接用索引
   const rawStart = dz.startValue ?? ((dz.start ?? 0) / 100) * (n - 1)
   const rawEnd = dz.endValue ?? ((dz.end ?? 100) / 100) * (n - 1)
   const i0 = Math.max(0, Math.min(n - 1, Math.floor(Math.min(rawStart, rawEnd))))
-  const i1 = Math.max(i0, Math.min(n - 1, Math.ceil(Math.max(rawStart, rawEnd))))
-  trendZoomRange.value =
-    i0 === 0 && i1 === n - 1
-      ? null
-      : { start: trend.value[i0].date, end: trend.value[i1].date }
-  renderFidTrendChart()
+  const i1 = Math.max(0, Math.min(n - 1, Math.ceil(Math.max(rawStart, rawEnd))))
+  const full = i0 === 0 && i1 === n - 1
+  if (source === 'fid' && full) return // 分版块的「满区间」= 当前裁剪区间本身，不是新选区
+  const range = full ? null : { start: src.dates[i0], end: src.dates[i1] }
+  const prev = trendZoomRange.value
+  const changed = !prev || !range || prev.start !== range.start || prev.end !== range.end
+  trendZoomRange.value = range
+
+  // ① 同步另外两张单指标图：按日期换算索引（不假设各图日期序列完全对齐），
+  //    与「分版块按日期裁剪」同一原则——日期才是跨图通用的锚点
+  const peers: ('trend' | 'eng')[] =
+    source === 'fid' ? ['trend', 'eng'] : [source === 'trend' ? 'eng' : 'trend']
+  for (const key of peers) {
+    const peer = linkedChart(key)
+    if (!peer.chart || !peer.dates.length) continue
+    const a = range ? peer.dates.indexOf(range.start) : 0
+    const b = range ? peer.dates.lastIndexOf(range.end) : peer.dates.length - 1
+    if (a < 0 || b < a) continue
+    zoomSyncing = true
+    peer.chart.dispatchAction({ type: 'dataZoom', startValue: a, endValue: b })
+    zoomSyncing = false
+  }
+  // ② 区间变化才重绘分版块（拖动过程中会连续触发本事件）
+  if (changed) renderFidTrendChart()
 }
 
-/** 清除趋势选区：复位缩放条并让分版块图恢复全区间 */
+/** 清除趋势选区：三张图一起复位（两张单指标图移回全区间；分版块恢复全量数据）。
+ *  必须三张都复位——漏一张会留下「徽标已清、那张图仍在旧区间」的不一致。 */
 function clearTrendZoom(): void {
   trendZoomRange.value = null
-  trendChart.value?.dispatchAction({ type: 'dataZoom', start: 0, end: 100 })
+  zoomSyncing = true
+  for (const key of ['trend', 'eng'] as const) {
+    linkedChart(key).chart?.dispatchAction({ type: 'dataZoom', start: 0, end: 100 })
+  }
+  zoomSyncing = false
   renderFidTrendChart()
 }
 
@@ -1711,6 +2115,10 @@ function renderFidTrendChart() {
     }
   }
 
+  // 记录本次实际渲染的日期（可能已被共享区间裁剪）：
+  // 分版块滑动条回传共享区间时，索引只能映射回这份日期
+  fidRenderedDates = dates
+
   // P1-8：数据指纹（含联动聚焦/日期依赖），无变化跳过 setOption
   const fidKey =
     dates.join('|') +
@@ -1730,6 +2138,8 @@ function renderFidTrendChart() {
     fidTrendChart.value = echartsInit(el)
     fidTrendChart.value.on('mouseover', () => (fidTrendTipPaused = true))
     fidTrendChart.value.on('mouseout', () => (fidTrendTipPaused = false))
+    // 缩放条联动（反向）：在分版块图上拖滑动条/滚轮缩放，同样回传为三图共享区间
+    fidTrendChart.value.on('datazoom', () => applyTrendZoom('fid'))
     // 反联动：分版块 Tooltip 出现时，同步显示全站趋势对应天数的 Tooltip（双向）
     if (!fidTipSynced) {
       fidTipSynced = true
@@ -1741,6 +2151,9 @@ function renderFidTrendChart() {
         tipSyncing = false
       })
     }
+    // 点某天 → 三图同标该日（反向：由分版块侧发起，与「全站点某天」完全对称，
+    // 状态只有 linkedDay 一处）
+    bindPlotClick(fidTrendChart.value, () => fidRenderedDates)
     // 点图例高亮：与总趋势卡片联动
     fidTrendChart.value.on('click', (params: any) => {
       if (params.componentType !== 'legend') return
@@ -1775,6 +2188,8 @@ function renderFidTrendChart() {
       symbolSize: 4,
       showSymbol: false,
       emphasis: { focus: 'series' },
+      // 同上：让「点分版块某天」可点中（反向聚焦日联动依赖它）
+      triggerLineEvent: true,
       lineStyle: { width: 2, color, shadowColor: color, shadowBlur: 6 },
       itemStyle: { color },
       areaStyle: {
@@ -1910,6 +2325,14 @@ function renderFidTrendChart() {
     fidTrendChart.value.dispatchAction({ type: 'downplay', series: series.map((s) => s.name) })
     fidTrendChart.value.dispatchAction({ type: 'highlight', seriesName: linkedFid.value.name })
   }
+
+  // 裁剪/重绘后把本图滑动条复位到「裁剪区间的满宽」：本图选区只表示「在共享区间内再看一段」，
+  // 重绘后旧索引区间已失效（可能落到新数据之外），统一复位最稳（复位派发被 zoomSyncing 挡回声）。
+  if (needZoom) {
+    zoomSyncing = true
+    fidTrendChart.value.dispatchAction({ type: 'dataZoom', start: 0, end: 100 })
+    zoomSyncing = false
+  }
 }
 </script>
 
@@ -2009,7 +2432,9 @@ function renderFidTrendChart() {
     </div>
     </div>
 
-    <!-- R4 内容 → 资产漏斗：收录 → 已下载帖 → 本地文件 → 占用体积（口径与资源管理页一致） -->
+    <!-- R4 内容 → 资产漏斗 + 沉淀进度：收录 → 已沉淀帖 → 本地文件（三级同量纲），
+         另附目标进度 / 五态 / 分层沉淀率 / 存储行 / 类型分布。
+         口径与依据见 docs/内容资产沉淀进度调研与建议.md -->
     <div class="page-card asset-card">
       <div class="chart-head">
         <div class="chart-head-left">
@@ -2028,23 +2453,97 @@ function renderFidTrendChart() {
         </div>
         <span class="asset-arrow">
           →
-          <em v-if="downloadRate" title="已下载帖 / 收录帖子">{{ downloadRate }}%</em>
+          <em v-if="downloadRate" title="已沉淀帖 / 收录帖子（全库口径，会被长尾稀释；分层看下方）">{{ downloadRate }}%</em>
         </span>
-        <div class="asset-step as-downloaded">
-          <span class="as-label">已下载帖</span>
+        <div
+          class="asset-step as-downloaded"
+          role="button"
+          title="点击查看已沉淀帖子明细（与此处数字同口径）"
+          @click="goPostsDownloaded"
+        >
+          <span class="as-label">已沉淀帖</span>
           <span class="as-value">{{ assets.downloaded_posts.toLocaleString() }}</span>
         </div>
         <span class="asset-arrow">→</span>
-        <div class="asset-step as-files">
+        <div class="asset-step as-files" role="button" title="点击进入资源管理" @click="goResources">
           <span class="as-label">本地文件</span>
           <span class="as-value">{{ assets.files.toLocaleString() }}</span>
           <span class="as-sub">{{ assets.folders }} 个目录</span>
         </div>
-        <span class="asset-arrow">→</span>
-        <div class="asset-step as-size">
-          <span class="as-label">占用体积</span>
-          <span class="as-value">{{ formatSize(assets.size) }}</span>
+      </div>
+
+      <!-- 目标进度（SLO 式）：进度必须相对目标，否则百分比不可行动 -->
+      <div class="asset-goal">
+        <div class="ag-head">
+          <span class="ag-title">
+            沉淀目标 · {{ assets.goal.scope_label }} {{ assets.goal.target_rate }}%
+          </span>
+          <span class="ag-now">
+            当前 {{ assets.goal.current_rate }}%（{{ assets.goal.downloaded }} / {{ assets.goal.total }}）
+          </span>
+          <span v-if="assets.goal.reached" class="ag-done">已达成</span>
+          <!-- 目标缺口不做下钻：目标口径是「该档全量帖子」，帖子页无法表达（无互动量阈值筛选），
+               强行下钻必然口径不一致；可下钻的缺口是下方状态行的「近 N 日缺口」（口径可表达） -->
+          <span v-else class="ag-remain" :title="goalTip">还差 {{ assets.goal.remain }} 帖</span>
         </div>
+        <div class="ag-bar" role="progressbar" :aria-valuenow="assets.goal.current_rate" aria-valuemin="0" aria-valuemax="100">
+          <div class="ag-fill" :style="{ width: goalBarWidth }"></div>
+          <span class="ag-mark" :style="{ left: assets.goal.target_rate + '%' }"></span>
+        </div>
+      </div>
+
+      <!-- 状态行：库存以外的四态 + 缺口（只看库存等于只看结果不看过程） -->
+      <div class="asset-state">
+        <span
+          v-for="s in stateRows"
+          :key="s.key"
+          class="ast-item"
+          :class="[s.cls, { 'is-click': s.clickable }]"
+          :role="s.clickable ? 'button' : undefined"
+          :title="s.title"
+          @click="onStateClick(s)"
+        >
+          <i class="ast-dot" :style="{ background: s.color }"></i>
+          <span class="ast-label">{{ s.label }}</span>
+          <b class="ast-num">{{ s.num.toLocaleString() }}</b>
+        </span>
+        <el-tooltip placement="top" effect="dark" :content="reconcileTip" :show-after="200">
+          <span class="ast-reconcile">
+            对账 已认领 {{ assets.reconcile.claimed }}/{{ assets.folders }}
+            <em v-if="assets.reconcile.unclaimed" class="ast-warn">· 未认领 {{ assets.reconcile.unclaimed }}</em>
+          </span>
+        </el-tooltip>
+      </div>
+
+      <!-- 分层沉淀率：全库会被长尾稀释，分档才可行动 -->
+      <div class="asset-coverage">
+        <span class="ac-label">分层沉淀率</span>
+        <span v-for="c in assets.coverage" :key="c.key" class="ac-item">
+          {{ c.label }} <b>{{ c.rate }}%</b>
+          <em>{{ c.downloaded }}/{{ c.total.toLocaleString() }}</em>
+        </span>
+        <el-tooltip v-if="fidTop.length" placement="top" effect="dark" :content="fidTip" :show-after="200">
+          <span class="ac-fid">
+            集中在 {{ fidTop[0].name }}（{{ fidTop[0].downloaded }}/{{ assets.downloaded_posts }}）
+          </span>
+        </el-tooltip>
+      </div>
+
+      <!-- 存储行：计数与字节分列两个视图；附近 30 日沉淀增长（纯 CSS 迷你柱，不新开图表实例） -->
+      <div class="asset-store">
+        <span class="as2-item">占用 <b>{{ formatSize(assets.size) }}</b></span>
+        <span v-if="assets.disk_total" class="as2-item">
+          可用 <b>{{ formatSize(assets.disk_free) }}</b>
+          <em>/ {{ formatSize(assets.disk_total) }}</em>
+        </span>
+        <span class="as2-item as2-growth">
+          近 {{ assets.state.gap_days }} 日沉淀 <b>+{{ assets.state.recent_posts }}</b> 帖
+          <em v-if="recentSize">· {{ formatSize(recentSize) }}</em>
+        </span>
+        <span v-if="growthBars.length" class="as2-spark" :title="growthTip">
+          <i v-for="(b, i) in growthBars" :key="i" :style="{ height: b.h + '%' }"></i>
+        </span>
+        <span v-else class="as2-hint">历史沉淀时间不可考，新下载将自动生成增长曲线</span>
       </div>
       <div v-if="typeRows.length" class="asset-types">
         <div class="at-head">
@@ -2096,6 +2595,13 @@ function renderFidTrendChart() {
       <div class="chart-head">
         <div class="chart-head-left">
           <span class="chart-title">全站发布趋势</span>
+          <el-tooltip
+            content="窗口跟随右侧天数选择（7/14/21/28 日，可自定义输入）；按帖子「发布日」聚合发布量。统计卡（峰值/谷值/日均）与曲线均排除今天——当日抓取未覆盖全天，否则谷值永远落在今天；「近7日环比」为滚动窗口口径（近 7 日 vs 前 7 日，与分版块/活跃榜同源同窗）。点击折线某日可联动聚焦右侧「分版块发布对比」。"
+            placement="top"
+            :teleported="!app.fullscreen"
+          >
+            <span class="chart-sub">近 {{ trendDays }} 日 · 按发布日统计</span>
+          </el-tooltip>
           <span v-if="linkedFid" class="link-badge" :style="{ '--link-color': linkedFid.color }">
             <span class="link-dot"></span>
             联动聚焦：{{ linkedFid.name }}
@@ -2103,31 +2609,7 @@ function renderFidTrendChart() {
           </span>
         </div>
         <div class="chart-head-right">
-          <div v-if="trendStats" class="trend-stats">
-            <div class="ts-card ts-peak">
-              <span class="ts-label">峰值</span>
-              <span class="ts-value"><RollingNumber :value="trendStats.max" /></span>
-              <span class="ts-sub">{{ trendStats.maxDate.slice(5) }}</span>
-            </div>
-            <div class="ts-card ts-valley">
-              <span class="ts-label">谷值</span>
-              <span class="ts-value"><RollingNumber :value="trendStats.min" /></span>
-              <span class="ts-sub">{{ trendStats.minDate.slice(5) }}</span>
-            </div>
-            <div class="ts-card ts-avg">
-              <span class="ts-label">日均</span>
-              <span class="ts-value"><RollingNumber :value="trendStats.avg" /></span>
-            </div>
-            <div
-              v-if="trendCmp"
-              class="ts-card ts-cmp"
-              title="近 7 日发布量相对前 7 日的涨跌（滚动窗口，与分版块趋势同源同窗）"
-            >
-              <span class="ts-label">近7日环比</span>
-              <span class="ts-value" :style="{ color: trendCmp.color }">{{ trendCmp.text }}</span>
-            </div>
-            </div>
-            <el-select
+          <el-select
             v-model="trendDays"
             size="small"
             class="day-select"
@@ -2154,6 +2636,32 @@ function renderFidTrendChart() {
               @click="onCardFullscreen('trend')"
             />
           </el-tooltip>
+        </div>
+      </div>
+      <!-- 统计卡行：位于「标题 + 口径说明」之下（2026-09-13 统一卡片头部模式，
+           不再挤在标题行右侧，窄屏也不必靠折行兜底） -->
+      <div v-if="trendStats" class="chart-stats">
+        <div class="ts-card ts-peak">
+          <span class="ts-label">峰值</span>
+          <span class="ts-value"><RollingNumber :value="trendStats.max" /></span>
+          <span class="ts-sub">{{ trendStats.maxDate.slice(5) }}</span>
+        </div>
+        <div class="ts-card ts-valley">
+          <span class="ts-label">谷值</span>
+          <span class="ts-value"><RollingNumber :value="trendStats.min" /></span>
+          <span class="ts-sub">{{ trendStats.minDate.slice(5) }}</span>
+        </div>
+        <div class="ts-card ts-avg">
+          <span class="ts-label">日均</span>
+          <span class="ts-value"><RollingNumber :value="trendStats.avg" /></span>
+        </div>
+        <div
+          v-if="trendCmp"
+          class="ts-card ts-cmp"
+          title="近 7 日发布量相对前 7 日的涨跌（滚动窗口，与分版块趋势同源同窗）"
+        >
+          <span class="ts-label">近7日环比</span>
+          <span class="ts-value" :style="{ color: trendCmp.color }">{{ trendCmp.text }}</span>
         </div>
       </div>
       <div v-if="!trend.length && loadingP0" class="chart chart-loading">
@@ -2183,6 +2691,13 @@ function renderFidTrendChart() {
       <div class="chart-head">
         <div class="chart-head-left">
           <span class="chart-title">分版块发布对比</span>
+          <el-tooltip
+            content="窗口与左侧「全站发布趋势」严格一致（跟随同一天数选择），两图横轴对齐；每个系列是一个版块（按窗口内发帖量取前 8），可用于定位「热度集中在哪些版块」。悬浮任一点会与左侧全站图联动聚焦同一日期；>31 点时启用区间缩放，缩放区间由卡头「跟随趋势区间」标记体现。统计卡的「最活板块7日环比」为滚动窗口口径（与活跃版块榜同源同窗）。"
+            placement="top"
+            :teleported="!app.fullscreen"
+          >
+            <span class="chart-sub">近 {{ trendDays }} 日 · 按版块发帖量</span>
+          </el-tooltip>
           <span v-if="linkedDay" class="link-badge" style="--link-color: #e6ebf5">
             <span class="link-dot"></span>
             联动聚焦日：{{ linkedDay.slice(5) }}
@@ -2190,33 +2705,11 @@ function renderFidTrendChart() {
           </span>
           <span v-if="trendZoomRange" class="link-badge" style="--link-color: #e6ebf5">
             <span class="link-dot"></span>
-            跟随趋势区间：{{ trendZoomRange.start.slice(5) }} ~ {{ trendZoomRange.end.slice(5) }}
+            跟随趋势区间：{{ zoomRangeLabel }}
             <span class="link-close" @click="clearTrendZoom">✕</span>
           </span>
         </div>
         <div class="chart-head-right">
-          <div v-if="fidTrendStats" class="trend-stats">
-            <div class="ts-card ts-total">
-              <span class="ts-label">对比版块</span>
-              <span class="ts-value"><RollingNumber :value="fidTrendStats.fidCount" /></span>
-            </div>
-            <div class="ts-card ts-peak">
-              <span class="ts-label">最活版块</span>
-              <span class="ts-value ts-name">{{ fidTrendStats.topName }}</span>
-            </div>
-            <div class="ts-card ts-avg">
-              <span class="ts-label">峰值日增</span>
-              <span class="ts-value"><RollingNumber :value="fidTrendStats.peak" /></span>
-            </div>
-            <div
-              v-if="fidTopDelta"
-              class="ts-card ts-cmp"
-              title="最活板块近 7 日发布量相对前 7 日的涨跌（滚动窗口，与活跃版块榜环比同口径；各版块明细见图表悬浮）"
-            >
-              <span class="ts-label">最活板块7日环比</span>
-              <span class="ts-value" :style="{ color: fidTopDelta.color }">{{ fidTopDelta.text }}</span>
-            </div>
-          </div>
           <el-tooltip
             :content="app.fullscreen ? '退出全屏（Esc）' : '全屏查看该卡片'"
             placement="top"
@@ -2230,6 +2723,29 @@ function renderFidTrendChart() {
               @click="onCardFullscreen('fid')"
             />
           </el-tooltip>
+        </div>
+      </div>
+      <!-- 统计卡行：位于「标题 + 口径说明」之下（同「全站发布趋势」，2026-09-13 统一） -->
+      <div v-if="fidTrendStats" class="chart-stats">
+        <div class="ts-card ts-total">
+          <span class="ts-label">对比版块</span>
+          <span class="ts-value"><RollingNumber :value="fidTrendStats.fidCount" /></span>
+        </div>
+        <div class="ts-card ts-peak">
+          <span class="ts-label">最活版块</span>
+          <span class="ts-value ts-name">{{ fidTrendStats.topName }}</span>
+        </div>
+        <div class="ts-card ts-avg">
+          <span class="ts-label">峰值日增</span>
+          <span class="ts-value"><RollingNumber :value="fidTrendStats.peak" /></span>
+        </div>
+        <div
+          v-if="fidTopDelta"
+          class="ts-card ts-cmp"
+          title="最活板块近 7 日发布量相对前 7 日的涨跌（滚动窗口，与活跃版块榜环比同口径；各版块明细见图表悬浮）"
+        >
+          <span class="ts-label">最活板块7日环比</span>
+          <span class="ts-value" :style="{ color: fidTopDelta.color }">{{ fidTopDelta.text }}</span>
         </div>
       </div>
       <div v-if="!fidTrend.series.length && loadingFidTrend" class="chart chart-loading">
@@ -2249,14 +2765,165 @@ function renderFidTrendChart() {
         </div>
       </div>
     </div>
+
+    <!-- 每日互动量趋势：趋势区第三张图（全宽一行），2026-09-13 由「本月最热」卡内 sparkline 抽出。
+         抽出原因：原图把「当月全站每日互动量」塞进「当月 Top10 帖」的榜单卡里——两个 population、
+         两个单位（帖 vs 互动量）同卡，且 26px 高的迷你柱既不能读数、当天数据不完整时还会塌成
+         一根近乎消失的柱，被误读为热度断崖。独立成图后可用完整坐标轴、可比口径与规范标注。
+         窗口与「全站发布趋势」严格一致（跟随其天数选择），保证并排两图横轴对齐。 -->
+    <!-- 互动量趋势与待下载推荐同行各占 1/2（2026-09-13 排版调整）：
+         左=趋势图（读数型），右=待下载清单（行动型），一屏内「看到热度 → 直接下载」闭环；
+         窄屏（≤1100px）由 .trend-row 的 1 列规则自动上下堆叠，卡片内部网格同步收为单列。
+         trend-eng：本卡图表区按剩余高度自适应（行高由右侧 8 行清单决定，固定高度会在底部留白）。 -->
+    <div
+      ref="trendEngCardRef"
+      class="page-card chart-card trend-half trend-eng"
+      :class="{ 'is-card-fs': app.pseudoFullscreen && fsCard === 'eng' }"
+    >
+      <div class="chart-head">
+        <div class="chart-head-left">
+          <el-tooltip
+            content="窗口与「全站发布趋势」完全一致（跟随其天数选择）；互动量 = 点赞 + 回复（与热门榜排序同源）。统计卡排除今天，曲线上今天那一格打了浅色底并标注「数据未完整」——当日抓取尚未覆盖全天。"
+            placement="top"
+            :teleported="!app.fullscreen"
+          >
+            <span class="chart-title">每日互动量趋势</span>
+          </el-tooltip>
+          <span class="chart-sub">近 {{ trendDays }} 日 · 互动量 = 点赞 + 回复</span>
+        </div>
+        <div class="chart-head-right">
+          <el-tooltip
+            :content="app.fullscreen ? '退出全屏（Esc）' : '全屏查看该卡片'"
+            placement="top"
+            :teleported="!app.fullscreen"
+          >
+            <el-button
+              class="card-fs-btn"
+              text
+              :icon="app.fullscreen ? 'Aim' : 'FullScreen'"
+              aria-label="卡片全屏"
+              @click="onCardFullscreen('eng')"
+            />
+          </el-tooltip>
+        </div>
+      </div>
+      <!-- 统计卡行：位于「标题 + 口径说明」之下（本卡是 2026-09-13 起统一的头部模式样板，
+           三张趋势图共用同一种「标题行 → 统计行 → 图表」三层结构） -->
+      <div v-if="trendEngStats" class="chart-stats">
+        <div class="ts-card ts-peak">
+          <span class="ts-label">峰值</span>
+          <span class="ts-value"><RollingNumber :value="trendEngStats.max" /></span>
+          <span class="ts-sub">{{ trendEngStats.maxDate.slice(5) }}</span>
+        </div>
+        <div class="ts-card ts-valley">
+          <span class="ts-label">谷值</span>
+          <span class="ts-value"><RollingNumber :value="trendEngStats.min" /></span>
+          <span class="ts-sub">{{ trendEngStats.minDate.slice(5) }}</span>
+        </div>
+        <div class="ts-card ts-avg">
+          <span class="ts-label">日均</span>
+          <span class="ts-value"><RollingNumber :value="trendEngStats.avg" /></span>
+        </div>
+        <div class="ts-card ts-total" title="窗口内互动量合计（同样排除今天这一未完整数据点）">
+          <span class="ts-label">窗口合计</span>
+          <span class="ts-value"><RollingNumber :value="trendEngStats.total" /></span>
+        </div>
+      </div>
+      <div v-if="!trendEng.length && loadingP0" class="chart chart-loading">
+        <el-skeleton animated :rows="8" />
+      </div>
+      <div class="trend-chart-wrap">
+        <div
+          v-show="trendEng.length"
+          ref="trendEngRef"
+          class="chart"
+          @mouseenter="setTrendTipPaused(true)"
+          @mouseleave="setTrendTipPaused(false)"
+        ></div>
+        <div v-if="trendSwitching" class="chart-switch-overlay">
+          <span class="switch-dot"></span>
+          <span>数据切换中…</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- R3 待下载推荐：近 30 日互动量最高且未下载的帖子（发现 → 下载一步直达）。
+         行内「下载」按钮直接创建下载任务（与热门榜同一套交互）；标题打开原帖；
+         卡片头「查看全部」下钻到帖子页，继承「近30日 · 未下载 · 按互动量」上下文，
+         列表为该筛选的全量明细，数字自洽。
+         2026-09-13 由热门榜下方全宽卡移入本行：与「每日互动量趋势」并排各占 1/2
+         （趋势图看热度、右侧清单直接下载，形成「看到 → 行动」的闭环）。 -->
+    <div class="page-card chart-card pending-card trend-half">
+      <div class="chart-head" style="margin-bottom: 8px">
+        <div class="chart-head-left">
+          <span class="chart-title">待下载推荐</span>
+          <el-tooltip
+            content="近 30 日滚动窗口（含今天、会跨月）内互动量最高、且尚未下载到本地的帖子（已下载与下载中自动排除；下载完成后下一轮刷新自动退出推荐；曾下载但文件已被清理的帖子标记为「可重下」）。注意：「本月最热」按数据最新月份的自然月统计，两者窗口不同，即使同按互动量排序，结果也可能不重合"
+            placement="top"
+            :teleported="!app.fullscreen"
+          >
+            <span class="chart-sub">近30日滚动窗口（跨月）· 未下载 · 按互动量</span>
+          </el-tooltip>
+        </div>
+        <div class="chart-head-right">
+          <el-link type="primary" :underline="false" class="more-link" @click="goPendingPosts">查看全部 ›</el-link>
+        </div>
+      </div>
+      <div v-if="loadingPending && !pending" class="board-list">
+        <div v-for="i in 8" :key="i" class="board-card pending-row">
+          <el-skeleton animated :rows="1" />
+        </div>
+      </div>
+      <div v-else class="board-list">
+        <div v-for="(item, i) in pending?.items ?? []" :key="item.url" class="board-card pending-row">
+          <span :class="rankClass(i)">{{ i + 1 }}</span>
+          <el-tag size="small" type="info" class="board-tag">{{ item.name }}</el-tag>
+          <a
+            class="title-link board-title"
+            :title="`${item.name} · ${item.title}`"
+            @click.stop.prevent="openUrl(item.url)"
+          >
+            {{ item.title }}
+          </a>
+          <el-tag
+            v-if="item.state === 're_download'"
+            size="small"
+            type="warning"
+            class="board-tag re-download-tag"
+          >可重下</el-tag>
+          <span class="board-postdate" :title="`发布于 ${item.date}`">{{ item.date.slice(5) }}</span>
+          <el-tooltip content="下载" placement="top" :teleported="!app.fullscreen">
+            <el-button link size="small" type="success" :icon="Download" class="board-download" @click.stop.prevent="downloadUrl(item.url)" />
+          </el-tooltip>
+
+          <el-tooltip
+            :content="`互动量 ${item.engagement} = 点赞 ${item.likes} + 回复 ${item.replies}`"
+            placement="top"
+            :teleported="!app.fullscreen"
+          >
+            <span class="board-metric board-metric-main">
+              <el-icon><Star /></el-icon>{{ metricText(item.engagement) }}
+            </span>
+          </el-tooltip>
+        </div>
+        <div v-if="!pending?.items?.length" class="pending-empty">近 30 日高互动帖子均已下载</div>
+      </div>
+    </div>
     </div>
 
     <!-- 图表（P0）：左活跃作者 + 右活跃版块，均为横向条形图 -->
     <div id="section-ranks" class="chart-row">
       <div class="page-card chart-card">
-        <div class="chart-head" style="margin-bottom: 6px">
+        <div class="chart-head" style="margin-bottom: 8px">
           <div class="chart-head-left">
             <span class="chart-title">活跃作者 Top10</span>
+            <el-tooltip
+              content="范围由右侧「累计 / 近 7 日 / 近 30 日」切换；发帖量 = 该窗口内发布的主题数（不含回复）；与「活跃版块 Top10」「近 7 日环比」同源同窗。点击任一条可下钻到帖子页并按该作者筛选。"
+              placement="top"
+              :teleported="!app.fullscreen"
+            >
+              <span class="chart-sub">按{{ RANGE_LABEL[authorRange] }}发帖量 · 点击查看该作者帖子</span>
+            </el-tooltip>
           </div>
           <div class="chart-head-right">
             <el-radio-group
@@ -2270,9 +2937,6 @@ function renderFidTrendChart() {
             </el-radio-group>
           </div>
         </div>
-        <div class="chart-sub" style="margin-bottom: 8px">
-          按{{ RANGE_LABEL[authorRange] }}发帖量 · 点击查看该作者帖子
-        </div>
         <div class="chart-wrap">
           <div v-if="!topAuthors.length && loadingP0" class="chart chart-loading">
             <el-skeleton animated :rows="8" />
@@ -2282,9 +2946,16 @@ function renderFidTrendChart() {
         </div>
       </div>
       <div class="page-card chart-card">
-        <div class="chart-head" style="margin-bottom: 6px">
+        <div class="chart-head" style="margin-bottom: 8px">
           <div class="chart-head-left">
             <span class="chart-title">活跃版块 Top10</span>
+            <el-tooltip
+              content="范围由右侧「累计 / 近 7 日 / 近 30 日」切换；发帖量 = 该窗口内该版块发布的主题数；与「活跃作者 Top10」同源同窗，仅维度不同（版块 vs 作者）。点击任一条可下钻到帖子页并按该版块筛选。"
+              placement="top"
+              :teleported="!app.fullscreen"
+            >
+              <span class="chart-sub">按{{ RANGE_LABEL[fidRange] }}发帖量 · 点击查看该版块帖子</span>
+            </el-tooltip>
           </div>
           <div class="chart-head-right">
             <el-radio-group
@@ -2297,9 +2968,6 @@ function renderFidTrendChart() {
               <el-radio-button value="30d">近 30 日</el-radio-button>
             </el-radio-group>
           </div>
-        </div>
-        <div class="chart-sub" style="margin-bottom: 8px">
-          按{{ RANGE_LABEL[fidRange] }}发帖量 · 点击查看该版块帖子
         </div>
         <div class="chart-wrap">
           <div v-if="!topFids.length && loadingP0" class="chart chart-loading">
@@ -2317,8 +2985,19 @@ function renderFidTrendChart() {
       <div id="section-boards" class="board-row">
         <div class="page-card chart-card">
           <div class="chart-head" style="margin-bottom: 8px">
-            <span class="chart-title">点赞最高帖</span>
-            <el-link type="primary" :underline="false" class="more-link" @click="goPostsWith({ sort: 'likes_desc' })">查看更多</el-link>
+            <div class="chart-head-left">
+              <span class="chart-title">点赞最高帖</span>
+              <el-tooltip
+                content="全站累计口径（不受下方任何时间筛选影响）；按帖子点赞数取前 10。行内「下载」按钮可直接创建下载任务；点击整行可下钻到该版块帖子页并按点赞排序。"
+                placement="top"
+                :teleported="!app.fullscreen"
+              >
+                <span class="chart-sub">全站累计 · 按点赞数</span>
+              </el-tooltip>
+            </div>
+            <div class="chart-head-right">
+              <el-link type="primary" :underline="false" class="more-link" @click="goPostsWith({ sort: 'likes_desc' })">查看更多</el-link>
+            </div>
           </div>
           <div v-if="loadingBoards" class="board-list">
             <div v-for="i in 4" :key="i" class="board-card">
@@ -2344,8 +3023,19 @@ function renderFidTrendChart() {
         </div>
         <div class="page-card chart-card">
           <div class="chart-head" style="margin-bottom: 8px">
-            <span class="chart-title">回复最高帖</span>
-            <el-link type="primary" :underline="false" class="more-link" @click="goPostsWith({ sort: 'replies_desc' })">查看更多</el-link>
+            <div class="chart-head-left">
+              <span class="chart-title">回复最高帖</span>
+              <el-tooltip
+                content="全站累计口径（不受下方任何时间筛选影响）；按帖子回复数取前 10。行内「下载」按钮可直接创建下载任务；点击整行可下钻到该版块帖子页并按回复排序。"
+                placement="top"
+                :teleported="!app.fullscreen"
+              >
+                <span class="chart-sub">全站累计 · 按回复数</span>
+              </el-tooltip>
+            </div>
+            <div class="chart-head-right">
+              <el-link type="primary" :underline="false" class="more-link" @click="goPostsWith({ sort: 'replies_desc' })">查看更多</el-link>
+            </div>
           </div>
           <div v-if="loadingBoards" class="board-list">
             <div v-for="i in 4" :key="i" class="board-card">
@@ -2371,15 +3061,18 @@ function renderFidTrendChart() {
         </div>
         <div class="page-card chart-card">
           <div class="chart-head" style="margin-bottom: 8px">
-            <span class="chart-title">最新最热</span>
-            <span v-if="todayTop?.date" class="chart-head-right">
+            <div class="chart-head-left">
+              <span class="chart-title">最新最热</span>
               <el-tooltip
-                :content="`按数据最新日 ${todayTop.date}（${relDayText(todayTop.date)}）统计，当日共 ${todayTop.total} 帖；排序依据=${BOARD_SORT_HINT[todaySort]}`"
+                v-if="todayTop?.date"
+                :content="`按数据最新日 ${todayTop.date}（${relDayText(todayTop.date)}）统计，当日共 ${todayTop.total} 帖；排序依据=${BOARD_SORT_HINT[todaySort]}。当日窗口整体更替，故不做「新入榜」标记（会全量刷成 NEW 而失去信息量）；点击整行可下钻到该版块帖子页。`"
                 placement="top"
                 :teleported="!app.fullscreen"
               >
-                <span class="board-date">{{ todayTop.date.slice(5) }}</span>
+                <span class="chart-sub">{{ todayTop.date.slice(5) }} 当日 · 按{{ BOARD_SORT_HINT[todaySort] }}</span>
               </el-tooltip>
+            </div>
+            <span v-if="todayTop?.date" class="chart-head-right">
               <el-select v-model="todaySort" size="small" class="board-sort" @change="onTodaySortChange">
                 <el-option v-for="o in BOARD_SORT_OPTIONS" :key="o.value" :label="o.label" :value="o.value" />
               </el-select>
@@ -2430,15 +3123,18 @@ function renderFidTrendChart() {
         </div>
         <div class="page-card chart-card">
           <div class="chart-head" style="margin-bottom: 8px">
-            <span class="chart-title">本月最热</span>
-            <span v-if="monthTop?.date" class="chart-head-right">
+            <div class="chart-head-left">
+              <span class="chart-title">本月最热</span>
               <el-tooltip
-                :content="`按数据最新月份 ${monthTop.date} 统计，当月共 ${monthTop.total} 帖 / 覆盖 ${monthTop.days} 天${monthTop.days < 7 ? '（样本较少，榜单波动大）' : ''}；排序依据=${BOARD_SORT_HINT[monthSort]}`"
+                v-if="monthTop?.date"
+                :content="`按数据最新月份 ${monthTop.date} 统计，当月共 ${monthTop.total} 帖 / 覆盖 ${monthTop.days} 天${monthTop.days < 7 ? '（样本较少，榜单波动大）' : ''}；排序依据=${BOARD_SORT_HINT[monthSort]}。注意：本榜是自然月窗口，与「待下载推荐」的近 30 日滚动窗口不同，即使同按互动量排序结果也可能不重合；点击整行可下钻到该版块帖子页。`"
                 placement="top"
                 :teleported="!app.fullscreen"
               >
-                <span class="board-date">{{ monthTop.date }}</span>
+                <span class="chart-sub">{{ monthTop.date }} 当月 · 按{{ BOARD_SORT_HINT[monthSort] }}</span>
               </el-tooltip>
+            </div>
+            <span v-if="monthTop?.date" class="chart-head-right">
               <el-select v-model="monthSort" size="small" class="board-sort" @change="onMonthSortChange">
                 <el-option v-for="o in BOARD_SORT_OPTIONS" :key="o.value" :label="o.label" :value="o.value" />
               </el-select>
@@ -2450,18 +3146,7 @@ function renderFidTrendChart() {
               >查看更多</el-link>
             </span>
           </div>
-          <!-- 本月每日互动量 sparkline：一眼看出热度集中在哪几天 -->
-          <div v-if="monthTop?.daily?.length" class="board-spark">
-            <el-tooltip
-              v-for="d in monthTop.daily"
-              :key="d.date"
-              :content="sparkText(d)"
-              placement="top"
-              :teleported="!app.fullscreen"
-            >
-              <span class="spark-bar" :style="{ height: sparkHeight(d.value) }" />
-            </el-tooltip>
-          </div>
+          <!-- 本卡只做列表展示：每日互动量趋势已抽出为趋势区「每日互动量趋势」独立图（2026-09-13） -->
           <div v-if="loadingBoards" class="board-list">
             <div v-for="i in 4" :key="i" class="board-card">
               <el-skeleton animated :rows="1" />
@@ -2502,67 +3187,6 @@ function renderFidTrendChart() {
             </div>
             <div v-if="!monthTop?.items?.length" class="text-muted">暂无数据</div>
           </div>
-        </div>
-      </div>
-
-      <!-- R3 待下载推荐：近 30 日互动量最高且未下载的帖子（发现 → 下载一步直达）。
-           行内「下载」按钮直接创建下载任务（与热门榜同一套交互）；标题打开原帖；
-           卡片头「查看全部」下钻到帖子页，继承「近30日 · 未下载 · 按互动量」上下文，
-           列表为该筛选的全量明细，数字自洽。 -->
-      <div class="page-card chart-card pending-card">
-        <div class="chart-head" style="margin-bottom: 8px">
-          <div class="chart-head-left">
-            <span class="chart-title">待下载推荐</span>
-            <el-tooltip
-              content="近 30 日互动量最高、且尚未下载到本地的帖子（已下载与下载中自动排除；下载完成后下一轮刷新自动退出推荐；曾下载但文件已被清理的帖子标记为「可重下」）"
-              placement="top"
-              :teleported="!app.fullscreen"
-            >
-              <span class="chart-sub">近30日 · 未下载 · 按互动量</span>
-            </el-tooltip>
-          </div>
-          <div class="chart-head-right">
-            <el-link type="primary" :underline="false" class="more-link" @click="goPendingPosts">查看全部 ›</el-link>
-          </div>
-        </div>
-        <div v-if="loadingPending && !pending" class="pending-grid">
-          <div v-for="i in 4" :key="i" class="board-card pending-row">
-            <el-skeleton animated :rows="1" />
-          </div>
-        </div>
-        <div v-else class="pending-grid">
-          <div v-for="(item, i) in pending?.items ?? []" :key="item.url" class="board-card pending-row">
-            <span :class="rankClass(i)">{{ i + 1 }}</span>
-            <el-tag size="small" type="info" class="board-tag">{{ item.name }}</el-tag>
-            <a
-              class="title-link board-title"
-              :title="`${item.name} · ${item.title}`"
-              @click.stop.prevent="openUrl(item.url)"
-            >
-              {{ item.title }}
-            </a>
-            <el-tag
-              v-if="item.state === 're_download'"
-              size="small"
-              type="warning"
-              class="board-tag re-download-tag"
-            >可重下</el-tag>
-            <span class="board-postdate" :title="`发布于 ${item.date}`">{{ item.date.slice(5) }}</span>
-            <el-tooltip content="下载" placement="top" :teleported="!app.fullscreen">
-              <el-button link size="small" type="success" :icon="Download" class="board-download" @click.stop.prevent="downloadUrl(item.url)" />
-            </el-tooltip>
-
-            <el-tooltip
-              :content="`互动量 ${item.engagement} = 点赞 ${item.likes} + 回复 ${item.replies}`"
-              placement="top"
-              :teleported="!app.fullscreen"
-            >
-              <span class="board-metric board-metric-main">
-                <el-icon><Star /></el-icon>{{ metricText(item.engagement) }}
-              </span>
-            </el-tooltip>
-          </div>
-          <div v-if="!pending?.items?.length" class="pending-empty">近 30 日高互动帖子均已下载</div>
         </div>
       </div>
 
@@ -2607,10 +3231,10 @@ function renderFidTrendChart() {
   margin-bottom: 12px;
 }
 
-/* 大屏（全屏）态：健康条 / 资产卡 / 待下载卡同步收紧间距，避免挤压图表区 */
+/* 大屏（全屏）态：健康条 / 资产卡同步收紧间距，避免挤压图表区
+   （待下载推荐已移入 .trend-row 成为网格项，行距由该行的 gap 统一控制，不再单列） */
 .dashboard.is-fullscreen .health-bar,
-.dashboard.is-fullscreen .asset-card,
-.dashboard.is-fullscreen .pending-card {
+.dashboard.is-fullscreen .asset-card {
   margin-bottom: 12px;
 }
 
@@ -2664,6 +3288,18 @@ function renderFidTrendChart() {
 }
 .trend-half {
   min-width: 0;
+}
+/* 互动量趋势卡：与右侧待下载清单同行等高，图表区吃掉卡片剩余高度
+   （右卡 8 行清单决定整行高度；若图表区固定 300px，卡片底部会留 46px 空白，
+   大屏态因 --chart-h 变矮会留更多。min-height 只作下限，不改变半宽卡的既有观感） */
+.trend-eng {
+  display: flex;
+  flex-direction: column;
+}
+.trend-eng .trend-chart-wrap {
+  flex: 1 1 auto;
+  height: auto;
+  min-height: var(--chart-h, 300px);
 }
 @media (max-width: 1100px) {
   .trend-row {
@@ -2843,10 +3479,19 @@ function renderFidTrendChart() {
   opacity: 1;
 }
 
-.trend-stats {
+/* 统计卡行（2026-09-13 统一卡片头部模式）：位于「标题 + 口径说明」之下，
+   与图表/列表同属内容行 → 左对齐（此前挂在 .chart-head-right 里右对齐，
+   与标题挤同一行，窄屏还得靠折行兜底）。三张趋势图共用本结构。 */
+.chart-stats {
   display: flex;
   align-items: center;
   gap: 8px;
+  /* 允许整组折行：统计卡自身 white-space: nowrap（防数值被拆），
+     但「互动量」卡的数值是 6 位数（如窗口合计 109,191），390px 视口下 4 张卡
+     一行放不下会横向溢出（实测 7px）。折行是不牺牲信息量的兜底。 */
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  margin-bottom: 8px;
 }
 .ts-card {
   display: flex;
@@ -2981,13 +3626,6 @@ function renderFidTrendChart() {
   min-width: 0;
 }
 
-/* 卡片头部右侧日期角标（最新最热 / 本月最热） */
-.board-date {
-  flex-shrink: 0;
-  font-size: 12px;
-  color: #909399;
-}
-
 /* B1 抓取中徽标：绿色脉冲点 + 实时进度 */
 .running-badge {
   display: inline-flex;
@@ -3044,6 +3682,28 @@ function renderFidTrendChart() {
   gap: 8px;
   max-height: 360px;
   overflow-y: auto;
+  /* 细窄滚动条常显（2026-09-13）：榜单四卡与「待下载推荐」共用本类——内容超出时
+     滑块可见，避免列表被截断却看不出「下面还有」。默认覆盖式滚动条在部分环境下
+     完全不可见（实测 offsetWidth-clientWidth=0）。 */
+  scrollbar-width: thin; /* Firefox */
+  scrollbar-color: #c8ced8 transparent;
+}
+
+.board-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.board-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.board-list::-webkit-scrollbar-thumb {
+  background: #c8ced8;
+  border-radius: 3px;
+}
+
+.board-list::-webkit-scrollbar-thumb:hover {
+  background: #a8b0bd;
 }
 
 .board-card {
@@ -3170,27 +3830,6 @@ function renderFidTrendChart() {
   background: #f5222d;
 }
 
-/* 本月每日互动量 sparkline：纯 CSS 柱状，不额外起图表实例 */
-.board-spark {
-  display: flex;
-  align-items: flex-end;
-  gap: 2px;
-  height: 26px;
-  margin: 0 0 8px;
-  padding: 0 2px;
-}
-
-.spark-bar {
-  flex: 1;
-  min-width: 2px;
-  background: #c9d7f5;
-  border-radius: 1px 1px 0 0;
-}
-
-.spark-bar:hover {
-  background: #2f6fed;
-}
-
 /* ================= R1 采集健康条 =================
    三态横幅：ok 绿（弱化不抢视觉）/ warn 橙 / danger 红；
    判定口径在后端 _health_verdict 一处，前端只按 level 上色。
@@ -3311,9 +3950,10 @@ function renderFidTrendChart() {
   border-left-color: #2f6fed;
 }
 
-/* ================= R4 内容 → 资产漏斗 =================
-   紧凑横条卡：四级漏斗 + 箭头（首级带转化率），窄屏自动换行。
-   步骤条配色沿用趋势统计卡家族色（蓝/绿/紫/橙），不另建色板。 */
+/* ================= R4 内容 → 资产漏斗 + 沉淀进度 =================
+   紧凑横条卡：三级漏斗（同量纲计数）+ 箭头（首级带全库转化率），
+   另附目标进度 / 五态状态行 / 分层沉淀率 / 存储行，窄屏自动换行。
+   步骤条配色沿用趋势统计卡家族色（蓝/绿/紫），不另建色板。 */
 .asset-card {
   margin-bottom: 16px;
 }
@@ -3408,13 +4048,192 @@ function renderFidTrendChart() {
   gap: 4px;
 }
 
-/* 首级转化率：收录 → 已下载帖 */
+/* 首级转化率：收录 → 已沉淀帖（全库口径，会被长尾稀释；分层值见下方分层行） */
 .asset-arrow em {
   font-style: normal;
   font-size: 11px;
   color: #10b981;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
+}
+
+/* 可下钻步骤（已沉淀帖 / 本地文件）：悬浮反馈，移动端同样可点 */
+.asset-step[role='button'] {
+  cursor: pointer;
+  transition: background 0.15s, box-shadow 0.15s;
+}
+.asset-step[role='button']:hover {
+  background: #eef2fb;
+  box-shadow: 0 1px 6px rgba(47, 111, 237, 0.12);
+}
+
+/* 目标进度行（SLO 式）：进度条 + 目标刻度（橙线），达成后印「已达成」 */
+.asset-goal {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px dashed #ebeef5;
+}
+.ag-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+.ag-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #1f2d3d;
+}
+.ag-now {
+  font-size: 12px;
+  color: #606266;
+  font-variant-numeric: tabular-nums;
+}
+.ag-done {
+  font-size: 12px;
+  font-weight: 600;
+  color: #10b981;
+}
+/* 目标缺口：不做下钻（口径无法在帖子页表达），用悬浮说明代替，故为 help 光标 */
+.ag-remain {
+  margin-left: auto;
+  font-size: 12px;
+  color: #606266;
+  cursor: help;
+}
+.ag-bar {
+  position: relative;
+  height: 8px;
+  border-radius: 4px;
+  background: #f0f2f5;
+}
+.ag-fill {
+  height: 100%;
+  border-radius: 4px;
+  background: linear-gradient(90deg, #2f6fed, #10b981);
+  transition: width 0.3s;
+}
+/* 目标刻度：竖向短线标出目标位置，让「当前」与「目标」同尺度可比 */
+.ag-mark {
+  position: absolute;
+  top: -3px;
+  width: 2px;
+  height: 14px;
+  background: #f59e0b;
+  border-radius: 1px;
+}
+
+/* 状态行：在途 / 失败 / 可重下 / 空壳 / 缺口（缺口可下钻）+ 右侧对账悬浮 */
+.asset-state {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+.ast-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: #606266;
+  white-space: nowrap;
+}
+.ast-item.is-click {
+  cursor: pointer;
+}
+.ast-item.is-click:hover .ast-num {
+  text-decoration: underline;
+}
+.ast-item.is-bad .ast-num {
+  color: #f56c6c;
+}
+.ast-num {
+  font-weight: 700;
+  color: #1f2d3d;
+  font-variant-numeric: tabular-nums;
+}
+.ast-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  display: inline-block;
+}
+.ast-reconcile {
+  margin-left: auto;
+  font-size: 12px;
+  color: #909399;
+  cursor: help;
+}
+.ast-warn {
+  font-style: normal;
+  color: #e6a23c;
+  font-weight: 600;
+}
+
+/* 分层沉淀率：全库 / 互动≥N / TopN + 集中度提示（悬浮看分版块明细） */
+.asset-coverage {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+  font-size: 12px;
+  color: #606266;
+}
+.ac-label {
+  color: #909399;
+}
+.ac-item b {
+  color: #2f6fed;
+  font-variant-numeric: tabular-nums;
+}
+.ac-item em {
+  font-style: normal;
+  color: #b0b3b8;
+  margin-left: 2px;
+}
+.ac-fid {
+  color: #909399;
+  cursor: help;
+}
+
+/* 存储行：占用 / 可用 + 近 N 日沉淀增长（纯 CSS 迷你柱，不新开 ECharts 实例） */
+.asset-store {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+  font-size: 12px;
+  color: #606266;
+}
+.as2-item b {
+  color: #1f2d3d;
+  font-variant-numeric: tabular-nums;
+}
+.as2-item em {
+  font-style: normal;
+  color: #b0b3b8;
+}
+.as2-hint {
+  color: #b0b3b8;
+  font-size: 11px;
+}
+.as2-spark {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 18px;
+  cursor: help;
+}
+.as2-spark i {
+  width: 4px;
+  min-height: 2px;
+  background: #2f6fed;
+  border-radius: 1px 1px 0 0;
+  opacity: 0.75;
 }
 
 /* 按类型占比：横向占比条 + 图例（颜色复用 categoryColors 色板，不另建） */
@@ -3513,23 +4332,10 @@ function renderFidTrendChart() {
 }
 
 /* ================= R3 待下载推荐 =================
-   桌面双列网格（8 条正好 4 行，比单列省一半纵向空间），窄屏单列。
+   2026-09-13 起与「每日互动量趋势」同行各占 1/2 宽（原为热门榜下方全宽卡）：
+   列表直接复用热门榜的 .board-list（单列 + max-height: 360px + 溢出滚动），
+   与「本月最热」同款展示；取 10 条、超出部分滚动查看。
    行不整体下钻（帖子页无「未下载」过滤条件），故指针恢复默认。 */
-.pending-card {
-  margin-bottom: 16px;
-}
-
-.pending-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px 16px;
-}
-
-@media (max-width: 1100px) {
-  .pending-grid {
-    grid-template-columns: 1fr;
-  }
-}
 
 .pending-row {
   cursor: default;
@@ -3547,7 +4353,6 @@ function renderFidTrendChart() {
 }
 
 .pending-empty {
-  grid-column: 1 / -1;
   color: #909399;
   font-size: 12px;
   padding: 10px 0;

@@ -39,6 +39,11 @@ const GROUPS: { title: string; desc: string; keys: string[] }[] = [
     keys: ['trash_keep_days', 'resources_scan_ttl'],
   },
   {
+    title: '内容资产',
+    desc: '数据总览「内容资产」卡的目标进度（分层沉淀率的三档与之对应，全库档会被长尾稀释）',
+    keys: ['asset_goal_scope', 'asset_goal_rate'],
+  },
+  {
     title: '分享链接',
     desc: '控制生成的单文件分享链接指向的主机，便于局域网他人直接打开',
     keys: ['share_host'],
@@ -109,6 +114,11 @@ function moveSection(it: SettingItem, key: string, dir: -1 | 1) {
 function arrayLabels(it: SettingItem, keys: string[]): string {
   const map = new Map((it.options ?? []).map((o) => [o.value, o.label]))
   return keys.map((k) => map.get(k) ?? k).join(' → ')
+}
+
+/** 单选枚举值 → 展示标签（找不到回退原值），供 enum 类型默认值回显 */
+function optionLabel(it: SettingItem, value: string): string {
+  return (it.options ?? []).find((o) => o.value === value)?.label ?? value
 }
 
 const dirty = computed(() =>
@@ -340,6 +350,22 @@ onMounted(() => {
                 </div>
                 <div class="sr-default text-muted">默认：{{ arrayLabels(it, it.default as string[]) }}</div>
               </div>
+              <template v-else-if="it.type === 'enum'">
+                <el-select
+                  :model-value="String(valueOf(it))"
+                  :size="isMobile ? 'small' : 'default'"
+                  class="sr-input"
+                  @change="(v: string) => setText(it, v)"
+                >
+                  <el-option
+                    v-for="opt in (it.options ?? [])"
+                    :key="opt.value"
+                    :label="opt.label"
+                    :value="opt.value"
+                  />
+                </el-select>
+                <div class="sr-default text-muted">默认：{{ optionLabel(it, String(it.default)) }}</div>
+              </template>
               <template v-else-if="it.type === 'text'">
                 <el-input
                   :model-value="String(valueOf(it))"

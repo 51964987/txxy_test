@@ -127,6 +127,12 @@ TRASH_KEEP_DAYS = int(os.environ.get("TXXY_TRASH_KEEP_DAYS", "7"))
 # 前端 /api/config 读取该值，为 False 时不显示自动刷新开关、不启动轮询。
 ENABLE_AUTO_REFRESH = os.environ.get("TXXY_ENABLE_AUTO_REFRESH", "1").strip().lower() in ("1", "true", "yes", "on")
 
+# 内容资产「沉淀目标」（SLO 式进度）默认值：数据总览资产卡据此显示目标进度条与剩余缺口。
+# 归 config 的理由与 ENABLE_AUTO_REFRESH 同类——服务级展示口径的默认值，设置页只存覆盖值。
+# scope 三档与 /stats/assets 的分层沉淀率（coverage）key 一一对应。
+ASSET_GOAL_SCOPE = "top"   # all / engaged / top
+ASSET_GOAL_RATE = 50       # 目标覆盖率（%）
+
 def fid_name(fid: str) -> str:
     """版块 ID → 名称。唯一映射在 txxy_env.SECTIONS，抓取端（run_batch）与展示端
     共用同一份——此前各存一份、靠注释互相提醒「保持一致」，属典型手工同步债。"""

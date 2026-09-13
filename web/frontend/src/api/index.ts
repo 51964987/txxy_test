@@ -197,12 +197,6 @@ export interface TodayTopItem {
   is_new?: boolean
 }
 
-/** 每日互动量（本月最热卡头 sparkline 用） */
-export interface BoardDaily {
-  date: string
-  value: number
-}
-
 /** 榜单排序维度：综合互动量 / 点赞 / 回复 / 时间衰减热度 */
 export type BoardSort = 'engagement' | 'likes' | 'replies' | 'hot'
 
@@ -213,8 +207,6 @@ export interface TodayTop {
   total: number
   /** 时间窗内有数据的天数（最新最热恒为 1 / 本月最热=当月已入库天数） */
   days: number
-  /** 每日互动量分布（仅本月最热返回） */
-  daily?: BoardDaily[]
 }
 
 export interface TopAuthor {
@@ -240,10 +232,14 @@ export interface TopFid {
   value: number
 }
 
+/** 单日趋势点：metric=posts 时为发帖量，metric=engagement 时为互动量（点赞+回复） */
 export interface TrendPoint {
   date: string
-  count: number
+  value: number
 }
+
+/** 趋势口径：发帖量（供给侧）/ 互动量（需求侧） */
+export type TrendMetric = 'posts' | 'engagement'
 
 export interface TrendByFid {
   dates: string[]
@@ -294,6 +290,8 @@ export interface Health {
   run_lag_days: number | null
   level: 'ok' | 'warn' | 'danger'
   message: string
+  /** 最近一次新增本地资产距今的天数（null = 无可判定的时间戳，不产生告警） */
+  asset_stall_days?: number | null
 }
 
 /** 周期对比的单个窗口：近 N 天 vs 前 N 天（滚动窗口，与活跃榜 7d 环比同源） */
@@ -333,7 +331,73 @@ export interface PendingDownloads {
   downloaded: number
 }
 
-/** 内容 → 资产漏斗：收录 → 已下载帖 → 本地文件 → 占用体积 */
+/** 分层沉淀率单档（分母可解释：全库会被长尾稀释，必须分档看） */
+export interface AssetsCoverage {
+  key: 'all' | 'engaged' | 'top'
+  label: string
+  total: number
+  downloaded: number
+  rate: number
+}
+
+/** 资产五态摘要：库存以外的状态才是「是否在推进」的信号 */
+export interface AssetsState {
+  /** 在途：排队 / 下载中 */
+  active: number
+  /** 失败：最近一次尝试失败且此后未成功（持久于下载履历） */
+  failed: number
+  /** 可重下：曾成功但目录已被清理 */
+  re_download: number
+  /** 空壳：目录在、文件数为 0 */
+  empty_dirs: number
+  /** 缺口：近 gap_days 内互动≥1 且未沉淀（与帖子页「未下载」筛选同口径） */
+  gap_recent: number
+  gap_days: number
+  /** 同窗口内新增沉淀帖数 */
+  recent_posts: number
+}
+
+/** 对账：磁盘实际目录 vs 被履历认领的目录（三者互斥） */
+export interface AssetsReconcile {
+  claimed: number
+  unclaimed: number
+  empty: number
+}
+
+/** 分版块沉淀率（暴露「沉淀高度集中在少数版块」） */
+export interface AssetsFid {
+  fid: string | null
+  name: string
+  total: number
+  downloaded: number
+  rate: number
+}
+
+/** 资产增长曲线单点：某日首次沉淀的帖数与体积（体积按当前占用估算） */
+export interface AssetsGrowthPoint {
+  date: string
+  posts: number
+  size: number
+}
+
+/** 沉淀目标（SLO 式进度） */
+export interface AssetsGoal {
+  scope: 'all' | 'engaged' | 'top'
+  scope_label: string
+  target_rate: number
+  current_rate: number
+  total: number
+  downloaded: number
+  /** 距目标还差多少帖 */
+  remain: number
+  reached: boolean
+}
+
+/**
+ * 内容 → 资产漏斗 + 沉淀进度：收录 → 已沉淀帖 → 本地文件。
+ * 口径要点：漏斗三级同量纲（计数）；体积走 disk_total/disk_free + type_breakdown；
+ * coverage 分层（全库/互动≥N/TopN）；state 五态；reconcile 对账；growth 增长；goal 目标。
+ */
 export interface Assets {
   posts_total: number
   downloaded_posts: number
@@ -342,6 +406,15 @@ export interface Assets {
   size: number
   /** 按媒体类型拆分（image/video/torrent/text/other）的文件数与体积（字节） */
   type_breakdown: Record<string, { files: number; size: number }>
+  coverage: AssetsCoverage[]
+  state: AssetsState
+  reconcile: AssetsReconcile
+  by_fid: AssetsFid[]
+  growth: AssetsGrowthPoint[]
+  goal: AssetsGoal
+  /** 存储卷总容量 / 可用容量（字节，0 = 未知） */
+  disk_total: number
+  disk_free: number
 }
 
 /** 单个可设置参数的快照（后端 settings.WHITELIST 生成） */
@@ -351,7 +424,7 @@ export interface SettingItem {
   desc: string
   /** 生效范围：immediate=下一次调用即生效 / next_task=下一个任务生效 / frontend=前端直接应用 */
   scope: 'immediate' | 'next_task' | 'frontend'
-  type: 'int' | 'float' | 'bool' | 'array' | 'text'
+  type: 'int' | 'float' | 'bool' | 'array' | 'text' | 'enum'
   min?: number | null
   max?: number | null
   /** array 类型：可选项的键与展示标签 */
@@ -588,13 +661,15 @@ export const api = {
   topFids: (limit = 10, range = 'all') => get<TopFid[]>('/stats/top_fids', { limit, range }),
   monthTop: (limit = 10, sort: BoardSort = 'engagement') =>
     get<TodayTop>('/stats/month_top', { limit, sort }),
-  trend: (days: number) => get<TrendPoint[]>('/stats/trend', { days }),
+  /** 每日趋势：metric 默认 posts（发帖量），engagement = 互动量（点赞+回复） */
+  trend: (days: number, metric: TrendMetric = 'posts') =>
+    get<TrendPoint[]>('/stats/trend', { days, metric }),
   trendByFid: (days: number, top = 8) =>
     get<TrendByFid>('/stats/trend_by_fid', { days, top }),
   fidDist: () => get<FidDistItem[]>('/stats/fid_dist'),
   health: () => get<Health>('/stats/health'),
   compare: () => get<Compare>('/stats/compare'),
-  pendingDownloads: (limit = 8, days = 30) =>
+  pendingDownloads: (limit = 10, days = 30) =>
     get<PendingDownloads>('/stats/pending_downloads', { limit, days }),
   assets: () => get<Assets>('/stats/assets'),
   recent: (limit = 10) => get<Post[]>('/stats/recent', { limit }),
@@ -608,6 +683,9 @@ export const api = {
     /** 是否仅看「未下载」：排除已下载（目录仍在）与下载中的帖子，
      *  与数据总览「待下载推荐」下钻同口径（gone 视为「可重下」仍保留） */
     undownloaded?: boolean
+    /** 是否仅看「已下载」：只保留已落盘（目录仍在磁盘）的帖子，
+     *  与资产卡「已沉淀帖」下钻同口径（卡片多少条，列表就多少条） */
+    downloaded?: boolean
     /** 高级查询条件：条件树 JSON（可视化构建器）或表达式文本（高级模式），
      *  与 fid/日期/关键词/作者 这些基础筛选按 AND 合并 */
     adv?: string

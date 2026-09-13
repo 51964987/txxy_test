@@ -8,10 +8,12 @@
   回传保存目录（saved_dir，供资源管理页关联任务）与单链接耗时（elapsed）；
 - 任务状态与逐 URL 明细实时持久化到 config.DOWNLOAD_TASKS_FILE，服务重启不丢失；
   持久化时按 DOWNLOAD_TASK_MAX_KEEP 裁剪历史（仅删终态，防 JSON 无限膨胀）；
-- 下载履历（url -> saved_dir）独立持久化到 config.DOWNLOAD_HISTORY_FILE：任务列表
-  会被清空/轮转，但「已下载过」是持久事实，必须与任务分开留存（2026-09-11 修复：
-  此前清空任务会连「已下载」事实一起丢，导致资产漏斗归零、待下载推荐重复推荐）；
-  启动时从现存任务播种，并按「目录名 = 帖子标题」从 downloads/ 增量恢复
+- 下载履历（url -> {dir, first_at, checked_at, fail_at, fail_error}）独立持久化到
+  config.DOWNLOAD_HISTORY_FILE：任务列表会被清空/轮转，但「已下载过」是持久事实，
+  必须与任务分开留存（2026-09-11 修复：此前清空任务会连「已下载」事实一起丢，
+  导致资产漏斗归零、待下载推荐重复推荐）；2026-09-13 升维：新增首次落盘时间
+  （资产增长曲线 / 沉淀速率）与失败标记（失败清单不再随任务清理丢失）；
+  启动时从现存任务播种，并按 sanitize_title(标题) == 目录名 从 downloads/ 增量恢复
   （同时覆盖不经任务队列的 CLI 直接下载）；
 - 支持运行中任务取消（处理下一个 URL 前检查取消标志，已提交的并发项自然收尾）；
 - 支持排队任务插队（优先级队列 + 队列令牌校验，见 prioritize）与失败项重试（retry）。
@@ -39,6 +41,7 @@ from typing import Any, cast
 
 from atomicfile import write_json_atomic
 import config
+import db
 import resources
 import settings
 
@@ -267,9 +270,15 @@ class DownloadTaskManager:
         # 属性显式标注类型：类未用 @final 装饰时，basedpyright 要求类属性带注解
         self._lock: threading.Lock = threading.Lock()
         self._tasks: dict[str, dict[str, Any]] = {}
-        # 下载履历：url -> saved_dir（相对 downloads/）。独立于任务列表的持久「已下载」
-        # 记录——任务可被清空/轮转，履历不受影响（写入与恢复见 _load / _record_result）
-        self._history: dict[str, str] = {}
+        # 下载履历：url -> {dir, first_at, checked_at, fail_at, fail_error}。独立于任务列表的
+        # 持久「已下载」记录——任务可被清空/轮转，履历不受影响（写入与恢复见 _load / _record_result）。
+        # 字段含义（2026-09-13 由「url -> 目录名」升维，为资产进度提供时间与失败口径）：
+        #   dir        保存目录（相对 downloads/），判「是否已下载」仍以该目录是否在磁盘为准；
+        #   first_at   首次落盘时间 YYYY-MM-DD HH:MM:SS（资产增长曲线 / 沉淀速率用；None = 时间不可考）；
+        #   checked_at 最近一次结果确认时间；
+        #   fail_at    最近一次失败时间（成功即清空 —— 非空即「当前仍失败的缺口」）；
+        #   fail_error 最近一次失败原因（截断保存，供失败清单展示）。
+        self._history: dict[str, dict[str, Any]] = {}
         # 优先级队列：元素 (priority, seq, task_id)；priority 0 = 插队 / 1 = 普通，
         # seq 单调递增保证同优先级 FIFO，并作为任务出队令牌（见 prioritize）
         self._queue: "queue.Queue[tuple[int, int, str | None]]" = queue.PriorityQueue()
@@ -427,8 +436,8 @@ class DownloadTaskManager:
         轮转裁剪，履历独立留存（2026-09-11 修复：此前只看任务，清空后资产漏斗的
         「已下载帖」归零、待下载推荐重复推荐已下载帖子）。
         「是否已下载」的判据必须额外校验磁盘：跳过与否由 download_files 依据磁盘决定，
-        历史状态只能作参考。此判据被 dup_check（提交前提示）与 downloaded_urls
-        （大屏待下载队列 / 资产漏斗）共用，避免两处各写一套导致口径漂移。
+        历史状态只能作参考。此判据被 dup_check（提交前提示）与 asset_snapshot
+        （大屏待下载队列 / 资产漏斗 / 对账）共用，避免两处各写一套导致口径漂移。
         """
         alive: set[str] = set()
         gone: set[str] = set()
@@ -448,10 +457,10 @@ class DownloadTaskManager:
                         gone.add(url)
         # 下载履历：与任务项同一判据（目录仍在才算 alive；目录已删归入 gone，
         # dup_check 据此提示「会重新下载」，待下载推荐也据此重新纳入）
-        for url, rel in self._history.items():
+        for url, ent in self._history.items():
             if url in alive or url in active:
                 continue
-            if self._saved_dir_exists(rel):
+            if self._saved_dir_exists(str(ent.get("dir") or "")):
                 alive.add(url)
             else:
                 gone.add(url)
@@ -477,36 +486,56 @@ class DownloadTaskManager:
             "running": [u for u in urls if u in active],
         }
 
-    def downloaded_urls(self) -> set[str]:
-        """已落盘且文件仍在的下载 URL 集合（与 dup_check 的「文件仍在」同一判据）。
+    def asset_snapshot(self) -> dict[str, Any]:
+        """资产口径的唯一数据源（一次持锁 + 一次目录校验，替代此前按需逐个调用的多个 getter）。
 
-        供数据总览「待下载队列 / 资产漏斗」做差集：避免把已下载过的帖子再推荐一遍，
-        也避免把已被用户清理掉文件的帖子当成「已完成」而永远不推荐。
+        返回：
+        - `alive` / `gone` / `active`：URL 集合。「alive」= 已落盘且文件仍在（判「是否已下载」
+          的权威依据，供待下载队列排除与资产漏斗取交集）；「gone」= 曾成功但目录已清理
+          （供待下载推荐标「可重下」）；「active」= 排队/下载中（供排除并发重复提交）。
+        - `claimed_dirs`：被履历认领、且目录仍在磁盘的目录名集合（资产卡「对账」的已认领一侧）。
+        - `first_at`：{url: 首次落盘时间}（仅含 alive 且有时间戳的条目，资产增长曲线用）。
+        - `dir_of`：{url: 目录名}（仅含 alive 且目录非空的条目，增长曲线按目录聚合体积用）。
+        - `failures`：最近一次尝试失败且此后未成功的条目（真实「失败缺口」清单，任务面板
+          被清空也不会丢——这是履历从「只记成功」升级后新增的能力）。
+
+        集中在一次调用里算完的原因：资产卡需要同时用到五类信息，逐个 getter 会反复持锁并重复
+        全量校验目录存在性（履历条数 × N 次 stat）；且口径分散在多处必然漂移——本项目的
+        「已下载」判定只允许有这一条路径（内部仍复用 _classify_urls_locked，不另写判据）。
         """
         with self._lock:
-            alive, _, _ = self._classify_urls_locked()
-        return alive
-
-    def active_urls(self) -> set[str]:
-        """正在排队/下载中的 URL 集合（与 dup_check 的 running 同一判据）。
-
-        供待下载队列排除「已在下载中」的帖子，避免重复提交并发写同一文件。
-        """
-        with self._lock:
-            _, _, active = self._classify_urls_locked()
-        return active
-
-    def gone_urls(self) -> set[str]:
-        """历史曾成功（ok/skip）但保存目录已不在磁盘的下载 URL 集合。
-
-        供数据总览「待下载队列」标记「曾下载·已清理」状态：这些帖子被资源管理清空过
-        文件，会重新进入推荐位，前端据此打「可重下」标记，与「全新待下载」区分开，
-        避免用户困惑「我不是下过吗」。判据与 downloaded_urls 同源自 _classify_urls_locked，
-        不另写一套，保证口径一致。
-        """
-        with self._lock:
-            _, gone, _ = self._classify_urls_locked()
-        return gone
+            alive, gone, active = self._classify_urls_locked()
+            claimed_dirs: set[str] = set()
+            first_at: dict[str, str] = {}
+            dir_of: dict[str, str] = {}
+            failures: list[dict[str, str]] = []
+            for url, ent in self._history.items():
+                d = str(ent.get("dir") or "")
+                if url in alive:
+                    if d:
+                        claimed_dirs.add(d)
+                        dir_of[url] = d
+                    fa = ent.get("first_at")
+                    if fa:
+                        first_at[url] = str(fa)
+                elif ent.get("fail_at"):
+                    failures.append(
+                        {
+                            "url": url,
+                            "dir": d,
+                            "fail_at": str(ent.get("fail_at") or ""),
+                            "error": str(ent.get("fail_error") or ""),
+                        }
+                    )
+        return {
+            "alive": alive,
+            "gone": gone,
+            "active": active,
+            "claimed_dirs": claimed_dirs,
+            "first_at": first_at,
+            "dir_of": dir_of,
+            "failures": failures,
+        }
 
     def cancel(self, tid: str) -> bool:
         """取消未完成任务（pending/running）。
@@ -821,11 +850,11 @@ class DownloadTaskManager:
             item["status"] = "fail"
         if item["status"] in ("ok", "skip"):
             task["done"] += 1
-            # 下载履历：ok/skip 即「已下载」事实成立，立即记入履历（独立于任务列表，
-            # 任务后续被清空/轮转不影响资产漏斗与待下载推荐）；随下方 _save 一并落盘
-            if saved_dir:
-                with self._lock:
-                    self._history[item["url"]] = saved_dir
+        # 下载履历：成败都记（成功记「已落盘」事实与首次落盘时间，失败记「当前缺口」），
+        # 独立于任务列表——任务被清空/轮转不影响资产漏斗、待下载推荐与失败清单；
+        # 随下方 _save 一并落盘
+        with self._lock:
+            self._record_history_locked(item["url"], str(item["status"]), saved_dir, error)
         label = item["url"] if len(item["url"]) <= 60 else item["url"][:57] + "..."
         if item["status"] == "ok":
             parts = [f"{k} {v}" for k, v in stats.items() if k not in ("跳过", "失败")]
@@ -877,6 +906,41 @@ class DownloadTaskManager:
             pass
         self._persist_history_locked()
 
+    def _record_history_locked(
+        self, url: str, status: str, saved_dir: str | None, error: str | None
+    ) -> None:
+        """把单个 URL 的下载结果写入下载履历（须在持锁状态下调用）。
+
+        履历条目结构见 __init__ 的字段说明。两条关键规则：
+        - 成功（ok/skip）：目录存在即「沉淀事实」成立，`first_at` **只在缺失时**写入
+          （资产增长曲线据此判定「这一帖哪天沉淀的」，重复下载不得改写首见时间），
+          同时清空失败标记——成功的唯一口径是磁盘上确有内容；
+        - 失败（fail）：只更新失败标记，不动已记录的目录与首次时间，避免「重下一次失败」
+          把历史沉淀事实抹掉（该条目若目录仍在磁盘，仍会被判定为 alive，不会误报缺口）。
+        """
+        now = self._now()
+        ent = self._history.get(url)
+        if ent is None:
+            ent = {
+                "dir": "",
+                "first_at": None,
+                "checked_at": None,
+                "fail_at": None,
+                "fail_error": "",
+            }
+            self._history[url] = ent
+        if status in ("ok", "skip"):
+            if saved_dir:
+                ent["dir"] = saved_dir
+            if not ent.get("first_at"):
+                ent["first_at"] = now
+            ent["checked_at"] = now
+            ent["fail_at"] = None
+            ent["fail_error"] = ""
+        else:
+            ent["fail_at"] = now
+            ent["fail_error"] = (error or "")[:200]
+
     def _persist_history_locked(self) -> None:
         """在持锁状态下将下载履历写盘（须在持锁状态下调用）。
 
@@ -887,23 +951,49 @@ class DownloadTaskManager:
         except OSError:
             pass
 
+    @staticmethod
+    def _norm_history_entry(raw: Any) -> dict[str, Any]:
+        """把磁盘上的履历条目归一为统一结构（容器不可信，逐字段做类型防御）。
+
+        历史文件的旧形态是「url -> 目录名字符串」（2026-09-13 之前的写入格式），
+        此处一次性归一为对象形态（first_at 置空 = 时间不可考，不伪造时间），
+        归一后代码只认新结构，不保留兼容分支。
+        """
+        ent: dict[str, Any] = {
+            "dir": "",
+            "first_at": None,
+            "checked_at": None,
+            "fail_at": None,
+            "fail_error": "",
+        }
+        if isinstance(raw, str):
+            ent["dir"] = raw
+        elif isinstance(raw, dict):
+            ent["dir"] = str(raw.get("dir") or "")
+            for k in ("first_at", "checked_at", "fail_at"):
+                v = raw.get(k)
+                ent[k] = str(v) if v else None
+            ent["fail_error"] = str(raw.get("fail_error") or "")
+        return ent
+
     def _load(self) -> None:
         """启动时恢复历史任务与下载履历：终态保留；非终态（中断的 running/pending）标记为 failed。
 
-        履历三步：① 读履历文件；② 从现存任务的 ok/skip 条目播种（一次性迁移）；
-        ③ 按「目录名 = 帖子标题」从 downloads/ 增量恢复（覆盖任务被清空后的存量
-        与不经任务队列的 CLI 直接下载）。
+        履历三步：① 读履历文件（旧字符串形态一次性归一为对象形态）；
+        ② 从现存任务的 ok/skip 条目播种（一次性迁移，首次落盘时间取该任务的结束时刻近似）；
+        ③ 按 sanitize_title(标题) == 目录名 从 downloads/ 增量恢复（覆盖任务被清空后的存量
+        与不经任务队列的 CLI 直接下载；目录名是标题经清理 + 截断的结果，故必须用同一函数比对）。
         """
-        # ① 下载履历：url -> saved_dir（独立文件，内容不可信时按空处理）
+        # ① 下载履历：url -> {dir, first_at, ...}（独立文件，内容不可信时按空处理）
         try:
             raw_history: Any = json.loads(
                 config.DOWNLOAD_HISTORY_FILE.read_text(encoding="utf-8")
             )
             if isinstance(raw_history, dict):
                 self._history = {
-                    str(k): str(v)
+                    str(k): self._norm_history_entry(v)
                     for k, v in raw_history.items()
-                    if isinstance(k, str) and isinstance(v, str) and k and v
+                    if isinstance(k, str) and k
                 }
         except (OSError, ValueError):
             self._history = {}
@@ -961,21 +1051,33 @@ class DownloadTaskManager:
 
         # ② 播种：把现存任务中「历史成功（ok/skip）」的条目并入履历。
         # 修复上线前履历不存在，若不播种，这些任务将来被清空/轮转后「已下载」事实即丢失。
+        # first_at 取该任务的结束时刻近似（任务内是并发逐链接下载，未留逐链接时间戳）——
+        # 明确是近似值；缺失则留空，不伪造时间。
         seeded = False
         for t in self._tasks.values():
             for it in t.get("items", []):
                 url = it.get("url")
                 sd = it.get("saved_dir")
                 if url and sd and it.get("status") in ("ok", "skip") and url not in self._history:
-                    self._history[url] = sd
+                    finished = str(t.get("finished_at") or "") or None
+                    self._history[url] = {
+                        "dir": sd,
+                        "first_at": finished,
+                        "checked_at": finished,
+                        "fail_at": None,
+                        "fail_error": "",
+                    }
                     seeded = True
 
-        # ③ 磁盘恢复：downloads/ 下有内容但履历未知的目录，按「目录名 = 帖子标题」
-        # 精确匹配回溯来源帖（复用 resources.source_lookup，仅接受标题全等的精确命中；
-        # 模糊命中不入履历——误配会把未下载的帖子错误排除出待下载推荐）。
+        # ③ 磁盘恢复：downloads/ 下有内容但履历未知的目录，反查来源帖并入履历。
+        # 判据 = sanitize_title(库内标题) == 目录名（resources.match_dirs_to_posts，唯一实现）：
+        # 目录名是标题经「非法字符替换 + 截断 80 字符」后的结果，直接用「目录名 == 标题」
+        # 全等匹配会漏掉长标题与含非法字符的标题（实测两个长标题帖因此长期未被认领，
+        # 资产漏斗少计、并在待下载推荐里被重复推荐）。
         # 每次启动做一次增量：只处理履历中没有的目录，新目录（含 CLI 下载）下次启动自愈。
         recovered = False
-        known_dirs = set(self._history.values())
+        known_dirs = {str(e.get("dir") or "") for e in self._history.values()}
+        unknown: list[str] = []
         try:
             for entry in os.scandir(config.DOWNLOADS_DIR):
                 if not entry.is_dir() or entry.name in known_dirs:
@@ -983,16 +1085,19 @@ class DownloadTaskManager:
                 # 空目录多为失败/取消残留，不入履历（与 _saved_dir_exists 同一判据）
                 if not self._saved_dir_exists(entry.name):
                     continue
-                hit = resources.source_lookup(entry.name, exact_only=True)
-                if not hit.get("matched") or hit.get("title") != entry.name:
-                    continue
-                url = hit.get("url")
-                if url:
-                    self._history[url] = entry.name
-                    known_dirs.add(entry.name)
-                    recovered = True
+                unknown.append(entry.name)
         except OSError:
-            pass
+            unknown = []
+        for d_name, d_url in resources.match_dirs_to_posts(set(unknown)).items():
+            # 键统一用展示域名形态的 URL（与既有履历键格式一致，避免同一帖出现两个键）
+            self._history[db.normalize_url(d_url)] = {
+                "dir": d_name,
+                "first_at": None,  # 磁盘恢复的目录无从得知落盘时间，留空（时间不可考）
+                "checked_at": self._now(),
+                "fail_at": None,
+                "fail_error": "",
+            }
+            recovered = True
 
         if seeded or recovered:
             self._persist_history_locked()

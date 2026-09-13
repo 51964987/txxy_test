@@ -9,7 +9,7 @@
 import sqlite3
 import time
 from datetime import date
-from typing import Any, Callable, Iterator
+from typing import Any, Callable, Generator
 
 import config
 
@@ -88,8 +88,18 @@ def _dsn() -> str:
     return str(config.DB_FILE).replace("\\", "/")
 
 
-def open_conn() -> sqlite3.Connection:
-    conn = sqlite3.connect(_dsn(), timeout=15)
+def open_conn(*, cross_thread: bool = False) -> sqlite3.Connection:
+    """打开只读连接（row_factory + query_only + busy_timeout + hot_score 注册的唯一入口）。
+
+    cross_thread=True 时以 check_same_thread=False 创建，仅供 iter_query 的**流式响应**场景：
+    FastAPI 的 StreamingResponse 会把同步生成器交给线程池迭代（anyio.to_thread），每次
+    next() 可能落在不同 worker 线程，默认的线程亲和校验会在迭代中途抛
+    `sqlite3.ProgrammingError: SQLite objects created in a thread can only be used in that
+    same thread`，表现为响应中断、CSV 导出被截断（2026-09-13 实测：全库导出只落 4 万余行）。
+    sqlite3 默认 serialized 线程模式，同一连接**顺序**跨线程使用是安全的（流式场景无并发访问）。
+    其余调用保持默认校验，跨线程误用会立刻报错而不是静默出错。
+    """
+    conn = sqlite3.connect(_dsn(), timeout=15, check_same_thread=not cross_thread)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA query_only = ON")
     conn.execute("PRAGMA busy_timeout = 15000")
@@ -106,9 +116,16 @@ def query(sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
         conn.close()
 
 
-def iter_query(sql: str, params: tuple[Any, ...] = ()) -> Iterator[sqlite3.Row]:
-    """流式查询：调用方必须在迭代结束后释放（连接随生成器关闭）。"""
-    conn = open_conn()
+def iter_query(sql: str, params: tuple[Any, ...] = ()) -> Generator[sqlite3.Row, None, None]:
+    """流式查询：调用方必须在迭代结束后释放（连接随生成器关闭）。
+
+    返回类型标为 Generator 而非 Iterator，是为了让「提前 break 后显式 rows.close()」
+    能通过类型检查——大表扫描需要在命中即停时立刻释放连接，不等垃圾回收。
+
+    连接以 cross_thread=True 打开：本函数专供流式响应（CSV 导出、大表扫描），
+    迭代可能发生在与创建不同的线程上，详见 open_conn 的说明。
+    """
+    conn = open_conn(cross_thread=True)
     try:
         for row in conn.execute(sql, params):
             yield row
