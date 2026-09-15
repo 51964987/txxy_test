@@ -55,10 +55,15 @@ const canSubmit = computed(() => parsedUrls.value.length > 0)
 
 // ---- D3 状态筛选与汇总 ----
 const TERMINAL = ['done', 'failed', 'cancelled']
-const filterStatus = ref<'all' | 'active' | 'done' | 'failed' | 'cancelled'>('all')
+/** 可「开始下载」的状态：失败 / 已取消（重跑未成功链接）、已暂停（继续未完成链接） */
+const STARTABLE = ['failed', 'cancelled', 'paused']
+/** 可「暂停」的状态：排队中 / 下载中（在跑的链接收尾后不再提交新链接） */
+const PAUSABLE = ['running', 'pending']
+const filterStatus = ref<'all' | 'active' | 'paused' | 'done' | 'failed' | 'cancelled'>('all')
 const activeCount = computed(
   () => tasks.value.filter((t) => t.status === 'running' || t.status === 'pending').length,
 )
+const pausedCount = computed(() => tasks.value.filter((t) => t.status === 'paused').length)
 const doneCount = computed(() => tasks.value.filter((t) => t.status === 'done').length)
 const failedCount = computed(() => tasks.value.filter((t) => t.status === 'failed').length)
 const cancelledCount = computed(
@@ -67,17 +72,29 @@ const cancelledCount = computed(
 const filterOptions = computed(() => [
   { label: `全部（${tasks.value.length}）`, value: 'all' },
   { label: `进行中（${activeCount.value}）`, value: 'active' },
+  { label: `已暂停（${pausedCount.value}）`, value: 'paused' },
   { label: `已完成（${doneCount.value}）`, value: 'done' },
   { label: `失败（${failedCount.value}）`, value: 'failed' },
   { label: `已取消（${cancelledCount.value}）`, value: 'cancelled' },
 ])
-/** 状态展示优先级：正在下载 → 排队中 → 失败 → 已取消 → 已完成。
+/** 状态展示优先级：正在下载 → 排队中 → 已暂停 → 失败 → 已取消 → 已完成。
  *  后端按 dict 遍历返回，顺序与状态无关且刷新可能变化，故在展示层统一排序，
  *  保证「刷新前后位置不变、运行中的始终在最前」；终态内「已完成」排在「已取消」
- *  之后沉底——历史成功任务不再干扰对失败/已取消任务的后续处理。 */
-const STATUS_RANK: Record<string, number> = { running: 0, pending: 1, failed: 2, cancelled: 3, done: 4 }
+ *  之后沉底——历史成功任务不再干扰对失败/已取消任务的后续处理。
+ *  「已暂停」紧随「排队中」：它是**待用户处置**的状态（点「开始下载」即可继续），
+ *  排在失败之前——用户第一眼就该看到「有任务被我暂停着」。 */
+const STATUS_RANK: Record<string, number> = {
+  running: 0,
+  pending: 1,
+  paused: 2,
+  failed: 3,
+  cancelled: 4,
+  done: 5,
+}
+/** 未知状态的兜底序号：与「失败」同级（既非进行中也非已完成，需用户关注） */
+const STATUS_RANK_FALLBACK = 3
 function statusRank(status: string): number {
-  return STATUS_RANK[status] ?? 2
+  return STATUS_RANK[status] ?? STATUS_RANK_FALLBACK
 }
 
 const filteredTasks = computed<DownloadTaskSummary[]>(() => {
@@ -121,6 +138,80 @@ const pagedTasks = computed(() =>
 // 切换状态筛选时回到第一页，避免停留在超出范围的页码
 watch(filterStatus, () => {
   taskPage.value = 1
+})
+
+// ---- 任务勾选：工具栏「开始下载 / 全部暂停」的作用域 ----
+/** 勾选集合以任务 ID 为键：SSE 每 500ms 推送会整体替换任务数组、翻页也会换一批行，
+ *  但勾选跟着任务走（与资源管理页「选中跟条目走，不跟视图走」同一策略）——
+ *  否则一边看着选中状态一边被推送清空，用户会以为勾选失效。
+ *  刻意不用 el-table 的 type="selection"：其内部选中态与移动端卡片是两套状态，
+ *  需双向同步（reserve-selection + toggleRowSelection），一处漏同步即两端不一致；
+ *  自持 Set 则桌面与移动端天然同源。 */
+const selectedIds = ref<Set<string>>(new Set())
+const selectedTasks = computed(() => tasks.value.filter((t) => selectedIds.value.has(t.id)))
+// 列表刷新后裁剪勾选：已被清空/轮转掉的任务移出选中集合，避免提交无效 ID
+watch(tasks, (list) => {
+  if (!selectedIds.value.size) return
+  const alive = new Set(list.map((t) => t.id))
+  const next = new Set([...selectedIds.value].filter((id) => alive.has(id)))
+  if (next.size !== selectedIds.value.size) selectedIds.value = next
+})
+function isSelected(id: string): boolean {
+  return selectedIds.value.has(id)
+}
+function toggleSelect(id: string) {
+  const next = new Set(selectedIds.value)
+  if (next.has(id)) next.delete(id)
+  else next.add(id)
+  selectedIds.value = next
+}
+/** 表头复选框作用域 = 当前页（与分页一致，不做「跨页隐式全选」） */
+const pageAllSelected = computed(
+  () => pagedTasks.value.length > 0 && pagedTasks.value.every((t) => selectedIds.value.has(t.id)),
+)
+const pageSomeSelected = computed(() => pagedTasks.value.some((t) => selectedIds.value.has(t.id)))
+function toggleSelectPage() {
+  const next = new Set(selectedIds.value)
+  if (pageAllSelected.value) {
+    for (const t of pagedTasks.value) next.delete(t.id)
+  } else {
+    for (const t of pagedTasks.value) next.add(t.id)
+  }
+  selectedIds.value = next
+}
+
+// ---- 主操作按钮：无在途任务时是「开始下载」，有在途任务时自动切换为「全部暂停」 ----
+/** 在途集合（排队中 + 下载中）：口径与统计卡「进行中」一致——
+ *  按钮语义与用户看到的数字必须同源，否则「进行中 0」却显示「全部暂停」会被当成 bug。 */
+const pausableAll = computed(() => tasks.value.filter((t) => PAUSABLE.includes(t.status)))
+const startableSelected = computed(() =>
+  selectedTasks.value.filter((t) => STARTABLE.includes(t.status)),
+)
+const pausableSelected = computed(() =>
+  selectedTasks.value.filter((t) => PAUSABLE.includes(t.status)),
+)
+const pauseMode = computed(() => pausableAll.value.length > 0)
+/** 暂停作用域：勾选了在途任务就只暂停这些（用户点名）；否则按按钮文案「全部暂停」作用于全部在途任务 */
+const pauseTargets = computed(() =>
+  pausableSelected.value.length ? pausableSelected.value : pausableAll.value,
+)
+/** 主按钮本次点击影响的任务数（显示在按钮上，让作用域可见，不必点下去才知道） */
+const primaryCount = computed(() =>
+  pauseMode.value ? pauseTargets.value.length : startableSelected.value.length,
+)
+const primaryLabel = computed(() => (pauseMode.value ? '全部暂停' : '开始下载'))
+const primaryDisabled = computed(() => (pauseMode.value ? false : startableSelected.value.length === 0))
+const primaryTip = computed(() => {
+  if (pauseMode.value) {
+    const n = pausableSelected.value.length
+    return n
+      ? `暂停勾选的 ${n} 个任务：不再提交新链接，已提交的链接收尾后停止；剩余链接可再「开始下载」继续`
+      : `未勾选任务，将暂停全部 ${pausableAll.value.length} 个进行中任务；剩余链接可再「开始下载」继续`
+  }
+  const n = startableSelected.value.length
+  return n
+    ? `下载勾选 ${n} 个任务中未完成的链接（在原任务内继续，已成功的链接不重复下载）`
+    : '先勾选未完成的任务（失败 / 已取消 / 已暂停），再点「开始下载」'
 })
 
 // ---- D2 重复提交提醒：区分「文件仍在 / 已不在 / 正在下载」三类 ----
@@ -204,7 +295,7 @@ function diffAndNotify(list: DownloadTaskSummary[]) {
       } else if (t.status === 'failed') {
         ElNotification.error({
           title: '下载任务失败',
-          message: '任务执行中断，可在列表中点击「重试」重跑未成功链接',
+          message: '任务执行中断，可在列表中点击「下载」重跑未成功链接',
         })
       } else if (t.status === 'cancelled') {
         ElNotification.info({ title: '下载任务已取消', message: `已完成 ${t.done}/${t.total}` })
@@ -215,15 +306,64 @@ function diffAndNotify(list: DownloadTaskSummary[]) {
 }
 
 // ---- D1/D5/D9 任务操作 ----
-async function retryTask(row: DownloadTaskSummary) {
+/** 被跳过的任务按原因归并成一句话（如「正在下载 2 个、已完成 1 个」）：
+ *  用户关心的是「为什么没开始」，逐条罗列任务 ID 没有信息量。 */
+function skipSummary(skipped: { reason: string }[]): string {
+  const byReason = new Map<string, number>()
+  for (const s of skipped) byReason.set(s.reason, (byReason.get(s.reason) ?? 0) + 1)
+  return [...byReason.entries()].map(([reason, n]) => `${reason} ${n} 个`).join('、')
+}
+
+/** 开始下载（批量与行内共用一套）：失败 / 已取消任务重跑未成功链接、已暂停任务继续未完成链接。
+ *  行内「下载」= 只传 1 个 ID 的同一调用，故两个入口的语义与提示天然一致。 */
+async function startTasks(list: DownloadTaskSummary[]) {
+  if (!list.length) {
+    ElMessage.warning('请先勾选未完成的任务（失败 / 已取消 / 已暂停）')
+    return
+  }
   try {
-    const r = await api.retryDownload(row.id)
-    ElMessage.success(`已在原任务内重跑 ${r.retried} 个未成功链接`)
+    const r = await api.startDownloads(list.map((t) => t.id))
+    if (r.ids.length) ElMessage.success(`已开始 ${r.ids.length} 个任务（共 ${r.links} 个链接）`)
+    // 跳过原因如实回传：静默忽略会让用户以为按钮没生效（与后端「不静默丢弃」对偶）
+    if (r.skipped.length) ElMessage.warning(`跳过 ${r.skipped.length} 个：${skipSummary(r.skipped)}`)
+    if (!r.ids.length && !r.skipped.length) ElMessage.info('没有可下载的链接')
     await loadTasks()
   } catch (e) {
     if (isAborted(e)) return
-    ElMessage.error(`重试失败: ${(e as Error).message}`)
+    ElMessage.error(`开始下载失败: ${(e as Error).message}`)
   }
+}
+
+/** 暂停（非终态）：不再提交新链接，未跑链接保留，可再「开始下载」继续 */
+async function pauseTasks(list: DownloadTaskSummary[]) {
+  if (!list.length) {
+    ElMessage.info('当前没有进行中的任务')
+    return
+  }
+  try {
+    const r = await api.pauseDownloads(list.map((t) => t.id))
+    if (r.ids.length) {
+      ElMessage.success(
+        `已暂停 ${r.ids.length} 个任务${r.links ? `（剩余 ${r.links} 个链接）` : ''}`,
+      )
+    }
+    if (r.skipped.length) ElMessage.warning(`跳过 ${r.skipped.length} 个：${skipSummary(r.skipped)}`)
+    await loadTasks()
+  } catch (e) {
+    if (isAborted(e)) return
+    ElMessage.error(`暂停失败: ${(e as Error).message}`)
+  }
+}
+
+/** 行内「下载」：失败 / 已取消（重跑未成功链接）、已暂停（继续未完成链接） */
+function downloadTask(row: DownloadTaskSummary) {
+  void startTasks([row])
+}
+
+/** 工具栏主按钮：有在途任务 → 全部暂停（勾选了在途任务则只暂停勾选的）；否则 → 开始下载勾选的未完成任务 */
+function onPrimaryAction() {
+  if (pauseMode.value) void pauseTasks(pauseTargets.value)
+  else void startTasks(startableSelected.value)
 }
 
 async function prioritizeTask(row: DownloadTaskSummary) {
@@ -329,7 +469,7 @@ const logsBoxRef = ref()
 const MAX_DETAIL_LINES = 300
 
 /** 解析任务日志：非缩进行为任务事件 / 逐 URL 结果摘要；
-      *  缩进的 [i/N] 行（下载过程明细）归入对应链接组，供折叠展示 */
+ *  缩进的 [i/N] 行（下载过程明细）归入对应链接组，供折叠展示 */
 const parsedLogs = computed(() => {
   const events: string[] = []
   /** 每个链接一组：必须按 seq 聚合，不能按出现顺序分组——
@@ -380,7 +520,7 @@ const parsedLogs = computed(() => {
 
   // 排序口径：按「最后一次活动时间」升序（业界 CI 日志面板做法——时间序流、最新在最后，
   // 配合已有的自动跟随到底部即 tail -f 体验），而不是按链接序号升序。
-  // 原因：重试 / 单条重新下载只跑未成功的链接，其序号往往更小——按序号排会让
+  // 原因：重下（行内「下载」/ 单条「重新下载」）只跑未成功的链接，其序号往往更小——按序号排会让
   // 正在输出的新日志落在列表中间的面板里，用户滚到底反而看不到最新内容。
   const groups = [...groupMap.values()]
     .filter((g) => g.lines.length > 0)
@@ -412,119 +552,120 @@ watch(
   () => detailTask.value?.logs?.length,
   async () => {
     await nextTick()
-    const box = (logsBoxRef.value as { textarea?: HTMLTextAreaElement } | undefined)
-              ?.textarea
-            if (box) box.scrollTop = box.scrollHeight
-          },
-        )
+    const box = (logsBoxRef.value as { textarea?: HTMLTextAreaElement } | undefined)?.textarea
+    if (box) box.scrollTop = box.scrollHeight
+  },
+)
 
-    // ---- 「按链接明细」固定高度日志窗：内容增长时自动跟随到底部 ----
-    const detailScrollRef = ref<HTMLElement | null>(null)
-    /** 是否跟随最新：用户上翻查看历史时自动关闭，滚回底部自动恢复 */
-    const followLatest = ref(true)
+// ---- 「按链接明细」固定高度日志窗：内容增长时自动跟随到底部 ----
+const detailScrollRef = ref<HTMLElement | null>(null)
+/** 是否跟随最新：用户上翻查看历史时自动关闭，滚回底部自动恢复 */
+const followLatest = ref(true)
 
-    // ---- 链接明细：统计 + 状态筛选（几十条明细按业界 CI 做法：异常优先、可筛选） ----
-    /** 明细状态筛选：all=全部 / problem=异常（失败+取消）/ ok=成功 */
-    const itemFilter = ref<'all' | 'problem' | 'ok'>('all')
+// ---- 链接明细：统计 + 状态筛选（几十条明细按业界 CI 做法：异常优先、可筛选） ----
+/** 明细状态筛选：all=全部 / problem=异常（失败+取消）/ ok=成功 */
+const itemFilter = ref<'all' | 'problem' | 'ok'>('all')
 
-    const itemStats = computed(() => {
-      const items = detailTask.value?.items ?? []
-      const n = (s: string) => items.filter((i) => i.status === s).length
-      const ok = n('ok')
-      const fail = n('fail')
-      const cancelled = n('cancelled')
-      return { total: items.length, ok, fail, cancelled, skip: n('skip'), problem: fail + cancelled }
-    })
+const itemStats = computed(() => {
+  const items = detailTask.value?.items ?? []
+  const n = (s: string) => items.filter((i) => i.status === s).length
+  const ok = n('ok')
+  const fail = n('fail')
+  const cancelled = n('cancelled')
+  return { total: items.length, ok, fail, cancelled, skip: n('skip'), problem: fail + cancelled }
+})
 
-    /** 异常优先排序 + 状态筛选：让用户第一眼看到需要处理的链接 */
-    const filteredItems = computed(() => {
-      const items = [...(detailTask.value?.items ?? [])]
-      // 异常（fail/cancelled）在前，其次 pending/running，成功与跳过在后
-      const rank: Record<string, number> = { fail: 0, cancelled: 0, running: 1, pending: 1 }
-      items.sort((a, b) => (rank[a.status] ?? 2) - (rank[b.status] ?? 2))
-      if (itemFilter.value === 'problem') return items.filter((i) => (rank[i.status] ?? 2) === 0)
-      if (itemFilter.value === 'ok') return items.filter((i) => i.status === 'ok' || i.status === 'skip')
-      return items
-    })
+/** 异常优先排序 + 状态筛选：让用户第一眼看到需要处理的链接 */
+const filteredItems = computed(() => {
+  const items = [...(detailTask.value?.items ?? [])]
+  // 异常（fail/cancelled）在前，其次 pending/running，成功与跳过在后
+  const rank: Record<string, number> = { fail: 0, cancelled: 0, running: 1, pending: 1 }
+  items.sort((a, b) => (rank[a.status] ?? 2) - (rank[b.status] ?? 2))
+  if (itemFilter.value === 'problem') return items.filter((i) => (rank[i.status] ?? 2) === 0)
+  if (itemFilter.value === 'ok') return items.filter((i) => i.status === 'ok' || i.status === 'skip')
+  return items
+})
 
-    /** 明细分页：几十上百条链接全量渲染既卡又难翻找，数据已在内存，前端切片分页 */
-    const ITEM_PAGE_SIZE = 20
-    const itemPage = ref(1)
-    const pagedItems = computed(() =>
-      filteredItems.value.slice(
-        (itemPage.value - 1) * ITEM_PAGE_SIZE,
-        itemPage.value * ITEM_PAGE_SIZE,
-      ),
-    )
-    // 序号列跨页连续显示（第 2 页从 21 开始，而非每页重新从 1 计数）
-    function itemIndex(i: number): number {
-      return (itemPage.value - 1) * ITEM_PAGE_SIZE + i + 1
-    }
-    // 切换任务或筛选条件时回到第一页，避免停留在超出范围的页码
-    watch([itemFilter, () => detailTask.value?.id], () => {
-      itemPage.value = 1
-    })
+/** 明细分页：几十上百条链接全量渲染既卡又难翻找，数据已在内存，前端切片分页 */
+const ITEM_PAGE_SIZE = 20
+const itemPage = ref(1)
+const pagedItems = computed(() =>
+  filteredItems.value.slice(
+    (itemPage.value - 1) * ITEM_PAGE_SIZE,
+    itemPage.value * ITEM_PAGE_SIZE,
+  ),
+)
+// 序号列跨页连续显示（第 2 页从 21 开始，而非每页重新从 1 计数）
+function itemIndex(i: number): number {
+  return (itemPage.value - 1) * ITEM_PAGE_SIZE + i + 1
+}
+// 切换任务或筛选条件时回到第一页，避免停留在超出范围的页码
+watch([itemFilter, () => detailTask.value?.id], () => {
+  itemPage.value = 1
+})
 
-    /** 明细行「重新下载」的可用性与提示：成功/跳过无需重下，进行中/排队中不可重下 */
-    function itemRetryDisabled(status: string): boolean {
-      return status === 'ok' || status === 'skip' || status === 'running' || status === 'pending'
-    }
-    function itemRetryTip(status: string): string {
-      if (status === 'ok' || status === 'skip') return '该链接已成功，无需重下'
-      if (status === 'running' || status === 'pending') return '该链接正在下载或排队中，暂不能重下'
-      return '重新下载该链接（在本任务内重跑，结果显示在当前详情）'
-    }
+/** 明细行「重新下载」的可用性与提示：成功/跳过无需重下，进行中/排队中不可重下 */
+function itemRetryDisabled(status: string): boolean {
+  return status === 'ok' || status === 'skip' || status === 'running' || status === 'pending'
+}
+function itemRetryTip(status: string): string {
+  if (status === 'ok' || status === 'skip') return '该链接已成功，无需重下'
+  if (status === 'running' || status === 'pending') return '该链接正在下载或排队中，暂不能重下'
+  return '重新下载该链接（在本任务内重跑，结果显示在当前详情）'
+}
 
-    /** 重新下载单条链接：就地重跑原任务的该链接（不另开任务），结果显示在当前详情页 */
-    async function retryItem(row: { url: string; status: string }) {
-      const tid = detailTask.value?.id
-      if (!tid) return
-      try {
-        await api.retryDownloadUrl(tid, row.url)
-        ElMessage.success('已在本任务内重新下载，可在当前页面查看进度')
-      } catch (e) {
-        if (isAborted(e)) return
-        ElMessage.error(`重新下载失败: ${(e as Error).message}`)
-      }
-    }
+/** 重新下载单条链接：就地重跑原任务的该链接（不另开任务），结果显示在当前详情页 */
+async function retryItem(row: { url: string; status: string }) {
+  const tid = detailTask.value?.id
+  if (!tid) return
+  try {
+    await api.retryDownloadUrl(tid, row.url)
+    ElMessage.success('已在本任务内重新下载，可在当前页面查看进度')
+  } catch (e) {
+    if (isAborted(e)) return
+    ElMessage.error(`重新下载失败: ${(e as Error).message}`)
+  }
+}
 
-    /** 日志指纹：行数 + 末行内容，任一变化即视为有新输出 */
-    const detailLogKey = computed(() => {
-      const logs = detailTask.value?.logs ?? []
-      return `${logs.length}:${logs[logs.length - 1] ?? ''}`
-    })
+/** 日志指纹：行数 + 末行内容，任一变化即视为有新输出 */
+const detailLogKey = computed(() => {
+  const logs = detailTask.value?.logs ?? []
+  return `${logs.length}:${logs[logs.length - 1] ?? ''}`
+})
 
-    function onDetailScroll() {
-      const el = detailScrollRef.value
-      if (!el) return
-      // 距底部 24px 内视为「在底部」，恢复跟随
-      followLatest.value = el.scrollHeight - el.scrollTop - el.clientHeight < 24
-    }
+function onDetailScroll() {
+  const el = detailScrollRef.value
+  if (!el) return
+  // 距底部 24px 内视为「在底部」，恢复跟随
+  followLatest.value = el.scrollHeight - el.scrollTop - el.clientHeight < 24
+}
 
-    watch(detailLogKey, async () => {
-      if (!followLatest.value) return
-      await nextTick()
-      const el = detailScrollRef.value
-      if (el) el.scrollTop = el.scrollHeight
-    })
+watch(detailLogKey, async () => {
+  if (!followLatest.value) return
+  await nextTick()
+  const el = detailScrollRef.value
+  if (el) el.scrollTop = el.scrollHeight
+})
 
-    /** 切换任务时也回到顶部重新跟随 */
-    watch(detailId, () => {
-      followLatest.value = true
-    })
+/** 切换任务时也回到顶部重新跟随 */
+watch(detailId, () => {
+  followLatest.value = true
+})
 
 function statusTagType(status: string): string {
   if (status === 'done') return 'success'
   if (status === 'failed') return 'danger'
   if (status === 'running') return 'primary'
-  if (status === 'pending') return 'info'
-  return 'warning' // cancelled
+  // 已暂停用 warning（需用户处置的临时态，需被一眼看到）；已取消改为 info（用户主动结束的终态）
+  if (status === 'paused') return 'warning'
+  return 'info' // pending / cancelled
 }
 
 function statusText(status: string): string {
   const map: Record<string, string> = {
     pending: '排队中',
     running: '下载中',
+    paused: '已暂停',
     done: '已完成',
     failed: '失败',
     cancelled: '已取消',
@@ -696,13 +837,34 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <!-- D3 状态筛选 + D9 清空历史 + R2 实时通道标识 -->
+      <!-- D3 状态筛选 + 批量开始/暂停 + D9 清空历史 + R2 实时通道标识 -->
       <div class="toolbar">
-        <el-segmented v-model="filterStatus" :options="filterOptions" />
+        <!-- 筛选项较多（6 个），窄屏放不下：外层可横向滑动，避免选项被裁掉 -->
+        <div class="filter-scroll">
+          <el-segmented v-model="filterStatus" :options="filterOptions" />
+        </div>
         <span v-if="usingSse" class="sse-badge" title="服务端推送，进度亚秒级更新">实时推送</span>
-        <!-- 只清「已完成」（done）任务：失败 / 已取消保留（2026-09-07 经用户确认变更）；
-             自动轮转（TXXY_DOWNLOAD_TASK_MAX_KEEP）仍按全部终态裁剪以防持久化膨胀 -->
-        <el-button class="clear-btn" @click="clearFinished">清空已完成</el-button>
+        <div class="toolbar-right">
+          <!-- 勾选数常驻占位改为「有勾选才显示」：无勾选时不留空标签 -->
+          <span v-if="selectedIds.size" class="sel-hint">已勾选 {{ selectedIds.size }} 个</span>
+          <!-- 单一主操作按钮：无在途任务=「开始下载」（作用于勾选的未完成任务，未勾选则禁用）；
+               有在途任务=「全部暂停」（作用于勾选的在途任务，未勾选则作用于全部在途任务）。
+               按钮上的数字即本次点击的影响范围，作用域不必点下去才知道 -->
+          <el-tooltip :content="primaryTip" placement="top">
+            <span class="tip-wrap">
+              <el-button
+                :type="pauseMode ? 'warning' : 'primary'"
+                :disabled="primaryDisabled"
+                @click="onPrimaryAction"
+              >
+                {{ primaryLabel }}<template v-if="primaryCount">（{{ primaryCount }}）</template>
+              </el-button>
+            </span>
+          </el-tooltip>
+          <!-- 只清「已完成」（done）任务：失败 / 已取消保留（2026-09-07 经用户确认变更）；
+               自动轮转（TXXY_DOWNLOAD_TASK_MAX_KEEP）仍按全部终态裁剪以防持久化膨胀 -->
+          <el-button class="clear-btn" @click="clearFinished">清空已完成</el-button>
+        </div>
       </div>
 
       <div v-if="error" class="poll-error">
@@ -710,6 +872,19 @@ onBeforeUnmount(() => {
       </div>
 
       <el-table v-if="!isMobile" :data="pagedTasks" size="default" style="width: 100%">
+        <!-- 勾选列（自持选中集合，与移动端卡片同源）：表头复选框作用域 = 当前页 -->
+        <el-table-column width="42" align="center">
+          <template #header>
+            <el-checkbox
+              :model-value="pageAllSelected"
+              :indeterminate="pageSomeSelected && !pageAllSelected"
+              @change="toggleSelectPage"
+            />
+          </template>
+          <template #default="{ row }">
+            <el-checkbox :model-value="isSelected(row.id)" @change="toggleSelect(row.id)" />
+          </template>
+        </el-table-column>
         <el-table-column label="任务 ID" width="130">
           <template #default="{ row }">
             <span class="task-id" :title="row.id">{{ row.id.slice(0, 10) }}</span>
@@ -744,14 +919,16 @@ onBeforeUnmount(() => {
             >
               优先执行
             </el-button>
-            <!-- 已取消任务同样可重试：重跑其全部未成功（已取消）链接，原任务内更新进度 -->
+            <!-- 「下载」= 下载该任务未完成的链接（工具栏「开始下载」的单任务版，
+                 同一后端入口）：失败/已取消任务重跑未成功链接（原任务内更新进度），
+                 已暂停任务继续剩余链接 -->
             <el-button
-              v-if="row.status === 'failed' || row.status === 'cancelled'"
+              v-if="STARTABLE.includes(row.status)"
               link
               type="warning"
-              @click="retryTask(row)"
+              @click="downloadTask(row)"
             >
-              重试
+              下载
             </el-button>
             <el-button
               v-if="!TERMINAL.includes(row.status)"
@@ -773,6 +950,12 @@ onBeforeUnmount(() => {
       <div v-else class="task-cards">
         <div v-for="row in pagedTasks" :key="row.id" class="task-card">
           <div class="tc-head">
+            <!-- 勾选框与桌面表格共用同一选中集合（list 勾选，不跟视图走） -->
+            <el-checkbox
+              class="tc-check"
+              :model-value="isSelected(row.id)"
+              @change="toggleSelect(row.id)"
+            />
             <el-tag size="small" :type="statusTagType(row.status)">{{ statusText(row.status) }}</el-tag>
             <span class="tc-id" :title="row.id">{{ row.id.slice(0, 10) }}</span>
             <el-tag v-if="row.priority" size="small" type="success">置顶</el-tag>
@@ -797,15 +980,15 @@ onBeforeUnmount(() => {
             >
               优先执行
             </el-button>
-            <!-- 已取消任务同样可重试：重跑其全部未成功（已取消）链接，原任务内更新进度 -->
+            <!-- 「下载」= 下载该任务未完成的链接（工具栏「开始下载」的单任务版，同一后端入口） -->
             <el-button
-              v-if="row.status === 'failed' || row.status === 'cancelled'"
+              v-if="STARTABLE.includes(row.status)"
               size="small"
               type="warning"
               link
-              @click="retryTask(row)"
+              @click="downloadTask(row)"
             >
-              重试
+              下载
             </el-button>
             <el-button
               v-if="!TERMINAL.includes(row.status)"
@@ -961,14 +1144,17 @@ onBeforeUnmount(() => {
             <template #default="{ row }">
               <!-- 成功/跳过无需重下；running/pending 正在处理不可重下 -->
               <el-tooltip :content="itemRetryTip(row.status)" placement="top">
-                <el-button
-                  link
-                  type="primary"
-                  :disabled="itemRetryDisabled(row.status)"
-                  @click="retryItem(row)"
-                >
-                  重新下载
-                </el-button>
+                <!-- 包裹层不可省：disabled 按钮不派发鼠标事件，tooltip 会静默不显示 -->
+                <span class="tip-wrap">
+                  <el-button
+                    link
+                    type="primary"
+                    :disabled="itemRetryDisabled(row.status)"
+                    @click="retryItem(row)"
+                  >
+                    重新下载
+                  </el-button>
+                </span>
               </el-tooltip>
             </template>
           </el-table-column>
@@ -1024,8 +1210,29 @@ onBeforeUnmount(() => {
   flex-wrap: wrap;
 }
 
-.clear-btn {
+/* 状态筛选项较多（6 个），窄屏放不下时由该层横向滑动（见移动端媒体查询） */
+.filter-scroll {
+  min-width: 0;
+}
+
+/* 右侧操作组：勾选提示 + 主操作按钮（开始下载 / 全部暂停）+ 清空已完成 */
+.toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   margin-left: auto;
+  flex-wrap: wrap;
+}
+
+.sel-hint {
+  font-size: 12px;
+  color: #909399;
+}
+
+/* 禁用按钮上的 tooltip 需要一层可命中的包裹元素：
+   disabled 的 button 不派发鼠标事件，直接给它挂 tooltip 会静默不显示 */
+.tip-wrap {
+  display: inline-flex;
 }
 
 .poll-error {
@@ -1095,6 +1302,11 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+/* 卡片勾选框：与左侧文字对齐，且高度不加高整行 */
+.tc-check {
+  height: auto;
 }
 
 .tc-id {
@@ -1187,6 +1399,21 @@ onBeforeUnmount(() => {
   /* 手机屏高度紧张，日志窗略矮 */
   .detail-log-scroll {
     height: 200px;
+  }
+
+  /* 6 个状态筛选项在窄屏放不下：外层横向滑动，避免选项被裁掉（点击仍可用） */
+  .filter-scroll {
+    width: 100%;
+    overflow-x: auto;
+  }
+
+  .filter-scroll :deep(.el-segmented__group) {
+    flex-wrap: nowrap;
+  }
+
+  /* 操作组独占一行：主操作按钮在手机上更好点，不被筛选项挤到折行之外 */
+  .toolbar-right {
+    width: 100%;
   }
 }
 

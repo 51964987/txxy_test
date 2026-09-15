@@ -591,7 +591,8 @@ export interface DownloadDupResult {
 }
 
 export type DownloadItemStatus = 'pending' | 'ok' | 'skip' | 'fail' | 'cancelled'
-export type DownloadTaskStatus = 'pending' | 'running' | 'done' | 'failed' | 'cancelled'
+/** 任务状态：paused（已暂停）是**非终态**——未跑链接保留为 pending，可由 startDownloads 继续 */
+export type DownloadTaskStatus = 'pending' | 'running' | 'paused' | 'done' | 'failed' | 'cancelled'
 
 export interface DownloadItem {
   url: string
@@ -627,6 +628,18 @@ export interface DownloadTaskDetail extends DownloadTaskSummary {
   urls: string[]
   items: DownloadItem[]
   logs: string[]
+}
+
+/**
+ * 批量操作结果（POST /downloads/batch-start | batch-pause）：
+ * skipped 带逐条原因，前端如实提示而不是静默丢弃（否则用户以为按钮没生效）。
+ */
+export interface DownloadBatchResult {
+  /** 实际执行（开始 / 暂停）的任务 ID */
+  ids: string[]
+  /** 开始 = 本次待跑链接数；暂停 = 仍在处理的链接数 */
+  links: number
+  skipped: { id: string; reason: string }[]
 }
 
 /** 兼容别名：详情即完整任务结构 */
@@ -757,7 +770,13 @@ export const api = {
   checkDownloadDup: (urls: string[]) =>
     post<DownloadDupResult>('/downloads/check-dup', { urls }),
   cancelDownload: (id: string) => post<{ id: string }>(`/downloads/${id}/cancel`),
-  retryDownload: (id: string) => post<{ id: string; retried: number }>(`/downloads/${id}/retry`),
+  /**
+   * 批量开始下载：失败 / 已取消任务重跑未成功链接、已暂停任务继续未完成链接。
+   * 行内「下载」按钮复用本方法（传单个 ID）——一个入口一套语义。
+   */
+  startDownloads: (ids: string[]) => post<DownloadBatchResult>('/downloads/batch-start', { ids }),
+  /** 批量暂停：排队中 / 下载中任务转「已暂停」（非终态，可再「开始下载」继续） */
+  pauseDownloads: (ids: string[]) => post<DownloadBatchResult>('/downloads/batch-pause', { ids }),
   /** 重新下载任务里的单个链接（就地重跑原任务，不另开任务）；404 = 链接不存在或正在下载 */
   retryDownloadUrl: (id: string, url: string) =>
     post<{ id: string; url: string }>(`/downloads/${id}/retry-url`, { url }),

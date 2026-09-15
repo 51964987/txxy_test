@@ -2360,6 +2360,28 @@ class DownloadCheckResp(BaseModel):
     running: list[str] = []
 
 
+class DownloadBatchReq(BaseModel):
+    """批量操作请求体（开始下载 / 全部暂停共用）：勾选的任务 ID 列表。"""
+
+    ids: list[str]
+
+
+class DownloadBatchSkip(BaseModel):
+    """批量操作中被跳过的任务及原因（供前端如实提示，不静默丢弃）。"""
+
+    id: str
+    reason: str
+
+
+class DownloadBatchResp(BaseModel):
+    """批量操作结果：实际执行的任务、涉及链接数、跳过明细。"""
+
+    ids: list[str] = []
+    # 开始 = 本次待跑链接数；暂停 = 仍在处理的链接数（均为 0 表示无实际影响）
+    links: int = 0
+    skipped: list[DownloadBatchSkip] = []
+
+
 @router.post("/downloads/check-dup")
 def downloads_check_dup(req: DownloadCheckReq) -> DownloadCheckResp:
     """提交前重复检测（D2）：按「文件仍在 / 已不在 / 正在下载」三类返回。"""
@@ -2418,17 +2440,38 @@ def downloads_cancel(tid: str) -> dict[str, Any]:
     return {"id": tid}
 
 
-@router.post("/downloads/{tid}/retry")
-def downloads_retry(tid: str) -> dict[str, Any]:
-    """重跑失败任务（D1）：在原任务内重跑未成功项（不另开任务，进度在原任务更新）。"""
-    count = download_tasks.manager.retry(tid)
-    if count is None:
-        raise HTTPException(404, f"未找到下载任务 {tid}")
-    if count == 0:
-        raise HTTPException(400, "该任务没有可重试的失败链接")
-    # 重试项重新进入「在途」
-    _invalidate_download_stats()
-    return {"id": tid, "retried": count}
+@router.post("/downloads/batch-start")
+def downloads_batch_start(req: DownloadBatchReq) -> DownloadBatchResp:
+    """批量开始下载（下载中心「开始下载」）：把勾选任务中未完成的链接重新排队。
+
+    - 失败 / 已取消任务：在原任务内重跑未成功链接（与行内「下载」同一机制，不再另开任务）；
+    - 已暂停任务：继续下载剩余未完成链接（不重跑已成功项）；
+    - 排队中 / 正在下载 / 已完成：跳过并回传原因（前端如实提示，不静默忽略）。
+
+    行内「下载」按钮复用本接口（传单个 ID）：一个入口一套语义，避免「行内重跑」与
+    「批量开始」两套实现各写一遍（第 1 条约束：同一能力只允许一处实现）。
+    """
+    ids = [i.strip() for i in req.ids if i and i.strip()]
+    started, links, skipped = download_tasks.manager.batch_start(ids)
+    if started:
+        # 链接重新进入「在途」：待下载推荐须剔除、内容资产卡「在途」随之变化
+        _invalidate_download_stats()
+    return DownloadBatchResp(ids=started, links=links, skipped=skipped)
+
+
+@router.post("/downloads/batch-pause")
+def downloads_batch_pause(req: DownloadBatchReq) -> DownloadBatchResp:
+    """批量暂停（下载中心「全部暂停」）：把勾选的排队中 / 下载中任务置为暂停。
+
+    暂停是**非终态**（未跑链接保留为 pending），可由 `batch-start` 继续；
+    与「取消」（终态，未跑链接置为已取消）语义严格区分。
+    """
+    ids = [i.strip() for i in req.ids if i and i.strip()]
+    paused, links, skipped = download_tasks.manager.batch_pause(ids)
+    if paused:
+        # 任务从「执行中」转为「暂停」：在途口径随之变化（仍算在途，故同样失效缓存）
+        _invalidate_download_stats()
+    return DownloadBatchResp(ids=paused, links=links, skipped=skipped)
 
 
 @router.post("/downloads/{tid}/prioritize")
