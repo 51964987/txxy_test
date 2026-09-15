@@ -1434,6 +1434,24 @@ def _download_path_sets() -> tuple[set[str], set[str], set[str]]:
     return snap["done"], snap["active"], snap["gone"]
 
 
+def _invalidate_download_stats() -> None:
+    """失效「依赖下载 / 本地资产状态」的统计缓存（写操作后必须调用）。
+
+    依赖该状态的缓存键只有三类：
+    - `pending_downloads_*`：待下载推荐（提交任务 → 该帖变「在途」，应立即退出推荐；
+      删除本地文件 → 应改标「可重下」）；
+    - `assets_*`：内容资产卡（在途 / 已沉淀 / 缺口 / 分层覆盖率随上述一起变）；
+    - `health_*`：采集健康条的「沉淀停滞天数」取自下载履历 first_at。
+
+    不失效的后果：前端提交成功后即使立即重拉，拿到的仍是 5s TTL 内的旧快照，
+    表现为「点了下载，推荐列表里那条还在」——用户会以为按钮没生效。
+    与 runs 写操作后的 db.invalidate("runs") 同一套「写后即失效」约定。
+    """
+    db.invalidate("pending_downloads_")
+    db.invalidate("assets_")
+    db.invalidate("health_")
+
+
 def _pct(part: int, total: int) -> float:
     """百分比（保留 2 位）；分母为 0 返回 0.0，避免除零。"""
     return round(part / total * 100, 2) if total else 0.0
@@ -2225,6 +2243,8 @@ def resources_delete(_: DeleteRateLimit, req: ResourceDeleteReq) -> dict[str, An
     )
     if not r["ok"]:
         raise HTTPException(400, str(r["reason"]))
+    # 文件不再存在 → 该帖从「已沉淀」变「可重下」，必须立即重算待下载推荐与资产口径
+    _invalidate_download_stats()
     return r
 
 
@@ -2255,7 +2275,10 @@ def resources_batch_delete(_: BatchDeleteRateLimit, req: ResourceBatchDeleteReq)
         raise HTTPException(400, "未提供要删除的资源")
     if len(req.items) > 500:
         raise HTTPException(400, f"单次最多批量删除 500 项，当前 {len(req.items)} 项")
-    return resources.batch_delete([i.model_dump() for i in req.items], req.permanent)
+    r = resources.batch_delete([i.model_dump() for i in req.items], req.permanent)
+    # 同单项删除：文件集合变化后立即失效依赖下载状态的统计缓存
+    _invalidate_download_stats()
+    return r
 
 
 @router.post("/resources/restore")
@@ -2264,6 +2287,8 @@ def resources_restore(_: DeleteRateLimit, req: ResourceIdReq) -> dict[str, Any]:
     r = resources.restore_trash(req.id)
     if not r["ok"]:
         raise HTTPException(400, str(r["reason"]))
+    # 文件恢复 → 该帖重新算作「已沉淀」，从待下载推荐中退出
+    _invalidate_download_stats()
     return r
 
 
@@ -2273,6 +2298,8 @@ def resources_purge(_: DeleteRateLimit, req: ResourceIdReq) -> dict[str, Any]:
     r = resources.purge_trash(req.id)
     if not r["ok"]:
         raise HTTPException(400, str(r["reason"]))
+    # 彻底删除只动回收站副本，但为统一「文件状态变更即失效」的口径一并处理
+    _invalidate_download_stats()
     return r
 
 
@@ -2300,6 +2327,8 @@ def downloads_submit(req: DownloadSubmitReq) -> dict[str, Any]:
     seen: set[str] = set()
     uniq = [u for u in urls if not (u in seen or seen.add(u))]
     tid = download_tasks.manager.submit(uniq)
+    # 新任务进入「在途」：待下载推荐须立即剔除这些帖子，内容资产卡的「在途」也要立刻 +N
+    _invalidate_download_stats()
     return {"id": tid, "count": len(uniq)}
 
 
@@ -2384,6 +2413,8 @@ def downloads_cancel(tid: str) -> dict[str, Any]:
     """取消下载任务（pending/running → cancelled，记录保留）。"""
     if not download_tasks.manager.cancel(tid):
         raise HTTPException(404, f"未找到或已结束的下载任务 {tid}")
+    # 任务退出「在途」：被取消的帖子应重新回到待下载推荐
+    _invalidate_download_stats()
     return {"id": tid}
 
 
@@ -2395,6 +2426,8 @@ def downloads_retry(tid: str) -> dict[str, Any]:
         raise HTTPException(404, f"未找到下载任务 {tid}")
     if count == 0:
         raise HTTPException(400, "该任务没有可重试的失败链接")
+    # 重试项重新进入「在途」
+    _invalidate_download_stats()
     return {"id": tid, "retried": count}
 
 
@@ -2424,6 +2457,8 @@ def downloads_retry_url(tid: str, req: DownloadRetryUrlReq) -> dict[str, Any]:
     ok = download_tasks.manager.retry_url(tid, req.url.strip())
     if not ok:
         raise HTTPException(404, f"任务 {tid} 中未找到该链接，或该链接正在下载中")
+    # 该链接重新进入「在途」：从待下载推荐中剔除
+    _invalidate_download_stats()
     return {"id": tid, "url": req.url}
 
 
@@ -2431,6 +2466,8 @@ def downloads_retry_url(tid: str, req: DownloadRetryUrlReq) -> dict[str, Any]:
 def downloads_clear() -> dict[str, Any]:
     """清空「已完成」（done）任务记录：failed / cancelled 保留，返回删除数。"""
     cleared = download_tasks.manager.clear_done()
+    # 任务记录被清空（履历仍留存）：资产卡「在途 / 已沉淀」口径随之变化
+    _invalidate_download_stats()
     return {"cleared": cleared}
 
 
@@ -2439,4 +2476,6 @@ def downloads_delete(tid: str) -> dict[str, Any]:
     """删除下载任务记录：运行中的先请求取消，已结束的直接移除。"""
     if not download_tasks.manager.delete(tid):
         raise HTTPException(404, f"未找到下载任务 {tid}")
+    # 删除记录同样改变在途集合
+    _invalidate_download_stats()
     return {"id": tid}

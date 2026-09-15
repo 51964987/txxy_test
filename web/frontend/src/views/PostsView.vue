@@ -518,9 +518,30 @@ function onSelectionChange(rows: Post[]) {
   selectedRows.value = rows
 }
 
+/**
+ * 下载成功后按需刷新列表：仅当当前列表口径**依赖下载状态**时（「未下载」筛选，来自数据总览
+ * 「待下载推荐」下钻）才重拉——刚提交的帖子已变「在途」，必须立即退出本列表，否则用户会看到
+ * 「点了下载，它还在第 3 行」。其它筛选下下载不改变结果集，重拉只会打断滚动位置与分页。
+ * 刷新后若本页被刷空（下钻页恰好只有这一条时会出现），回退一页再取，避免停留在空列表。
+ */
+async function reloadAfterDownload() {
+  await load()
+  if (!pageData.value?.items?.length && page.value > 1) {
+    page.value -= 1
+    await load()
+  }
+}
+
 /** 批量下载：提交当前勾选行的 URL（走共用 composable 的 D2 判重交互） */
-function downloadSelected() {
-  submitDownload(selectedRows.value.map((row) => row.url))
+async function downloadSelected() {
+  const created = await submitDownload(selectedRows.value.map((row) => row.url))
+  if (created && filters.undownloaded) await reloadAfterDownload()
+}
+
+/** 行内「下载」：与批量同一套交互，「未下载」筛选下提交成功后该行应退出列表 */
+async function downloadOne(url: string) {
+  const created = await submitDownload([url])
+  if (created && filters.undownloaded) await reloadAfterDownload()
 }
 
 onMounted(() => {
@@ -773,7 +794,7 @@ onMounted(() => {
                 <el-button link :icon="CopyDocument" @click="copyUrl(row.url)" />
               </el-tooltip>
               <el-tooltip content="下载" placement="top">
-                <el-button link type="success" :icon="Download" @click="submitDownload([row.url])" />
+                <el-button link type="success" :icon="Download" @click="downloadOne(row.url)" />
               </el-tooltip>
             </div>
           </template>

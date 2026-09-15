@@ -15,21 +15,25 @@ export interface DownloadSubmitNotify {
 
 /** 提交下载任务的统一入口（帖子浏览 / 数据总览共用，与下载中心页内提交同一套 D2 判重交互）：
  *  防连点（submitting 守卫）→ check-dup 三分类 → 正在下载中的剔除（避免并发写同一文件）→
- *  文件仍在/已不在的确认弹窗 → 提交。创建成功仅提示，进度在下载中心查看。 */
+ *  文件仍在/已不在的确认弹窗 → 提交。创建成功仅提示，进度在下载中心查看。
+ *
+ *  返回**是否真的创建了任务**（true / false）：调用方据此决定要不要刷新「数据依赖下载状态」
+ *  的列表（如待下载推荐、帖子页「未下载」筛选）——被判重拦截、用户取消确认、请求失败时
+ *  数据没有变化，不应刷新（业界所谓「只对成功的写做失效」）。 */
 export function useDownloadSubmit() {
   /** 提交中标志：供按钮 loading 绑定，同时在函数入口拦截连点 */
   const submitting = ref(false)
 
-  async function submitDownload(urls: string[], notify?: DownloadSubmitNotify) {
+  async function submitDownload(urls: string[], notify?: DownloadSubmitNotify): Promise<boolean> {
     const okMsg = notify?.success ?? ((m: string) => ElMessage.success(m))
     const errMsg = notify?.error ?? ((m: string) => ElMessage.error(m))
     const warnMsg = notify?.warning ?? ((m: string) => ElMessage.warning(m))
     if (!urls.length) {
       await warnMsg('请先选择要下载的链接')
-      return
+      return false
     }
     // 防连点：上一次提交还在进行中（含等待确认弹窗）时忽略本次点击
-    if (submitting.value) return
+    if (submitting.value) return false
     submitting.value = true
     let pending = urls
     try {
@@ -41,7 +45,7 @@ export function useDownloadSubmit() {
         await warnMsg(`已移除 ${drop.size} 个正在下载中的链接，避免同一文件被并发写入`)
         if (!pending.length) {
           await warnMsg('所选链接均已在下载中，未重复提交')
-          return
+          return false
         }
       }
       // 2) 历史下载过的链接：文件「仍在」与「已不在」后果不同，弹窗说清楚后再提交
@@ -68,13 +72,15 @@ export function useDownloadSubmit() {
         })
           .then(() => true)
           .catch(() => false)
-        if (!go) return
+        if (!go) return false
       }
       const r = await api.submitDownload(pending)
       await okMsg(`已创建下载任务（${r.count} 个链接），可在下载中心查看进度`)
+      return true
     } catch (e) {
-      if (isAborted(e)) return
+      if (isAborted(e)) return false
       await errMsg(`创建下载任务失败: ${(e as Error).message}`)
+      return false
     } finally {
       submitting.value = false
     }

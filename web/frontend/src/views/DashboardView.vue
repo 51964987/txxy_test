@@ -512,6 +512,17 @@ const healthDetail = computed(() => {
   return parts.join(' · ')
 })
 
+/** 内容资产卡取数（从 loadP0 抽出）：下载类写操作后只需重刷本卡 +
+ *  「待下载推荐」，不必为一次点击重跑整个首屏（十余个接口）。失败静默保留旧值，
+ *  下一轮轮询自动重试（与 loadP0 内其它补充卡同一容错策略）。 */
+async function loadAssets(): Promise<void> {
+  try {
+    assets.value = await api.assets()
+  } catch {
+    // 静默：保留旧值，等下一轮自动刷新
+  }
+}
+
 // ===== P0：首屏加载（KPI + 趋势 + 分布）=====
 async function loadP0(initial = false) {
   if (initial) loadingP0.value = true
@@ -521,12 +532,11 @@ async function loadP0(initial = false) {
     void Promise.allSettled([
       api.health(),
       api.compare(),
-      api.assets(),
-    ]).then(([h, c, a]) => {
+    ]).then(([h, c]) => {
       if (h.status === 'fulfilled') health.value = h.value
       if (c.status === 'fulfilled') compare.value = c.value
-      if (a.status === 'fulfilled') assets.value = a.value
     })
+    void loadAssets()
     const [o, t, te, f, authors, fids] = await Promise.all([
       api.overview(),
       api.trend(trendDays.value),
@@ -635,6 +645,21 @@ async function loadPending() {
   } finally {
     loadingPending.value = false
   }
+}
+
+/**
+ * 下载类写操作成功后的「定向刷新」：只刷新**数据依赖下载状态**的卡——
+ * ① 待下载推荐（提交后该帖变「在途」，必须立即退出推荐位，而不是等下一轮 5s 轮询）；
+ * ② 内容资产卡（在途 / 已沉淀 / 缺口 / 覆盖率随之变化）。
+ *
+ * 刻意**不刷新**榜单四卡（点赞最高帖 / 回复最多帖 / 最新最热 / 本月最热）：它们按点赞 /
+ * 回复 / 互动量排序，与「是否已下载」无关，下载后重拉只会得到同样的数据，反而会打断
+ * 列表滚动位置与 NEW 标。这正是业界「按依赖关系定向失效」的用法（React Query
+ * invalidateQueries / Apollo refetchQueries：写操作只失效受其影响的查询，不做全量重拉）。
+ */
+function refreshDownloadDependent() {
+  void loadPending()
+  void loadAssets()
 }
 
 /** 榜单排序维度 → 帖子页 sort 参数，保证下钻后列表顺序与榜单一致 */
@@ -1693,11 +1718,13 @@ function openUrl(url: string) {
   window.open(url, '_blank', 'noopener')
 }
 
-/** 创建下载任务（热门榜每行「下载」按钮）：与帖子浏览同一套共用交互（D2 判重 + 防连点），
- *  进度在下载中心查看。全屏态需先退出全屏，提示与确认框才可见 */
+/** 创建下载任务（榜单 / 待下载推荐每行「下载」按钮）：与帖子浏览同一套共用交互（D2 判重 + 防连点），
+ *  进度在下载中心查看。全屏态需先退出全屏，提示与确认框才可见。
+ *  创建成功后再定向刷新「依赖下载状态」的卡（待下载推荐 + 内容资产）；被判重剔除、用户
+ *  取消确认或请求失败时不刷新——数据没有变化，刷新只会产生无意义的请求与视觉抖动。 */
 const { submitDownload } = useDownloadSubmit()
 async function downloadUrl(url: string) {
-  await submitDownload([url], {
+  const created = await submitDownload([url], {
     success: notifySuccess,
     error: notifyError,
     warning: notifyWarning,
@@ -1705,6 +1732,7 @@ async function downloadUrl(url: string) {
       if (app.fullscreen && !app.pseudoFullscreen) await app.exitFullscreen()
     },
   })
+  if (created) refreshDownloadDependent()
 }
 
 function rankClass(i: number): string {
