@@ -23,6 +23,7 @@ import query_builder
 import ratelimit
 import resources
 import runs
+import scheduler
 import settings
 
 router = APIRouter()
@@ -681,6 +682,17 @@ def app_config() -> ConfigResp:
         enable_auto_refresh=settings.get_bool("enable_auto_refresh", config.ENABLE_AUTO_REFRESH),
         settings=settings.snapshot(),
     )
+
+
+@router.get("/schedule")
+def schedule_status() -> dict[str, Any]:
+    """定时抓取状态（参数设置页「定时抓取」组展示）。
+
+    返回启用状态 / 计划时刻 / 下次执行时间 / 今日已处理时刻 / 上次结果 / 调度线程心跳。
+    `next_run_at` 与真实触发判定同源计算（同一份时刻与已处理记录），
+    避免页面上显示的「下次执行」与实际调度口径不一致。
+    """
+    return scheduler.scheduler.status()
 
 
 @router.put("/settings")
@@ -2499,7 +2511,11 @@ def downloads_retry_url(tid: str, req: DownloadRetryUrlReq) -> dict[str, Any]:
     """
     ok = download_tasks.manager.retry_url(tid, req.url.strip())
     if not ok:
-        raise HTTPException(404, f"任务 {tid} 中未找到该链接，或该链接正在下载中")
+        raise HTTPException(
+            409,
+            f"任务 {tid} 中未找到该链接，或该链接/任务正在下载中"
+            "（单条重下会把整个任务重新排队，任务在跑时执行会导致并发跑同一任务，请等它停下）",
+        )
     # 该链接重新进入「在途」：从待下载推荐中剔除
     _invalidate_download_stats()
     return {"id": tid, "url": req.url}

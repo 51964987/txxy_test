@@ -604,11 +604,19 @@ watch([itemFilter, () => detailTask.value?.id], () => {
   itemPage.value = 1
 })
 
+/** 任务整体在跑（含暂停后仍在收尾的窗口）：单条重下会重新调度整个任务，
+ *  与正在执行的 worker 并发跑同一任务，故禁用（与后端 retry_url 同一守卫）。 */
+function itemRetryLocked(): boolean {
+  const t = detailTask.value
+  return t?.status === 'running' || t?.pause_requested === true
+}
 /** 明细行「重新下载」的可用性与提示：成功/跳过无需重下，进行中/排队中不可重下 */
 function itemRetryDisabled(status: string): boolean {
+  if (itemRetryLocked()) return true
   return status === 'ok' || status === 'skip' || status === 'running' || status === 'pending'
 }
 function itemRetryTip(status: string): string {
+  if (itemRetryLocked()) return '任务正在下载中（或暂停后仍在收尾），请等它停下后再重下该链接'
   if (status === 'ok' || status === 'skip') return '该链接已成功，无需重下'
   if (status === 'running' || status === 'pending') return '该链接正在下载或排队中，暂不能重下'
   return '重新下载该链接（在本任务内重跑，结果显示在当前详情）'

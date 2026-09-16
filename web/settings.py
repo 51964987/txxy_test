@@ -14,13 +14,21 @@
 """
 import json
 import os
+import sys
 import threading
 from pathlib import Path
 from typing import Any
 
-from atomicfile import write_json_atomic
-import config
-import download_files  # 项目根模块：默认下载间隔/重试次数在此，避免默认值两份
+# 项目根加入 sys.path：download_files.py 位于 txxy_test/ 根，web/ 不在其搜索范围内。
+# 与 download_tasks.py 同一约定的自举——否则按文档直接 `python web/app.py` 启动时，
+# app.py 导入本模块即 ModuleNotFoundError（自举必须发生在 import download_files 之前）。
+_ROOT = Path(__file__).resolve().parent.parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
+from atomicfile import write_json_atomic  # noqa: E402
+import config  # noqa: E402
+import download_files  # noqa: E402  项目根模块：默认下载间隔/重试次数在此，避免默认值两份
 
 WHITELIST: dict[str, dict[str, Any]] = {
     "download_concurrency": {
@@ -71,6 +79,30 @@ WHITELIST: dict[str, dict[str, Any]] = {
         "max": 10,
         "scope": "next_task",
         "desc": "首次重试等待，后续按次数递增",
+    },
+    "scrape_schedule_enabled": {
+        "label": "启用定时抓取",
+        "type": "bool",
+        "scope": "immediate",
+        "desc": "开启后由本服务按下面的时刻自动启动一次全量抓取；服务未运行的时段不会补跑",
+    },
+    "scrape_schedule_times": {
+        "label": "抓取时刻",
+        "type": "times",
+        "scope": "immediate",
+        "desc": "每天在这几个时刻各启动一次抓取（24 小时制，最多 6 个；服务本地时间）",
+    },
+    "scrape_schedule_restart": {
+        "label": "强制全量重跑（--restart）",
+        "type": "bool",
+        "scope": "immediate",
+        "desc": "开＝忽略断点进度、删除当天已生成的 CSV 重新抓取；关＝断点续跑（当天已抓过的页跳过）",
+    },
+    "scrape_schedule_use_proxy": {
+        "label": "走本地镜像（1024）",
+        "type": "bool",
+        "scope": "immediate",
+        "desc": "与手动「启动抓取」弹窗的开关同一含义；关＝直连业务域名",
     },
     "trash_keep_days": {
         "label": "回收站保留天数",
@@ -184,6 +216,14 @@ def _env_or_default(key: str) -> Any:
         return config.DOWNLOAD_TASK_MAX_KEEP
     if key == "trash_keep_days":
         return config.TRASH_KEEP_DAYS
+    if key == "scrape_schedule_enabled":
+        return config.SCRAPE_SCHEDULE_ENABLED
+    if key == "scrape_schedule_times":
+        return config.SCRAPE_SCHEDULE_TIMES
+    if key == "scrape_schedule_restart":
+        return config.SCRAPE_SCHEDULE_RESTART
+    if key == "scrape_schedule_use_proxy":
+        return config.SCRAPE_SCHEDULE_USE_PROXY
     if key == "share_host":
         return config.SHARE_HOST
     if key == "enable_auto_refresh":
@@ -255,6 +295,10 @@ def _clamp(key: str, value: Any) -> Any:
             if v in allowed and v not in seen:
                 seen.append(v)
         return seen
+    if t == "times":
+        # 时刻列表：规格化与校验统一交给 config.normalize_times（唯一实现，
+        # 环境变量/设置文件/页面三处同一份规则），非法项丢弃、去重、升序、限量
+        return config.normalize_times(value)
     if t == "enum":
         # 单选枚举：非法值一律回落默认值（不抛错），避免前端旧缓存 / 手改文件写入脏值
         allowed = {o["value"] for o in spec.get("options", [])}

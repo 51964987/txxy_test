@@ -1,7 +1,15 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { api, isAborted, type BlacklistItem, type SettingItem } from '../api'
+import { useRouter } from 'vue-router'
+import {
+  api,
+  isAborted,
+  type BlacklistItem,
+  type ScheduleAction,
+  type ScheduleStatus,
+  type SettingItem,
+} from '../api'
 import { useAppStore } from '../stores/app'
 import { useDashboardStore } from '../stores/dashboard'
 import { legacyCopy } from '../utils/clipboard'
@@ -20,7 +28,19 @@ const draft = ref<Record<string, number | boolean | string[] | string>>({})
 
 /** 分组：与后端白名单顺序一致，按业务域切分（业界设置页通行做法）。
  *  desc 可选：组内各项已有自述时不再重复加组级说明（「内容资产」组即如此，2026-09-13 文案收敛） */
-const GROUPS: { title: string; desc?: string; keys: string[] }[] = [
+const GROUPS: { title: string; desc?: string; keys: string[]; extra?: 'schedule' }[] = [
+  {
+    title: '定时抓取',
+    // 组级说明只讲一件用户必须知道的事：调度的唯一来源（避免与 OS 定时重复触发）
+    desc: '由本服务按时刻自动启动抓取，保存后立即生效（Windows 计划任务与容器 cron 均已停用，同一时刻只应有一处调度）',
+    extra: 'schedule',
+    keys: [
+      'scrape_schedule_enabled',
+      'scrape_schedule_times',
+      'scrape_schedule_restart',
+      'scrape_schedule_use_proxy',
+    ],
+  },
   {
     title: '下载',
     desc: '并发与节流直接影响源站压力，过高可能触发限流或封禁',
@@ -60,6 +80,12 @@ const GROUPS: { title: string; desc?: string; keys: string[] }[] = [
     keys: ['carousel_interval', 'carousel_sections'],
   },
 ]
+
+/** 控件本身很宽、塞不进「标签｜控件」左右分栏的设置类型：这类行改为「标签在上、控件在下」。
+ *  array（勾选 + 上下移 + 「默认：…」长句）的固有宽度约 1000px，分栏时会把标签压成
+ *  130px 窄条、描述文字挤成竖条（实测「演示轮播板块序列」），故与 Element Plus / Ant Design
+ *  表单「复杂控件独占一行」同一做法。 */
+const WIDE_TYPES: SettingItem['type'][] = ['array', 'times']
 
 const SCOPE_TEXT: Record<SettingItem['scope'], string> = {
   immediate: '立即生效',
@@ -122,6 +148,120 @@ function optionLabel(it: SettingItem, value: string): string {
   return (it.options ?? []).find((o) => o.value === value)?.label ?? value
 }
 
+/** 布尔项取值（键不存在时用兜底），供「立即运行一次」读取当前开关 */
+function boolOf(key: string, fallback: boolean): boolean {
+  const it = byKey(key)
+  return it ? Boolean(valueOf(it)) : fallback
+}
+
+// ===== 定时抓取（页面调度）：状态展示 + 时刻列表编辑 =====
+/** 调度状态：下次执行 / 今日已处理 / 上次结果 / 线程心跳 / 当前是否在跑 */
+const sched = ref<ScheduleStatus | null>(null)
+const runNowLoading = ref(false)
+const router = useRouter()
+
+/** 状态轮询：批次一跑就是 25~40 分钟，状态必须自己刷新，不能指望用户手动刷新页面
+ *  （业界：调度面板都显示 Job 的当前执行态）。页面不可见时暂停，与下载中心同一约定。 */
+const SCHED_POLL_MS = 5000
+let schedTimer: number | null = null
+function startSchedPolling() {
+  if (schedTimer !== null) return
+  schedTimer = window.setInterval(() => {
+    if (!document.hidden) void loadSchedule()
+  }, SCHED_POLL_MS)
+}
+function stopSchedPolling() {
+  if (schedTimer !== null) {
+    window.clearInterval(schedTimer)
+    schedTimer = null
+  }
+}
+function onVisibility() {
+  if (!document.hidden) void loadSchedule()
+}
+
+/** 当前是否有批次在跑：有则禁用「立即运行一次」（与后端 start_run 的守卫同源） */
+const schedRunning = computed(() => sched.value?.running ?? null)
+const runNowDisabled = computed(() => schedRunning.value !== null || runNowLoading.value)
+const runNowTip = computed(() =>
+  schedRunning.value
+    ? '已有抓取批次在运行，等它结束后才能再启动（同一时刻只允许一个批次）'
+    : '立即启动一次抓取（与当前开关/时刻无关，仅用于验证参数）',
+)
+/** 运行中状态文案：区分「已写入运行记录」与「刚拉起、记录还没写」两种阶段 */
+const schedRunningText = computed(() => {
+  const r = schedRunning.value
+  if (!r) return ''
+  if (r.state === 'starting') return '批次正在启动（等待写入运行记录）…'
+  const run = r.run
+  if (!run) return '批次运行中…'
+  const mins = run.elapsed_minutes == null ? '' : `，已运行 ${run.elapsed_minutes} 分钟`
+  return `批次 #${run.id} 运行中${mins}`
+})
+
+const SCHED_ACTION: Record<ScheduleAction, { text: string; type: 'success' | 'info' | 'warning' | 'danger' }> = {
+  started: { text: '已启动批次', type: 'success' },
+  skipped: { text: '已跳过', type: 'warning' },
+  missed: { text: '未执行', type: 'info' },
+  failed: { text: '启动失败', type: 'danger' },
+}
+
+async function loadSchedule() {
+  try {
+    sched.value = await api.schedule()
+  } catch (e) {
+    if (isAborted(e)) return
+    // 状态读取失败不阻断参数编辑：置空并显示提示，下次刷新重试
+    sched.value = null
+  }
+}
+
+/** 时刻列表（times 类型）：优先取草稿，未改动则取生效值 */
+function timeList(it: SettingItem): string[] {
+  const v = draft.value[it.key]
+  return Array.isArray(v) ? v : ((it.value as string[]) ?? [])
+}
+function setTimeAt(it: SettingItem, index: number, value: string) {
+  const next = timeList(it).slice()
+  if (!/^\d{2}:\d{2}$/.test(value)) return
+  next[index] = value
+  draft.value[it.key] = next
+}
+/** 添加时刻：取第一个尚未占用的整点（同一天两个相同时刻没有意义，避免用户先存出重复项） */
+function addTime(it: SettingItem) {
+  const cur = timeList(it)
+  const hours = Array.from({ length: 24 }, (_, h) => `${String(h).padStart(2, '0')}:00`)
+  const pick = hours.find((t) => !cur.includes(t)) ?? '12:00'
+  draft.value[it.key] = [...new Set([...cur, pick])].sort()
+}
+function removeTime(it: SettingItem, index: number) {
+  const next = timeList(it).filter((_, i) => i !== index)
+  if (!next.length) {
+    // 空列表等于「没有计划时刻」：与其留一个含义不明的空配置，不如引导用户去关开关
+    ElMessage.warning('至少保留一个抓取时刻；如要停止定时抓取，请关闭「启用定时抓取」')
+    return
+  }
+  draft.value[it.key] = next
+}
+
+/** 立即运行一次：复用既有手动入口（/api/runs/start，同一防重），用于验证上面的参数 */
+async function runNow() {
+  runNowLoading.value = true
+  try {
+    await api.startRun({
+      use_local_proxy: boolOf('scrape_schedule_use_proxy', true),
+      restart: boolOf('scrape_schedule_restart', true),
+    })
+    ElMessage.success('已启动抓取批次，下方「当前状态」会显示运行中')
+    await loadSchedule() // 立刻回填「运行中」，不等下一次轮询
+  } catch (e) {
+    if (isAborted(e)) return
+    ElMessage.error(`启动失败: ${(e as Error).message}`)
+  } finally {
+    runNowLoading.value = false
+  }
+}
+
 const dirty = computed(() =>
   items.value.some((it) => draft.value[it.key] !== undefined && draft.value[it.key] !== it.value),
 )
@@ -168,6 +308,8 @@ async function save() {
     // 自动刷新属前端参数：保存后立即同步到全局状态，不必刷新页面
     const auto = r.settings.find((s) => s.key === 'enable_auto_refresh')
     if (auto) dash.setEnableAutoRefresh(Boolean(auto.value))
+    // 时刻/开关改动会改变「下次执行」：重取调度状态，避免页面显示与实际调度口径不一致
+    await loadSchedule()
   } catch (e) {
     if (isAborted(e)) return
     ElMessage.error(`保存失败: ${(e as Error).message}`)
@@ -232,6 +374,36 @@ const BL_TYPE_LABEL: Record<BlacklistItem['type'], string> = {
   fid: '版块',
 }
 
+/** 黑名单条目一多，设置页会被拉成一条望不到头的长列表：按业界「管理列表」通行做法补
+ *  **搜索 + 分页 + 计数**（Element Plus 后台表格、Ant Design Table、GitHub 的 blocked users
+ *  都是这三件套）。为什么是前端切片分页：条目已随接口全量返回、量级在几十条（本项目实测
+ *  17 条），与下载中心/资源管理页的分页口径一致，不需要为它加服务端分页参数；
+ *  不选「无限滚动/加载更多」——管理场景需要「总共多少条、在哪一页」的确定性，
+ *  也不选纯滚动容器——那只是把长列表换个地方滚动，仍无法快速定位。 */
+const BL_PAGE_SIZE = 5
+const blFilter = ref('')
+const blPage = ref(1)
+const blFiltered = computed(() => {
+  const q = blFilter.value.trim().toLowerCase()
+  if (!q) return blItems.value
+  return blItems.value.filter((it) =>
+    // 备注与类型名也可搜（用户常按「为什么拉黑」的备注找）
+    [it.value, it.reason, BL_TYPE_LABEL[it.type]].some((s) => (s ?? '').toLowerCase().includes(q)),
+  )
+})
+const blPageCount = computed(() => Math.max(1, Math.ceil(blFiltered.value.length / BL_PAGE_SIZE)))
+const blPaged = computed(() =>
+  blFiltered.value.slice((blPage.value - 1) * BL_PAGE_SIZE, blPage.value * BL_PAGE_SIZE),
+)
+// 筛选条件变化：回到第一页（否则会停在超出范围的页码上）
+watch(blFilter, () => {
+  blPage.value = 1
+})
+// 条目减少 / 筛选变窄导致页数变少：把页码收敛到最后一页（删除末页最后一条的典型场景）
+watch(blPageCount, (n) => {
+  if (blPage.value > n) blPage.value = n
+})
+
 async function loadBlacklist() {
   blLoading.value = true
   try {
@@ -278,7 +450,16 @@ async function removeBlacklistItem(it: BlacklistItem) {
 
 onMounted(() => {
   void load()
+  void loadSchedule()
   void loadBlacklist()
+  // 调度状态需要自己刷新：批次一跑就是几十分钟，页面停留期间要能看到「运行中 → 结束」
+  startSchedPolling()
+  document.addEventListener('visibilitychange', onVisibility)
+})
+
+onBeforeUnmount(() => {
+  stopSchedPolling()
+  document.removeEventListener('visibilitychange', onVisibility)
 })
 </script>
 
@@ -307,8 +488,80 @@ onMounted(() => {
       <div v-for="g in GROUPS" :key="g.title" class="page-card">
         <div class="group-title">{{ g.title }}</div>
         <div v-if="g.desc" class="group-desc text-muted">{{ g.desc }}</div>
+        <!-- 定时抓取：状态区（只读，来自 /api/schedule，与真实触发判定同源）放在配置项之前，
+             用户先看到「下次什么时候跑、上次为什么没跑」，再决定怎么改参数 -->
+        <div v-if="g.extra === 'schedule'" class="sched-status">
+          <template v-if="sched">
+            <!-- 当前状态放第一行：点了「立即运行一次」或到点触发后，用户先要看的就是「现在在跑没有」 -->
+            <div class="ss-row">
+              <span class="ss-label">当前状态</span>
+              <span class="ss-value">
+                <template v-if="schedRunning">
+                  <el-tag size="small" type="primary">{{ schedRunningText }}</el-tag>
+                  <el-button link type="primary" size="small" @click="router.push('/runs')">
+                    查看进度
+                  </el-button>
+                </template>
+                <span v-else class="text-muted">空闲（没有正在运行的抓取批次）</span>
+              </span>
+            </div>
+            <div class="ss-row">
+              <span class="ss-label">下次执行</span>
+              <span class="ss-value">{{ sched.next_run_at ?? '未启用（无计划时刻）' }}</span>
+            </div>
+            <div class="ss-row">
+              <span class="ss-label">今日已处理</span>
+              <span class="ss-value">{{ sched.today_done.length ? sched.today_done.join('、') : '—' }}</span>
+            </div>
+            <div class="ss-row">
+              <span class="ss-label">上次结果</span>
+              <span class="ss-value">
+                <template v-if="sched.last">
+                  <el-tag size="small" :type="SCHED_ACTION[sched.last.action].type">
+                    {{ SCHED_ACTION[sched.last.action].text }}
+                  </el-tag>
+                  <span class="text-muted">{{ sched.last.at }} · {{ sched.last.reason }}</span>
+                </template>
+                <span v-else class="text-muted">暂无调度记录</span>
+              </span>
+            </div>
+            <div class="ss-row">
+              <span class="ss-label">调度线程</span>
+              <span class="ss-value text-muted">
+                {{
+                  sched.last_tick
+                    ? `最近判定 ${sched.last_tick}（每 ${sched.tick_seconds} 秒一次）`
+                    : '尚未运行'
+                }}
+              </span>
+            </div>
+          </template>
+          <div v-else class="text-muted">状态读取失败，稍后自动重试</div>
+          <div class="ss-actions">
+            <!-- 禁用态按钮上的 tooltip 需外包一层可命中元素（与下载中心同一约定）；
+                 按钮可用性与后端守卫同源：批次在跑时禁用，避免点了才报「已有批次」 -->
+            <el-tooltip :content="runNowTip" placement="top">
+              <span class="tip-wrap">
+                <el-button
+                  size="small"
+                  :loading="runNowLoading"
+                  :disabled="runNowDisabled"
+                  @click="runNow"
+                >
+                  立即运行一次
+                </el-button>
+              </span>
+            </el-tooltip>
+            <span class="ss-hint text-muted">与「运行记录」页的「启动抓取」同一入口，用于验证上面的参数</span>
+          </div>
+        </div>
         <div class="setting-list">
-          <div v-for="it in groupItems(g.keys)" :key="it.key" class="setting-row">
+          <div
+            v-for="it in groupItems(g.keys)"
+            :key="it.key"
+            class="setting-row"
+            :class="{ 'row-wide': WIDE_TYPES.includes(it.type) }"
+          >
             <div class="sr-main">
               <div class="sr-label">
                 {{ it.label }}
@@ -367,6 +620,24 @@ onMounted(() => {
                 </el-select>
                 <div class="sr-default text-muted">默认：{{ optionLabel(it, String(it.default)) }}</div>
               </template>
+              <div v-else-if="it.type === 'times'" class="sr-times">
+                <div v-for="(t, i) in timeList(it)" :key="`${it.key}-${i}`" class="st-row">
+                  <el-time-picker
+                    :model-value="t"
+                    format="HH:mm"
+                    value-format="HH:mm"
+                    :size="isMobile ? 'small' : 'default'"
+                    placeholder="选择时刻"
+                    class="st-picker"
+                    @update:model-value="(v: string | number | Date | null) => setTimeAt(it, i, v == null ? t : String(v))"
+                  />
+                  <el-button link type="danger" size="small" @click="removeTime(it, i)">删除</el-button>
+                </div>
+                <div class="st-actions">
+                  <el-button link type="primary" size="small" @click="addTime(it)">添加时刻</el-button>
+                  <span class="sr-default">默认：{{ (it.default as string[]).join('、') }}</span>
+                </div>
+              </div>
               <template v-else-if="it.type === 'text'">
                 <el-input
                   :model-value="String(valueOf(it))"
@@ -422,9 +693,24 @@ onMounted(() => {
             加入黑名单
           </el-button>
         </div>
+        <!-- 搜索 + 计数：条目一多，先缩小范围再翻页（业界管理列表的固定搭配） -->
+        <div class="bl-toolbar">
+          <el-input
+            v-model="blFilter"
+            size="small"
+            clearable
+            class="bl-search"
+            placeholder="搜索链接 / 作者 / 版块 / 备注"
+          />
+          <span class="text-muted bl-count">
+            共 {{ blItems.length }} 条<template v-if="blFilter">，筛选出 {{ blFiltered.length }} 条</template>
+          </span>
+        </div>
         <div v-loading="blLoading" class="bl-list">
-          <div v-if="!blItems.length" class="text-muted bl-empty">暂无黑名单</div>
-          <div v-for="it in blItems" :key="it.type + '|' + it.value" class="bl-row">
+          <div v-if="!blFiltered.length" class="text-muted bl-empty">
+            {{ blItems.length ? '没有匹配的黑名单条目' : '暂无黑名单' }}
+          </div>
+          <div v-for="it in blPaged" :key="it.type + '|' + it.value" class="bl-row">
             <el-tag
               size="small"
               :type="it.type === 'url' ? 'danger' : it.type === 'author' ? 'warning' : 'info'"
@@ -435,6 +721,19 @@ onMounted(() => {
             <span v-if="it.reason" class="bl-reason-text text-muted">{{ it.reason }}</span>
             <el-button link type="danger" size="small" @click="removeBlacklistItem(it)">移除</el-button>
           </div>
+        </div>
+        <!-- 只有一页时不出分页器（避免"共 7 条 / 1 页"占位） -->
+        <div v-if="blPageCount > 1" class="bl-pager">
+          <el-pagination
+            :current-page="blPage"
+            :page-size="BL_PAGE_SIZE"
+            :total="blFiltered.length"
+            :layout="isMobile ? 'prev, pager, next' : 'total, prev, pager, next'"
+            :pager-count="isMobile ? 5 : 7"
+            small
+            background
+            @current-change="(p: number) => (blPage = p)"
+          />
         </div>
       </div>
 
@@ -556,6 +855,104 @@ onMounted(() => {
   font-size: 12px;
 }
 
+/* 宽控件行（array 多选、times 时刻列表）：「标签｜控件」左右分栏会把标签挤成窄条
+   （实测「演示轮播板块序列」控件固有宽度 1002px、标签只剩 132px，描述被压成竖条），
+   故这类行改为「标签在上、控件在下」的堆叠布局（Element Plus / Ant Design 表单对
+   复杂控件也是独占一行）。紧凑控件（开关 / 数字 / 下拉）仍保持左右分栏。 */
+.setting-row.row-wide {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.row-wide .sr-ctrl {
+  width: 100%;
+  justify-content: flex-start;
+  flex-wrap: wrap;
+}
+
+/* 宽控件独占一行；「恢复默认」被挤到下一行时仍贴右，与紧凑行的位置一致 */
+.row-wide .sr-array,
+.row-wide .sr-times {
+  flex: 1 1 100%;
+}
+
+.row-wide .sr-ctrl > .el-button {
+  margin-left: auto;
+}
+
+/* 定时抓取：状态区（只读，与调度同源；虚线框与「新建下载任务」提交区同一视觉语言） */
+.sched-status {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  border: 1px dashed var(--app-border, #dcdfe6);
+  border-radius: 8px;
+}
+
+.ss-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 13px;
+  flex-wrap: wrap;
+}
+
+.ss-label {
+  min-width: 76px;
+  color: #909399;
+}
+
+.ss-value {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.ss-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 2px;
+  flex-wrap: wrap;
+}
+
+.ss-hint {
+  font-size: 12px;
+}
+
+/* 禁用按钮上的 tooltip 需要一层可命中的包裹元素（disabled 的 button 不派发鼠标事件） */
+.tip-wrap {
+  display: inline-flex;
+}
+
+/* 时刻列表（times 类型）：逐行「时刻 + 删除」，末尾「添加时刻」 */
+.sr-times {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.st-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.st-picker {
+  width: 120px;
+}
+
+.st-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
 .actions {
   display: flex;
   align-items: center;
@@ -575,6 +972,29 @@ onMounted(() => {
   flex-wrap: wrap;
   gap: 8px;
   margin: 10px 0;
+}
+
+/* 黑名单工具栏：搜索框 + 计数（条目多时先缩小范围再翻页） */
+.bl-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 2px 0 8px;
+  flex-wrap: wrap;
+}
+
+.bl-search {
+  width: 280px;
+}
+
+.bl-count {
+  font-size: 12px;
+}
+
+.bl-pager {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 10px;
 }
 
 .bl-type {
@@ -635,6 +1055,15 @@ onMounted(() => {
   .sr-ctrl {
     justify-content: flex-start;
     flex-wrap: wrap;
+  }
+
+  /* 黑名单：搜索框独占一行，计数紧随其后 */
+  .bl-search {
+    width: 100%;
+  }
+
+  .bl-pager {
+    justify-content: center;
   }
 
   .actions {

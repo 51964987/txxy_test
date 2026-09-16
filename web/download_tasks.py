@@ -18,8 +18,9 @@
 - 支持取消任务（pending/running → cancelled 终态，未跑项置为已取消）；
 - 支持**可恢复的暂停**（见 batch_pause）：暂停只收手不再提交新链接，未跑项保留为 pending，
   状态为 `paused`（**非终态**），由 batch_start 继续，不做重新下载——与「取消」语义严格区分；
-- 支持批量开始（见 batch_start，行内「下载」按钮复用同一入口）：失败 / 已取消任务重跑
-  未成功项、已暂停任务续跑未完成项，一次调用覆盖两类诉求（不另写第二套重跑逻辑）；
+- 支持批量开始（见 batch_start，行内「下载」按钮复用同一入口）：把失败 / 已取消 / 已暂停任务
+  的**未完成链接**统一重新排队（已成功的链接不重复下载），一次调用覆盖全部可开始状态，
+  不另写第二套重跑逻辑；
 - 支持排队任务插队（优先级队列 + 队列令牌校验，见 prioritize）。
 
 约定：
@@ -365,6 +366,8 @@ class DownloadTaskManager:
             "priority": bool(priority),
             "_queued": True,
             "_ticket": 0,
+            # 内部字段（下划线开头，不进 API / 展示）：_executing = 有 worker 正在执行本任务
+            "_executing": False,
         }
         with self._lock:
             self._seq += 1
@@ -598,16 +601,20 @@ class DownloadTaskManager:
     def batch_start(self, ids: list[str]) -> tuple[list[str], int, list[dict[str, str]]]:
         """批量开始下载（下载中心「开始下载」；行内「下载」按钮传单个 ID 复用本入口）。
 
-        按任务当前状态分派（「开始下载」同时覆盖「继续」与「重跑」两类诉求的原因）：
-        - `paused`（已暂停）：未跑链接本就保留为 pending，重新入队继续即可，
-          **不重跑**已成功项；
-        - `failed` / `cancelled`：把 fail / cancelled（含服务重启由 pending 转来的）与遗留
-          running 项重置为 pending 后重新入队——即「在原任务内重跑未成功链接」（11.10 口径）；
+        可开始的状态只有三类，且**统一按同一口径处理**（不论此前是暂停、失败还是取消）：
+        - `paused`（已暂停）/ `failed`（失败）/ `cancelled`（已取消）：把未完成的链接
+          （fail / cancelled / 服务重启遗留的 running；暂停任务中未提交的 pending 原样保留）
+          重新排队，即「在原任务内继续/重跑未成功链接」（11.10 口径），已 ok/skip 的不重复下载；
         - `pending`（已在队列中）/ `running`（正在下载）/ `done`（已完成）/ 任务不存在：跳过，
           并如实回传原因。**不静默忽略**——静默忽略会让用户以为按钮没生效。
         - `paused` 但 worker 仍在收尾已提交的链接（`pause_requested=True`）：跳过。此时任务
           正在被 worker 执行，重新入队会让第二个 worker 在同一任务上并发跑第二遍
           （与 11.10「进行中任务禁止重跑」同一风险，只是入口从 retry 换成了本方法）。
+        - **为什么暂停任务也重跑失败项**：同一个按钮必须在各状态下口径一致。此前的实现让
+          「暂停任务只续跑未跑链接、失败任务却重跑失败链接」，于是一批勾选里同一个动作两种
+          结果（实测：暂停任务只补跑 1 个、失败任务重跑 3 个），且暂停任务永远无法靠
+          「开始下载」收敛到完成态——必须先点一次「下载」再点一次开始。统一为一种口径后，
+          「开始下载」= 把这个任务的未完成部分全部下完（语义与按钮文案一致）。
 
         返回 (已执行任务 ID, 涉及链接数, 跳过明细)。持锁改状态、锁外启动 worker
         （threading.Lock 不可重入，持锁调用 start() 会死锁，与 submit 同一约定）。
@@ -634,14 +641,10 @@ class DownloadTaskManager:
                 if status == "paused" and t.get("pause_requested"):
                     skipped.append({"id": tid, "reason": "正在收尾已提交的链接，请稍候再试"})
                     continue
-                # 继续暂停任务时不清空未成功项：失败的链接留给用户显式再点一次「下载」，
-                # 避免「继续」把刚失败的链接无声地再打一遍（暂停态下失败多为网络波动，
-                # 由用户决定是否重试更清楚）
-                reset = set() if status == "paused" else {"fail", "cancelled", "running"}
-                n = self._requeue_locked(t, reset)
+                n = self._requeue_locked(t)
                 if n == 0:
                     if status == "paused":
-                        # 暂停时已无剩余链接（在跑的已在暂停那一刻收尾完）：把终态校准回来，
+                        # 理论上暂停结束就应已按明细判终态（见 _execute）；这里兜底：
                         # 不留一个永远起不来的「已暂停」
                         t["pause_requested"] = False
                         t["status"] = self._finalize_status(t)
@@ -653,16 +656,17 @@ class DownloadTaskManager:
         self.start()
         return started, links, skipped
 
-    def _requeue_locked(self, t: dict[str, Any], reset: set[str]) -> int:
-        """把任务中未完成的链接重新排队（**须在持锁状态下调用**），返回本次待跑链接数。
+    def _requeue_locked(self, t: dict[str, Any]) -> int:
+        """把任务中**未完成**的链接重新排队（**须在持锁状态下调用**），返回本次待跑链接数。
 
-        reset 是需要「清空旧结果、重新下载」的历史状态集合（见 batch_start 的调用点）；
-        传入空集时只重新入队（继续已暂停任务），pending 项原样保留。
+        未完成 = fail / cancelled / 服务重启遗留的 running（统一重置为 pending 并清空旧结果，
+        让 download_files 重新落盘）+ 本就 pending 的（暂停后没来得及提交的那批，原样保留）。
+        已 ok / skip 的不动——重复下载已成功的链接纯属浪费流量。
         """
         pending_count = 0
         for it in t["items"]:
             status = it.get("status")
-            if status in reset:
+            if status in ("fail", "cancelled", "running"):
                 # 重置该链接，准备重跑（清空旧结果，让 download_files 重新落盘）
                 it["status"] = "pending"
                 it["stats"] = {}
@@ -696,7 +700,8 @@ class DownloadTaskManager:
         """批量暂停（下载中心「全部暂停」）：把排队中 / 正在下载的任务置为 `paused`。
 
         与「取消」的语义区别（两者都是「停下来」，但只有一个可恢复）：
-        - 暂停 = 非终态，未跑链接保留 pending，`batch_start` 可继续，**不重新下载**已成功项；
+        - 暂停 = 非终态，未跑链接保留 pending，`batch_start` 可继续（已成功项不重下，
+          此前失败的链接会在继续时一并重跑）；
         - 取消 = 终态，未跑链接置为 cancelled。
 
         - `pending`（排队中，尚未开始）：立即置为 paused，并复用 prioritize 的令牌失效机制
@@ -752,11 +757,17 @@ class DownloadTaskManager:
         该链接正在跑（running/pending）则返回 False。
 
         注意：本方法会把**已暂停的任务**一并拉回 pending 重跑该链接，属于「单链接强制重下」
-        的语义（用户明确指定了链接）；批量「开始下载」不会走这里（暂停任务只补跑 pending 项）。
+        的语义（用户明确指定了链接）；批量「开始下载」走 batch_start，但仍只跑未完成链接——
+        两者区别在于「只跑指定这一条」还是「跑全部未完成」。
         """
         with self._lock:
             t = self._tasks.get(tid)
             if not t:
+                return False
+            # 任务正在被 worker 执行（含暂停后仍在收尾的窗口）：单条重下要把**整个任务**
+            # 重新入队，会让第二个 worker 与当前 worker 并发跑同一任务（重复下载、done 翻倍）。
+            # 这类请求等任务暂停完成或结束后再做（_execute 的 _executing 标记是同一守卫的兜底）。
+            if t.get("_executing") or t.get("pause_requested"):
                 return False
             item = next((it for it in t["items"] if it["url"] == url), None)
             if not item:
@@ -835,14 +846,36 @@ class DownloadTaskManager:
         return out
 
     def _execute(self, task: dict[str, Any]) -> None:
+        """执行单个任务的**唯一入口**：持锁做「执行中」标记与状态再确认，再交给 _execute_inner。
+
+        两道守卫都必要：
+        - `status != pending`：_run_loop 的令牌校验与本次执行之间存在窗口，排队中的任务
+          可能在这一瞬被「暂停」（paused）或「取消」（cancelled）——两者都会使令牌失效，
+          但那个校验已经做完了。不加这道确认会出现「用户点了暂停，任务照样跑完」的假暂停
+          （窗口极小、静态检查看不出来，用户侧就是「按钮没生效」）。
+        - `_executing`：同一任务被两个 worker 同时执行的兜底（例如任务运行中又对某条失败链接
+          点「重新下载」，retry_url 会把整个任务重新入队）。并发跑同一任务会重复下载同一批
+          链接、done 计数翻倍，属数据损坏级问题，故用标记硬挡。
+        标记用 try/finally 清理，异常路径也不会把它永久留下（否则任务再也起不来）。
+        """
+        with self._lock:
+            if task.get("status") != "pending" or task.get("_executing"):
+                return
+            task["_executing"] = True
+            task["status"] = "running"
+            task["started_at"] = self._now()
+        try:
+            self._execute_inner(task)
+        finally:
+            task["_executing"] = False
+
+    def _execute_inner(self, task: dict[str, Any]) -> None:
         """执行单个任务：线程池按并发数并行处理 URL，逐个记录结果并落盘。
 
         只处理 status 为 pending 的链接；已 ok/skip/fail/cancelled 的不再重跑。
         这样「重新下载单条链接」（retry_url）只需把目标项重置为 pending 并重新入队，
         即可就地补下，而不必把整批重跑一遍（否则会重复下载已成功的链接）。
         """
-        task["status"] = "running"
-        task["started_at"] = self._now()
         items: list[dict[str, Any]] = task["items"]
         total = task["total"]
         # 仅提交 pending 的链接；其余状态保持原状
@@ -908,13 +941,20 @@ class DownloadTaskManager:
                         _TaskLogSink(task, i + 1, total),
                     )
                 ] = i
+        fail_count = sum(1 for it in items if it["status"] == "fail")
+        ok_count = sum(1 for it in items if it["status"] in ("ok", "skip"))
+        cancelled_count = sum(1 for it in items if it["status"] == "cancelled")
+        # 暂停后是否还有「没跑过」的链接：有则进入可恢复的 paused，没有则直接按明细判终态。
+        # 判据只能用收尾后的 pending 数——在跑项在 _record_result 之前状态也是 pending，
+        # 收尾后仍为 pending 的必然是当初没能提交出去的那批。
+        pause_has_leftover = any(it["status"] == "pending" for it in items)
         if task["cancel_requested"]:
             for item in items:
                 if item["status"] == "pending":
                     item["status"] = "cancelled"
             task["status"] = "cancelled"
             _log(task, f"任务已取消（已完成 {task['done']}/{task['total']}）")
-        elif task["pause_requested"]:
+        elif task["pause_requested"] and pause_has_leftover:
             # 暂停：**不判终态、不置 finished_at**，未跑链接保留 pending，等 batch_start 继续。
             # 与取消的本质区别就在这里：未跑项不被置为 cancelled，因此可无损续跑。
             task["status"] = "paused"
@@ -923,14 +963,22 @@ class DownloadTaskManager:
                 f"任务已暂停（已完成 {task['done']}/{task['total']}）"
                 "——剩余链接可在「开始下载」后继续",
             )
+        elif task["pause_requested"]:
+            # 暂停请求到达时已无未跑链接（并发数足以一次把链接全提交出去，收尾即结束）：
+            # 直接按明细判终态。否则会留下「已暂停但没有任何剩余链接」的死胡同——
+            # 用户必须再点一次「开始下载」才能让它变成 已完成/失败（实测：2 链接任务
+            # 暂停后收尾停在 paused + fail:2，再点一次才变 failed 并提示「没有待下载的链接」）。
+            task["status"] = self._finalize_status(task)
+            _log(
+                task,
+                f"暂停请求到达时已无剩余链接，任务按明细结束：成功 {ok_count} / 失败 {fail_count}"
+                + f"（共 {task['total']}）",
+            )
         else:
             # 终态按各链接结果判定。关键：含「已取消」链接（无真正失败）时绝不能标 done，
             # 否则会出现「任务成功、明细全已取消」的数据矛盾（典型场景：单链接重下把任务
             # reset 为 pending 重跑，其余旧链接仍是 cancelled，收尾 fail_count=0 误判成功）。
             # 故交由 _finalize_status 统一判定：有失败→failed；有已取消→cancelled；全成功→done。
-            fail_count = sum(1 for it in items if it["status"] == "fail")
-            ok_count = sum(1 for it in items if it["status"] in ("ok", "skip"))
-            cancelled_count = sum(1 for it in items if it["status"] == "cancelled")
             task["status"] = self._finalize_status(task)
             if task["status"] == "failed":
                 _log(
@@ -1153,6 +1201,9 @@ class DownloadTaskManager:
             # isinstance 只能收窄到 dict[Unknown, Unknown]，用 cast 明确为
             # dict[str, Any]，否则下游每个 t.get(...) 都会被判为 Unknown 并告警
             t = cast("dict[str, Any]", raw_item)
+            # 「执行中」标记是进程内状态：磁盘里可能是崩溃瞬间的 True，必须复位，
+            # 否则该任务永远无法再被调度（_execute 的守卫会一直挡住）
+            t["_executing"] = False
             if t.get("status") == "paused":
                 # 暂停是用户主动留下的状态，重启后必须保持暂停（可恢复），不能按「中断」
                 # 处理成 failed —— 那会把用户特意攒着待续跑的任务变成失败。

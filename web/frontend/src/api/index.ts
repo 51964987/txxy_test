@@ -424,7 +424,8 @@ export interface SettingItem {
   desc: string
   /** 生效范围：immediate=下一次调用即生效 / next_task=下一个任务生效 / frontend=前端直接应用 */
   scope: 'immediate' | 'next_task' | 'frontend'
-  type: 'int' | 'float' | 'bool' | 'array' | 'text' | 'enum'
+  /** times = 时刻列表（值为 string[]，如 ["08:00","20:00"]），供定时抓取计划时刻使用 */
+  type: 'int' | 'float' | 'bool' | 'array' | 'text' | 'enum' | 'times'
   min?: number | null
   max?: number | null
   /** array 类型：可选项的键与展示标签 */
@@ -438,6 +439,59 @@ export interface SettingItem {
 export interface AppConfig {
   enable_auto_refresh: boolean
   settings: SettingItem[]
+}
+
+/** 定时抓取调度动作：started=已启动批次 / skipped=上一批仍在跑 / missed=错过（服务未运行）/ failed=启动失败 */
+export type ScheduleAction = 'started' | 'skipped' | 'missed' | 'failed'
+
+/** 上次调度结果（页面展示「上次结果」用，原因由后端原样给出） */
+export interface ScheduleLast {
+  at: string
+  date: string
+  action: ScheduleAction
+  reason: string
+  handled_at: string
+  pid?: number
+}
+
+/** 正在运行的抓取批次（批次详情来自 run_days，与「运行记录」页同一份数据） */
+export interface ScheduleRunningRun {
+  id: number
+  date: string
+  source: string
+  restart: number
+  started_at: string
+  elapsed_minutes: number | null
+}
+
+/**
+ * 当前是否有批次在跑（与后端 start_run 的防重判据同源）：
+ * - state="running"：库里已有活的运行记录；
+ * - state="starting"：进程已拉起、运行记录还没写（脚本启动期几秒空窗）。
+ */
+export interface ScheduleRunning {
+  state: 'running' | 'starting'
+  run: ScheduleRunningRun | null
+  pid?: number
+}
+
+/** 定时抓取状态（GET /api/schedule）：与真实触发判定同源计算 */
+export interface ScheduleStatus {
+  enabled: boolean
+  /** 计划时刻（"HH:MM"，已规格化：去重、升序、限量） */
+  times: string[]
+  /** 下次执行时间（"YYYY-MM-DD HH:MM"）；未启用或无计划时刻时为 null */
+  next_run_at: string | null
+  /** 今日已处理的计划时刻（已启动 / 已跳过 / 未执行） */
+  today_done: string[]
+  last: ScheduleLast | null
+  /** 调度线程最后一次判定的时间（为空或过旧即说明调度未在运行） */
+  last_tick: string | null
+  /** 当前在跑的批次（null = 空闲）；页面据此禁用「立即运行一次」 */
+  running: ScheduleRunning | null
+  /** 超过计划时刻多久算「错过」（分钟） */
+  miss_tolerance_minutes: number
+  tick_seconds: number
 }
 
 export interface PostsPage {
@@ -614,6 +668,9 @@ export interface DownloadTaskSummary {
   started_at: string | null
   finished_at: string | null
   cancel_requested: boolean
+  /** 暂停请求标记：下载中的任务收到暂停后为 true，直到「已提交的链接收尾完成」才复位。
+   *  为 true 期间任务不能续跑、也不能单条重下（避免两个 worker 并发跑同一任务）。 */
+  pause_requested?: boolean
   priority?: boolean
   /** 队列入队令牌：排队中任务按它升序展示，与实际执行顺序（FIFO）一致 */
   ticket?: number
@@ -661,6 +718,8 @@ export interface BlacklistResp {
 
 export const api = {
   config: () => get<AppConfig>('/config'),
+  /** 定时抓取状态（设置页「定时抓取」组展示：下次执行 / 上次结果 / 线程心跳） */
+  schedule: () => get<ScheduleStatus>('/schedule'),
   saveSettings: (items: Record<string, number | boolean | string[] | string>) =>
     put<{ ok: boolean; settings: SettingItem[] }>('/settings', { items }),
   resetSettings: (keys: string[] = []) =>

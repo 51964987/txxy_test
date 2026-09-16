@@ -14,6 +14,7 @@ import re
 import sqlite3
 import subprocess
 import sys
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -594,6 +595,12 @@ def get_run_log(
 _PID_FILE = "run_batch_web.pid"
 _WEB_LOG = "run_batch_web.log"
 
+# 触发互斥锁：**检查 → 拉起进程 → 落 pid 必须在同一把锁内**。
+# 不加锁时两次并发触发会双双通过检查（进程还没写 run_days 记录、pid 文件也还没落），
+# 各自拉起一个批次——2026-09-16 实测发生过（两个批次互抢 1024 镜像，7 个版块全失败）。
+# 这是「服务端必须保证幂等/互斥，不能只靠前端按钮 loading」的典型场景。
+_START_LOCK = threading.Lock()
+
 
 def _pid_path() -> Path:
     return config.OUTPUTS_DIR / _PID_FILE
@@ -622,19 +629,48 @@ def active_pid() -> int | None:
     return pid
 
 
-def has_active_run() -> bool:
-    """是否存在「活的」运行中批次（Web 端触发前的防并发检查）。
+def active_run_info() -> dict[str, Any] | None:
+    """当前「活的」运行中批次；无则 None。**has_active_run 与页面状态共用同一实现**。
 
     口径与列表展示一致：running 但超过 RUNNING_STALE_SECONDS 无心跳的记录
     属进程消亡残留（孤儿降级），不算活——它们本来就需要重新跑。
-    并发跑两个抓取批次会同时写同一批 CSV/SQLite 与运行记录，故拒绝。
+    额外返回 id / 开始时间 / 已运行分钟数，供页面显示「批次 #id 运行中（已 N 分钟）」，
+    避免页面为了这几个字段再写一套查询与判活逻辑（第 1 条约束）。
     """
     if not _db_ready():
-        return False
+        return None
     rows = db.query(
-        "SELECT id, status, created_at, updated_at FROM run_days WHERE status = 'running'"
+        "SELECT id, run_date, status, created_at, updated_at, source, restart FROM run_days"
+        " WHERE status = 'running' ORDER BY id DESC"
     )
-    return any(not _running_stale(dict(r)) for r in rows)
+    for r in rows:
+        info = dict(r)
+        if _running_stale(info):
+            continue
+        started = str(info.get("created_at") or "")
+        elapsed: int | None = None
+        try:
+            elapsed = int((datetime.now() - datetime.fromisoformat(started)).total_seconds() // 60)
+        except ValueError:
+            elapsed = None
+        return {
+            "id": int(info["id"]),
+            "date": _fmt_date(str(info.get("run_date") or "")),
+            "source": str(info.get("source") or ""),
+            "restart": int(info.get("restart") or 0),
+            "started_at": started,
+            "elapsed_minutes": elapsed,
+        }
+    return None
+
+
+def has_active_run() -> bool:
+    """是否存在「活的」运行中批次（触发前的防并发检查）。
+
+    并发跑两个抓取批次会同时写同一批 CSV/SQLite 与运行记录，且会互相抢 1024 镜像
+    （每个批次启动时都「按端口定位强制结束占用进程」，把对方刚起的镜像杀掉），故拒绝。
+    """
+    return active_run_info() is not None
 
 
 def start_run(use_local_proxy: bool, restart: bool) -> dict[str, Any]:
@@ -649,42 +685,50 @@ def start_run(use_local_proxy: bool, restart: bool) -> dict[str, Any]:
     以子进程拉起（脚本运行开始自建 running 记录并写 outputs/<日期>/ 日志），
     Web 进程不等待、不接管其输出。前端 4 秒轮询 + 列表 5 秒缓存，新记录最迟十余秒出现。
     防重不过以 ValueError 抛出（消息直接面向用户），由 API 层转 409。
-    """
-    if has_active_run():
-        raise ValueError("已有运行中的抓取批次，请等其完成后再触发（避免并发抓取互踩数据）")
 
-    cmd = [sys.executable, "-X", "utf8", "run_batch.py", "true" if use_local_proxy else "false"]
-    if restart:
-        cmd.append("--restart")
-    # CREATE_NO_WINDOW：Web 服务为后台进程，避免每次触发弹出控制台窗口
-    flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
-    # 输出留痕：脚本自己会写 run_batch_<日期>.log，但其 file_logger.setup 之前的
-    # 启动期错误（参数/环境/1024 服务启动失败）只进 stdout——此前重定向 DEVNULL，
-    # 进程无声消亡时无从排查（实际发生过）。改重定向到固定日志，append 并带触发头。
-    config.OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
-    log_fh = open(config.OUTPUTS_DIR / _WEB_LOG, "ab")
-    try:
-        log_fh.write(
-            f"\n===== Web 触发 {datetime.now().isoformat(timespec='seconds')} "
-            f"{' '.join(cmd[2:])} =====\n".encode("utf-8")
-        )
+    **整个「检查 → 拉起 → 落 pid」在 _START_LOCK 内完成**：并发触发时后到的请求会等前一个
+    走完流程再检查，从而看到 pid 文件而不重复拉起（不加锁时两次请求会双双通过检查）。
+    """
+    with _START_LOCK:
+        # 防重两道判据缺一不可：has_active_run 看库里是否已有 running 记录，
+        # active_pid 看本项目 Web 拉起的进程是否还活着——**running 记录由脚本自己写**，
+        # 从 Popen 到脚本落库之间有几秒空窗，只看库会让两次快速触发各起一个批次
+        # （定时调度恰好落在这个窗口时同样会踩，故定时调度上线前必须补上这道）。
+        if has_active_run() or active_pid() is not None:
+            raise ValueError("已有运行中的抓取批次，请等其完成后再触发（避免并发抓取互踩数据）")
+
+        cmd = [sys.executable, "-X", "utf8", "run_batch.py", "true" if use_local_proxy else "false"]
+        if restart:
+            cmd.append("--restart")
+        # CREATE_NO_WINDOW：Web 服务为后台进程，避免每次触发弹出控制台窗口
+        flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+        # 输出留痕：脚本自己会写 run_batch_<日期>.log，但其 file_logger.setup 之前的
+        # 启动期错误（参数/环境/1024 服务启动失败）只进 stdout——此前重定向 DEVNULL，
+        # 进程无声消亡时无从排查（实际发生过）。改重定向到固定日志，append 并带触发头。
+        config.OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
+        log_fh = open(config.OUTPUTS_DIR / _WEB_LOG, "ab")
         try:
-            proc = subprocess.Popen(
-                cmd,
-                cwd=str(config.BASE_DIR),
-                stdin=subprocess.DEVNULL,
-                stdout=log_fh,
-                stderr=log_fh,
-                creationflags=flags,
+            log_fh.write(
+                f"\n===== Web 触发 {datetime.now().isoformat(timespec='seconds')} "
+                f"{' '.join(cmd[2:])} =====\n".encode("utf-8")
             )
-        except OSError as e:
-            raise ValueError(f"启动抓取进程失败: {e}") from e
-    finally:
-        # Popen 已复制 fd，父进程侧立即关闭，避免句柄常驻
-        _ = log_fh.close()
-    # pid 落盘：Web 重启后强制终止仍能定位进程
-    _ = _pid_path().write_text(str(proc.pid), encoding="utf-8")
-    return {"started": True, "pid": proc.pid, "cmd": cmd}
+            try:
+                proc = subprocess.Popen(
+                    cmd,
+                    cwd=str(config.BASE_DIR),
+                    stdin=subprocess.DEVNULL,
+                    stdout=log_fh,
+                    stderr=log_fh,
+                    creationflags=flags,
+                )
+            except OSError as e:
+                raise ValueError(f"启动抓取进程失败: {e}") from e
+        finally:
+            # Popen 已复制 fd，父进程侧立即关闭，避免句柄常驻
+            _ = log_fh.close()
+        # pid 落盘：Web 重启后强制终止仍能定位进程（必须在锁内，否则并发触发看不到它）
+        _ = _pid_path().write_text(str(proc.pid), encoding="utf-8")
+        return {"started": True, "pid": proc.pid, "cmd": cmd}
 
 
 def delete_run(run_id: int) -> dict[str, Any]:

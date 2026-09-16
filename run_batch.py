@@ -60,6 +60,71 @@ WEB_PORT = _mirror.port or 1024
 WEB_APP_START_TIMEOUT = 15     # 启动 web.exe 后等待端口就绪的最长时间（秒）
 WEB_APP_SHUTDOWN_TIMEOUT = 10  # 关闭 web.exe 后等待端口释放的最长时间（秒）
 
+# ---- 批次单实例锁（跨启动方式的最后一道防线） ----
+# 为什么必须有：能启动本脚本的入口不止一个——页面「启动抓取」、定时调度、控制台手敲、
+# Windows 计划任务、容器 cron。只在 Web 侧做防重拦不住后三种；而两个批次同时跑会**互相
+# 抢 1024 镜像**（每个批次启动时都「按端口定位并强制结束占用进程」，把对方刚起的 web.exe
+# 杀掉），2026-09-16 实测因此 7 个版块全失败、并留下两条 run_days 记录。
+# 实现用 **OS 级文件锁**而不是「pid 文件 + 存活检查」：进程被强杀/崩溃时操作系统会自动
+# 释放锁，不存在「残留锁把后续批次永久挡住」的问题，也不需要 psutil 之类的额外依赖。
+_LOCK_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "outputs", "run_batch.lock")
+# 锁加在偏移 1024 处、持有者 pid 写在文件开头：Windows 的字节范围锁是**强制锁**
+# （LockFile），若锁住内容所在的字节，排查时连读都读不了（实测 PermissionError）。
+# 这样「锁文件能看是谁占着」与「锁互斥」两件事都成立；POSIX 的 flock 是建议锁，读不受影响。
+_LOCK_OFFSET = 1024
+_lock_fd: int | None = None
+
+
+def acquire_single_instance_lock() -> bool:
+    """独占获取批次锁：成功返回 True（并把锁持有到进程结束），已被占用返回 False。
+
+    Windows 用 msvcrt.locking、其它平台用 fcntl.flock，均为非阻塞独占锁。
+    """
+    global _lock_fd
+    if _lock_fd is not None:
+        return True
+    try:
+        os.makedirs(os.path.dirname(_LOCK_FILE), exist_ok=True)
+        fd = os.open(_LOCK_FILE, os.O_CREAT | os.O_RDWR)
+    except OSError:
+        # 锁文件都开不了（如 outputs/ 不可写）不应阻断抓取：宁可放弃这道保护
+        return True
+    try:
+        _ = os.lseek(fd, _LOCK_OFFSET, os.SEEK_SET)
+        if sys.platform == "win32":
+            import msvcrt
+
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        os.close(fd)
+        return False
+    # 拿到锁之后才写持有者信息：抢锁失败的一方绝不能改这个文件，否则把持有者
+    # 覆盖成自己，人工排查时看到的是「谁没抢到」而不是「谁在跑」（实测踩到）。
+    # 定长写入（不 truncate）：锁在偏移 1024 处，不碰它就是安全的。
+    try:
+        _ = os.lseek(fd, 0, os.SEEK_SET)
+        _ = os.write(fd, f"{os.getpid():<32}".encode("ascii"))
+    except OSError:
+        pass  # 诊断信息写不进去不影响互斥
+    _lock_fd = fd
+    return True
+
+
+def release_single_instance_lock() -> None:
+    """释放批次锁（正常退出时调用；异常退出由操作系统释放，不影响正确性）"""
+    global _lock_fd
+    if _lock_fd is None:
+        return
+    try:
+        os.close(_lock_fd)
+    except OSError:
+        pass
+    _lock_fd = None
+
 # ============ 核心逻辑 ============
 
 
@@ -413,6 +478,18 @@ def main() -> None:
         print("未配置版块，请在 SECTIONS 字典中添加版块ID和名称")
         sys.exit(1)
 
+    # --- 单实例检查：必须在启动/接管 1024 镜像**之前** ---
+    # 放在这里而不是更晚：ensure_web_service() 会按端口定位并强制结束占用进程，
+    # 若先接管镜像再发现「已有批次在跑」，等于已经把对方正在用的镜像杀掉了。
+    if not acquire_single_instance_lock():
+        log("[跳过] 已有另一个抓取批次正在运行（outputs/run_batch.lock 被占用），本次不启动")
+        print(
+            "[跳过] 已有另一个批次在跑：同时跑两个批次会互相抢 1024 镜像并重复写库，"
+            "本次未执行。请在「运行记录」页确认当前批次状态，或等它结束后再试。",
+            file=sys.stderr,
+        )
+        sys.exit(0)
+
     # --- 确保 web 服务（端口 1024）可用 ---
     # USE_LOCAL_PROXY=False 时跳过端口监控/启停，直连唯一业务域名
     web_proc: subprocess.Popen[bytes] | None = None
@@ -605,6 +682,9 @@ def main() -> None:
                 shutdown_web_service(web_proc)
             except Exception as e:
                 print(f"[1024服务] 关闭 web 服务异常: {e}", file=sys.stderr)
+
+        # 释放批次锁（异常/中断路径同样经过这里；进程被强杀时由操作系统释放）
+        release_single_instance_lock()
 
         # --- 批次正常完成（未中断/未发生调度器级异常）后清理过期日志 ---
         # 异常退出（Ctrl+C、崩溃、强杀）不清理，保留日志现场便于排查；

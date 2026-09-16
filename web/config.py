@@ -21,9 +21,23 @@
   TXXY_DOWNLOAD_HISTORY_FILE 下载履历持久化文件（默认 outputs/download_history.json）
 """
 import os
+import re
 from pathlib import Path
+from typing import Any
 
 BASE_DIR = Path(__file__).resolve().parent.parent  # txxy_test/
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    """布尔型环境变量解析（唯一实现：1/true/yes/on 为真，0/false/no/off 为假，空/未设置取默认）。
+
+    此前每个布尔配置各写一遍 `os.environ.get(...).strip().lower() in (...)`，
+    新增布尔项就多复制一份——收敛成一处，改口径只改这里（第 1 条约束）。
+    """
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
 
 # ---- 域名配置：全部收敛到项目根 txxy_env.py（唯一配置源），此处只读不定义 ----
 # 用 importlib 按文件路径加载，而不是把项目根塞进 sys.path——web/ 与项目根
@@ -125,13 +139,49 @@ TRASH_KEEP_DAYS = int(os.environ.get("TXXY_TRASH_KEEP_DAYS", "7"))
 # 数据总览【自动刷新】总开关：默认开启（Header 显示自动刷新开关并启动轮询，
 # 抓取过程中 KPI 准实时更新）。如需关闭可设环境变量 TXXY_ENABLE_AUTO_REFRESH=0。
 # 前端 /api/config 读取该值，为 False 时不显示自动刷新开关、不启动轮询。
-ENABLE_AUTO_REFRESH = os.environ.get("TXXY_ENABLE_AUTO_REFRESH", "1").strip().lower() in ("1", "true", "yes", "on")
+ENABLE_AUTO_REFRESH = _env_bool("TXXY_ENABLE_AUTO_REFRESH", True)
 
 # 内容资产「沉淀目标」（SLO 式进度）默认值：数据总览资产卡据此显示目标进度条与剩余缺口。
 # 归 config 的理由与 ENABLE_AUTO_REFRESH 同类——服务级展示口径的默认值，设置页只存覆盖值。
 # scope 三档与 /stats/assets 的分层沉淀率（coverage）key 一一对应。
 ASSET_GOAL_SCOPE = "top"   # all / engaged / top
 ASSET_GOAL_RATE = 50       # 目标覆盖率（%）
+
+# 计划时刻的最大条数：超过此数一天要跑很多次全量抓取，对源站压力过大，保存时截断
+MAX_SCHEDULE_TIMES = 6
+
+# 时刻文本：接受 "8:00" / "08:00"（小时允许 1~2 位，分钟必须 2 位）
+_TIME_RE = re.compile(r"^(\d{1,2}):(\d{2})$")
+
+
+def normalize_times(raw: Any) -> list[str]:
+    """把「计划时刻」规格化为有序去重的 ["HH:MM", ...]；非法项直接丢弃（不阻断配置保存）。
+
+    **唯一实现**：环境变量、设置文件、页面保存（settings 的 times 类型）、调度器读配置
+    全都调它，避免同一份解析规则写两遍后各自漂移（第 1 条约束）。
+
+    接受 list / tuple，或逗号/分号/空格分隔的字符串（环境变量形态）；
+    超出 MAX_SCHEDULE_TIMES 的部分截断。
+    """
+    if isinstance(raw, str):
+        items: list[Any] = re.split(r"[,;，；\s]+", raw)
+    elif isinstance(raw, (list, tuple)):
+        items = list(raw)
+    else:
+        items = []
+    out: list[str] = []
+    for item in items:
+        m = _TIME_RE.match(str(item).strip())
+        if not m:
+            continue
+        hour, minute = int(m.group(1)), int(m.group(2))
+        if hour > 23 or minute > 59:
+            continue
+        t = f"{hour:02d}:{minute:02d}"
+        if t not in out:
+            out.append(t)
+    return sorted(out)[:MAX_SCHEDULE_TIMES]
+
 
 def fid_name(fid: str) -> str:
     """版块 ID → 名称。唯一映射在 txxy_env.SECTIONS，抓取端（run_batch）与展示端
@@ -144,3 +194,22 @@ def use_local_proxy() -> bool:
     run_batch 配置区同源（USE_LOCAL_PROXY = txxy_env.use_local_proxy()），
     Web 端触发抓取时把它返回给前端做「启动抓取」弹窗的默认勾选状态。"""
     return _TXXY_ENV.use_local_proxy()
+
+
+# ---------------- 定时抓取调度（页面可配置） ----------------
+# 由 web/scheduler.py 在服务进程内按时刻自动启动 run_batch；配置在参数设置页「定时抓取」组。
+# 默认开启 + 08:00 / 20:00：这是用户确认过的实际排期（2026-09-16），
+# 同时已停用 Windows 计划任务与容器 cron —— 同一时刻只允许一处调度在跑抓取。
+SCRAPE_SCHEDULE_ENABLED = _env_bool("TXXY_SCRAPE_SCHEDULE_ENABLED", True)
+SCRAPE_SCHEDULE_TIMES = normalize_times(os.environ.get("TXXY_SCRAPE_SCHEDULE_TIMES", "08:00,20:00"))
+# 对应 run_batch.py 的 --restart（默认与既有 run_daily.bat 一致：强制全量重跑）
+SCRAPE_SCHEDULE_RESTART = _env_bool("TXXY_SCRAPE_SCHEDULE_RESTART", True)
+# 对应 run_batch.py 的 USE_LOCAL_PROXY 入参（默认跟随环境判定，与手动「启动抓取」同源）
+SCRAPE_SCHEDULE_USE_PROXY = _env_bool("TXXY_SCRAPE_SCHEDULE_USE_PROXY", use_local_proxy())
+# 调度状态（已处理的计划时刻 + 上次结果）：落盘在 outputs/，与下载任务/回收站索引同一模式
+SCRAPE_SCHEDULE_STATE_FILE = Path(
+    os.environ.get("TXXY_SCRAPE_SCHEDULE_STATE_FILE", str(BASE_DIR / "outputs" / "scrape_schedule_state.json"))
+)
+# 错过容差（秒）：tick 晚于计划时刻超过该值即视为「当时服务未运行」→ 记「未执行」不补跑。
+# 600s 足够覆盖 tick 间隔（60s）与短暂卡顿，又能区分「服务没开」这种情况。
+SCRAPE_SCHEDULE_MISS_TOLERANCE = int(os.environ.get("TXXY_SCRAPE_SCHEDULE_MISS_TOLERANCE", "600"))

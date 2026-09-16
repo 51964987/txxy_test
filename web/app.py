@@ -27,6 +27,7 @@ for _stream in (sys.stdout, sys.stderr):
 
 import blacklist
 import config
+import scheduler
 import settings
 from api import router as api_router
 
@@ -87,6 +88,19 @@ def ensure_blacklist_schema() -> None:
         blacklist.ensure_schema()
     except Exception as e:  # 黑名单缺失不应阻断主服务启动
         _monitor_logger.warning("建立链接黑名单 schema 失败（大屏过滤将不生效）: %s", e)
+
+
+@app.on_event("startup")
+def start_scrape_scheduler() -> None:
+    """启动定时抓取调度线程（参数设置页「定时抓取」组配置）。
+
+    失败不阻断启动（与上面两个钩子同一容错口径）：调度不可用时看板仍应可用，
+    用户在设置页看到「下次执行」为空即可判断异常；原因记入监控日志。
+    """
+    try:
+        scheduler.scheduler.start()
+    except Exception as e:
+        _monitor_logger.warning("定时抓取调度启动失败（页面可再次检查设置）: %s", e)
 
 FRONTEND_DIST = Path(__file__).resolve().parent / "frontend" / "dist"
 
