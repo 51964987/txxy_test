@@ -5,7 +5,6 @@
 - 可选入参 USE_LOCAL_PROXY：python run_batch.py [true|false]（不传则用配置区默认值）
 - 可选入参 --restart：忽略断点进度，强制重跑所有版块（透传给各 scraper.py 子进程）
 """
-import socket
 import subprocess
 import sys
 import threading
@@ -14,9 +13,9 @@ import os
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed, Future
 from datetime import datetime
-from urllib.parse import urlparse
 
 import file_logger
+import mirror_service
 import run_recorder
 import txxy_env
 from run_recorder import SectionInfo
@@ -50,15 +49,9 @@ FORCE_RESTART = False
 
 # ---- 本地 web 服务（端口守护，仅 USE_LOCAL_PROXY=True 时生效） ----
 # scraper.py 抓取的站点由本机 web.exe 提供（127.0.0.1:1024）。
-# run_batch 运行前先确保端口可用：未监听则自动启动 web.exe，全部任务结束后再关闭。
-WEB_APP_EXE = r"D:\Tools\1024app_win10_2025_1.02\web.exe"  # web 服务程序路径
-# host/port 由唯一配置源的默认镜像地址派生，不另写字面量——
-# 否则改端口时，端口守护（启停 web.exe）与抓取地址会对不上。
-_mirror = urlparse(txxy_env.DEFAULT_LOCAL_PROXY)
-WEB_HOST = _mirror.hostname or "127.0.0.1"
-WEB_PORT = _mirror.port or 1024
-WEB_APP_START_TIMEOUT = 15     # 启动 web.exe 后等待端口就绪的最长时间（秒）
-WEB_APP_SHUTDOWN_TIMEOUT = 10  # 关闭 web.exe 后等待端口释放的最长时间（秒）
+# 运行前确保端口可用：未监听则自动启动 web.exe，全部任务结束后再关闭。
+# 探测/启动/关闭的实现**唯一在 `mirror_service.py`**（start_web.py 也用它，
+# 见该模块顶部关于「单一 owner」的说明），本文件只调用，不再自己实现一份。
 
 # ---- 批次单实例锁（跨启动方式的最后一道防线） ----
 # 为什么必须有：能启动本脚本的入口不止一个——页面「启动抓取」、定时调度、控制台手敲、
@@ -206,152 +199,6 @@ def terminate_active_procs() -> int:
     return len(procs)
 
 
-def is_port_listening(port: int, host: str = WEB_HOST) -> bool:
-    """检测 host:port 是否已可建立 TCP 连接"""
-    try:
-        with socket.create_connection((host, port), timeout=1.0):
-            return True
-    except OSError:
-        return False
-
-
-def wait_port_ready(port: int, timeout: float) -> bool:
-    """轮询等待端口变为可连接，超时返回 False"""
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        if is_port_listening(port):
-            return True
-        time.sleep(0.5)
-    return False
-
-
-def wait_port_closed(port: int, timeout: float) -> bool:
-    """轮询等待端口被释放，超时返回 False"""
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        if not is_port_listening(port):
-            return True
-        time.sleep(0.5)
-    return False
-
-
-def ensure_web_service() -> subprocess.Popen[bytes] | None:
-    """
-    确保 web.exe 已监听 WEB_PORT。
-
-    - 端口已被监听：返回 None（非本脚本启动，任务结束后不应关闭）
-    - 端口未监听：启动 web.exe 并等待端口就绪，返回本次启动的进程句柄
-
-    启动失败（web.exe 不存在 / 超时未就绪）抛出 RuntimeError。
-    """
-    if is_port_listening(WEB_PORT):
-        log(f"[1024服务] 端口 {WEB_HOST}:{WEB_PORT} 已被监听，跳过启动 {WEB_APP_EXE}")
-        return None
-    if not os.path.exists(WEB_APP_EXE):
-        raise RuntimeError(f"web.exe 不存在: {WEB_APP_EXE}")
-    log(f"[1024服务] 端口 {WEB_HOST}:{WEB_PORT} 未被监听，正在启动: {WEB_APP_EXE}")
-    # web.exe 是 PyInstaller 交互式控制台程序：启动后显示菜单等待输入，
-    # 必须注入回车（= 静默方式启动）才会真正开始监听端口；
-    # 用 cwd=exe 所在目录贴近手工启动环境，DEVNULL 丢弃输出防止管道阻塞。
-    proc = subprocess.Popen(
-      [WEB_APP_EXE],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        cwd=os.path.dirname(WEB_APP_EXE),
-        creationflags=_CREATE_NO_WINDOW,
-    )
-    # 注入回车触发静默启动（数据暂存于管道缓冲，程序读取输入时即可拿到）
-    try:
-        if proc.stdin is not None:
-            _ = proc.stdin.write(b"\n")
-            _ = proc.stdin.flush()
-    except (BrokenPipeError, OSError):
-        log(f"[1024服务] 警告: 注入回车失败，{WEB_APP_EXE} 可能已提前退出")
-    try:
-        if not wait_port_ready(WEB_PORT, WEB_APP_START_TIMEOUT):
-            raise RuntimeError(
-                f"web.exe 启动后 {WEB_APP_START_TIMEOUT}s 内端口 {WEB_PORT} 仍未就绪，"
-                + f"请确认 {WEB_APP_EXE} 可正常运行"
-            )
-    except Exception:
-        # 启动失败时回收进程，避免残留
-        try:
-            proc.terminate()
-        except Exception:
-            pass
-        raise
-    log(f"[1024服务] web.exe 已启动，端口 {WEB_HOST}:{WEB_PORT} 就绪（PID: {proc.pid}）")
-    return proc
-
-
-def _find_port_pids(port: int) -> list[int]:
-    """通过 netstat 查找监听指定端口的 PID 列表（去重）"""
-    pids: list[int] = []
-    try:
-        out = subprocess.run(
-          ["netstat", "-ano", "-p", "tcp"],
-          capture_output=True,
-          text=True,
-          # errors 容错：系统命令偶发非 UTF-8 字节不应让端口探测崩掉
-          errors="replace",
-          timeout=10,
-        ).stdout
-        for line in out.splitlines():
-            parts = line.split()
-            if len(parts) >= 5 and f":{port}" in parts[1] and "LISTENING" in parts[3]:
-                try:
-                    pid = int(parts[4])
-                except ValueError:
-                    continue
-                if pid not in pids:
-                    pids.append(pid)
-    except Exception:
-        pass
-    return pids
-
-
-def _force_kill(pid: int) -> None:
-    """强制结束进程树：Windows 用 taskkill /T（含子进程），其它平台用 os.kill"""
-    if sys.platform == "win32":
-        _ = subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)], capture_output=True, timeout=15)
-    else:
-        try:
-            os.kill(pid, 9)
-        except ProcessLookupError:
-            pass
-
-
-def shutdown_web_service(proc: subprocess.Popen[bytes] | None) -> None:
-    """任务结束后关闭 web.exe 并等待端口释放；非本脚本启动的进程跳过"""
-    if proc is None:
-        log(f"[1024服务] 端口 {WEB_HOST}:{WEB_PORT} 由外部进程占用（非本脚本启动），跳过关闭")
-        return
-    log(f"[1024服务] 正在关闭 web.exe（PID: {proc.pid}）...")
-    try:
-        proc.terminate()
-    except Exception as e:
-        log(f"[1024服务] 终止 web.exe 异常: {e}")
-    if wait_port_closed(WEB_PORT, WEB_APP_SHUTDOWN_TIMEOUT):
-        log(f"[1024服务] 端口 {WEB_HOST}:{WEB_PORT} 已释放，web.exe 已关闭")
-        return
-    # 兜底：terminate 未生效时按端口定位 PID 强制结束。
-    # PyInstaller 单文件程序的实际服务进程可能脱离引导进程（proc.pid 已死），
-    # 因此用 netstat 精确找到监听端口的进程再杀，避免残留。
-    log(f"[1024服务] 端口 {WEB_HOST}:{WEB_PORT} 仍被占用，按端口定位占用进程并强制结束")
-    pids = _find_port_pids(WEB_PORT)
-    if not pids:
-        log(f"[1024服务] 警告: 未找到占用端口 {WEB_PORT} 的进程，请手动检查")
-        return
-    for pid in pids:
-        log(f"[1024服务] 强制结束占用进程 PID {pid}")
-        _force_kill(pid)
-    if wait_port_closed(WEB_PORT, 5):
-        log(f"[1024服务] 端口 {WEB_HOST}:{WEB_PORT} 已释放（强制结束生效）")
-    else:
-        log(f"[1024服务] 警告: 端口 {WEB_HOST}:{WEB_PORT} 仍被占用，请手动关闭 {WEB_APP_EXE} 后重试")
-
-
 def run_scraper(fid: str, name: str, run_id: int = 0) -> tuple[str, str, bool, int, int, int]:
     """
     启动子进程执行 scraper.py，实时输出并捕获汇总行
@@ -478,9 +325,9 @@ def main() -> None:
         print("未配置版块，请在 SECTIONS 字典中添加版块ID和名称")
         sys.exit(1)
 
-    # --- 单实例检查：必须在启动/接管 1024 镜像**之前** ---
-    # 放在这里而不是更晚：ensure_web_service() 会按端口定位并强制结束占用进程，
-    # 若先接管镜像再发现「已有批次在跑」，等于已经把对方正在用的镜像杀掉了。
+    # --- 单实例检查：必须在确保/接管 1024 镜像**之前** ---
+    # 放在这里而不是更晚：镜像端口守护会启动/关闭 web.exe（mirror_service），
+    # 若先动镜像再发现「已有批次在跑」，等于已经影响了对方正在用的镜像。
     if not acquire_single_instance_lock():
         log("[跳过] 已有另一个抓取批次正在运行（outputs/run_batch.lock 被占用），本次不启动")
         print(
@@ -495,7 +342,7 @@ def main() -> None:
     web_proc: subprocess.Popen[bytes] | None = None
     if USE_LOCAL_PROXY:
         try:
-            web_proc = ensure_web_service()
+            web_proc = mirror_service.ensure_web_service()
         except Exception as e:
             print(f"[1024服务] web 服务启动失败，终止本次抓取: {e}", file=sys.stderr)
             print(
@@ -679,7 +526,7 @@ def main() -> None:
         # --- 全部任务结束后关闭 web 服务（仅关闭本脚本启动的进程；本地代理关闭时跳过） ---
         if USE_LOCAL_PROXY:
             try:
-                shutdown_web_service(web_proc)
+                mirror_service.shutdown_web_service(web_proc)
             except Exception as e:
                 print(f"[1024服务] 关闭 web 服务异常: {e}", file=sys.stderr)
 

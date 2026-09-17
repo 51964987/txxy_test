@@ -9,8 +9,14 @@
 参数解析规则（大小写不敏感，可同时传多个，按任意顺序）：
   - true / 1 / yes / on / --rebuild     → 重新编译
   - false / 0 / no / off / --no-build   → 跳过编译
-  - 未传参数 → 默认不编译
+  - --no-mirror                         → 不管理 1024 本地镜像（默认会确保它可用）
+  - 未传参数 → 默认不编译 + 确保镜像
 当 dist 不存在时，无论是否指定编译，都会自动编译一次，避免启动失败。
+
+关于 1024 本地镜像（web.exe）：看板启动时会顺带确保它可用（镜像实现与端口守护见
+`mirror_service.py`），这样帖子链接才能优先走本机镜像（否则 `web/mirror.py` 会把链接
+降级到业务域名）。与抓取批次的分工遵循「单一 owner」：谁启动谁关闭，看板退出时只在
+**没有抓取批次在跑**的前提下关闭本次启动的镜像。
 
 解释器探测：web/app.py 依赖 fastapi/uvicorn，若当前解释器未安装，
 自动按优先级（TXXY_PYTHON 环境变量 → 当前解释器 → 项目 .venv → run_daily.bat
@@ -22,12 +28,18 @@ import os
 import re
 import subprocess
 import sys
-from typing import Protocol, cast
+from typing import NamedTuple, Protocol, cast
 
 import file_logger
+import mirror_service
+import txxy_env
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 WEB_DIR = os.path.join(BASE_DIR, "web")
+
+# 批次锁模块（run_batch）的引用：由 _preload_batch_lock() 在启动期填充，
+# 供退出时的镜像关闭检查使用（atexit 里不能 import，详见该函数说明）
+_batch_lock = None
 FRONTEND_DIR = os.path.join(WEB_DIR, "frontend")
 DIST_DIR = os.path.join(FRONTEND_DIR, "dist")
 
@@ -100,16 +112,42 @@ class _WebAppModule(Protocol):
     def main(self) -> None: ...
 
 
-def _should_rebuild() -> bool:
-    """解析是否重新编译前端；无有效参数时默认 False（不编译，快速启动）。"""
+class _LaunchArgs(NamedTuple):
+    """启动参数解析结果"""
+
+    rebuild: bool  # 是否重新编译前端
+    mirror: bool   # 是否确保 1024 本地镜像可用
+
+
+def _parse_args() -> _LaunchArgs:
+    """解析启动参数（大小写不敏感，可同时传、顺序任意）：
+
+      true / 1 / yes / on / --rebuild                  重新编译前端
+      false / 0 / no / off / --no-build / --no-rebuild 跳过编译（默认）
+      --mirror                                         确保 1024 本地镜像可用（默认）
+      --no-mirror                                      不管理 1024 本地镜像
+
+    同一类参数后者覆盖前者；无法识别的参数给一次警告并忽略。
+    """
+    rebuild = False
+    mirror = True
     for arg in sys.argv[1:]:
         a = arg.strip().lower()
         if a in ("--rebuild", "true", "1", "yes", "on"):
-            return True
-        if a in ("--no-build", "--no-rebuild", "false", "0", "no", "off"):
-            return False
-        print(f"[警告] 忽略未知参数: {arg!r}（可选值: true/false 或 --rebuild/--no-build）", file=sys.stderr)
-    return False
+            rebuild = True
+        elif a in ("--no-build", "--no-rebuild", "false", "0", "no", "off"):
+            rebuild = False
+        elif a == "--mirror":
+            mirror = True
+        elif a == "--no-mirror":
+            mirror = False
+        else:
+            print(
+                f"[警告] 忽略未知参数: {arg!r}"
+                "（可选值: true/false、--rebuild/--no-build、--mirror/--no-mirror）",
+                file=sys.stderr,
+            )
+    return _LaunchArgs(rebuild, mirror)
 
 
 def _run(cmd: str, cwd: str) -> int:
@@ -187,11 +225,74 @@ def _stop_share_service(proc: "subprocess.Popen[bytes] | None") -> None:
     print("[分享服务] 已随主服务退出而停止。")
 
 
+def _preload_batch_lock() -> bool:
+    """预加载批次锁模块（`run_batch`），返回是否可用。
+
+    **必须在启动期加载，不能在 atexit 处理函数里 import**：`run_batch` 的导入链在导入
+    模块时会注册 atexit 钩子（file_logger 等），而解释器关闭阶段不允许再注册，会抛
+    `RuntimeError: can't register atexit after shutdown` —— 实测表现为「退出时镜像关不掉，
+    web.exe 残留在 1024 端口上」。故这里提前加载好，退出时只使用已加载的模块引用。
+    """
+    global _batch_lock
+    if _batch_lock is not None:
+        return True
+    try:
+        import run_batch
+    except Exception as e:  # 加载失败不影响看板，只是退出时保守地不关镜像
+        print(f"[1024镜像] 批次锁模块加载失败（{e}）", file=sys.stderr)
+        return False
+    _batch_lock = run_batch
+    return True
+
+
+def _ensure_mirror() -> "subprocess.Popen[bytes] | None":
+    """启动前确保 1024 本地镜像可用；起不来只告警，不阻断看板启动。
+
+    口径与 run_batch 刻意不同：那边镜像起不来就终止抓取（没镜像抓不了站）；这里镜像只是
+    「帖子链接优先走本机」的加速项——起不来时 `web/mirror.py` 会把链接 302 到业务域名，
+    看板本身依旧可用，所以不能因为它拦住启动。
+    """
+    if not txxy_env.use_local_proxy():
+        print("[1024镜像] 未配置本地镜像（TXXY_LOCAL_PROXY 为空），跳过")
+        return None
+    _ = _preload_batch_lock()  # 退出时要用它判断「有没有批次在跑」，必须提前加载
+    try:
+        return mirror_service.ensure_web_service()
+    except Exception as e:
+        print(
+            f"[1024镜像] 启动失败（不影响看板启动，帖子链接将改用业务域名）：{e}",
+            file=sys.stderr,
+        )
+        return None
+
+
+def _stop_mirror(proc: "subprocess.Popen[bytes] | None") -> None:
+    """退出时关闭本次启动的镜像；若有抓取批次在跑则保留（批次正在用它）。
+
+    判据复用批次单实例锁（`run_batch.acquire_single_instance_lock` 是唯一实现）：
+    抢得到 = 没有批次在跑，可以关；抢不到 = 批次在跑，关掉会让它整批请求失败
+    （属 2026-09-16「互相抢镜像导致一批失败」的同类风险）。锁持有到关闭完成再释放，
+    避免关的过程中恰好有批次启动、看到端口在听而跳过启动。
+    """
+    if proc is None:
+        return
+    if _batch_lock is None:  # 未预加载成功：保守保留，不冒「关掉批次在用的镜像」的风险
+        print("[1024镜像] 批次锁不可用，保守起见保留镜像不关闭", file=sys.stderr)
+        return
+    if not _batch_lock.acquire_single_instance_lock():
+        print("[1024镜像] 检测到抓取批次正在运行，保留镜像不关闭（批次正在使用它）")
+        return
+    try:
+        mirror_service.shutdown_web_service(proc)
+    finally:
+        _batch_lock.release_single_instance_lock()
+
+
 def main() -> None:
     _ensure_python_env()
-    rebuild = _should_rebuild()
+    args = _parse_args()
     os.chdir(BASE_DIR)
-    if rebuild:
+    if args.rebuild:
         build_frontend()
     else:
         if os.path.isdir(DIST_DIR):
@@ -214,6 +315,12 @@ def main() -> None:
     share_proc = _start_share_service()
     if share_proc is not None:
         _ = atexit.register(_stop_share_service, share_proc)
+
+    # 1024 本地镜像：先确保可用再启动看板（就绪后再对外服务，避免前几十秒链接全走降级）。
+    # 只有本次真正启动的那一个才注册退出清理；端口上已有外部 web.exe 时返回 None，不动它。
+    mirror_proc = _ensure_mirror() if args.mirror else None
+    if mirror_proc is not None:
+        _ = atexit.register(_stop_mirror, mirror_proc)
 
     # 启动 web 服务：从显式文件路径加载 web/app.py（等价于在 web/ 目录执行 app.py，
     # 其内部 from config import / from api import 依赖 web/ 在 sys.path，故先注入）。

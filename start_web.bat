@@ -20,17 +20,29 @@ REM      --lan      listen on all interfaces and open firewall, LAN devices can
 REM                 access. THIS IS THE DEFAULT.
 REM      --no-lan   localhost only
 REM
+REM    mirror-arg, passed through to start_web.py:
+REM      --mirror    make sure the local mirror (web.exe on 127.0.0.1:1024) is up.
+REM                  THIS IS THE DEFAULT: post links go through the local mirror
+REM                  (web/mirror.py) so LAN devices such as phones can open them.
+REM      --no-mirror skip mirror management entirely
+REM
 REM  examples:
-REM    start_web.bat                    LAN access by default, no rebuild
-REM    start_web.bat --rebuild          rebuild frontend, then start
-REM    start_web.bat --no-lan           localhost only
-REM    start_web.bat --rebuild --no-lan rebuild, localhost only
+REM    start_web.bat                       LAN access by default, no rebuild
+REM    start_web.bat --rebuild             rebuild frontend, then start
+REM    start_web.bat --no-lan              localhost only
+REM    start_web.bat --rebuild --no-lan    rebuild, localhost only
+REM    start_web.bat --no-mirror           do not touch web.exe
 REM
 REM  share service (port 8090 by default, env TXXY_SHARE_PORT to override) is
 REM  started automatically together with the main service as a child process in
 REM  the SAME console window (no separate window), so generated share links are
 REM  reachable without running the share server manually; it is cleaned up when
 REM  the main service exits.
+REM
+REM  local mirror: one owner per resource. Whoever starts web.exe stops it, and
+REM  the launcher closes it on exit ONLY when no scrape batch is running (the
+REM  batch lock in outputs/run_batch.lock is the judge); an already running
+REM  web.exe is reused and left untouched.
 REM ============================================================
 
 if not defined TXXY_WEB_PORT set "TXXY_WEB_PORT=8088"
@@ -38,6 +50,7 @@ set "PORT=%TXXY_WEB_PORT%"
 if not defined TXXY_SHARE_PORT set "TXXY_SHARE_PORT=8090"
 set "SHAREPORT=%TXXY_SHARE_PORT%"
 set "ARG_BUILD="
+set "ARG_MIRROR="
 set "LAN=1"
 
 REM ---------------- parse arguments ----------------
@@ -47,6 +60,8 @@ if /i "%~1"=="--rebuild"    (set "ARG_BUILD=true"  & shift & goto :parse)
 if /i "%~1"=="--no-rebuild" (set "ARG_BUILD=false" & shift & goto :parse)
 if /i "%~1"=="--lan"        (set "LAN=1"           & shift & goto :parse)
 if /i "%~1"=="--no-lan"     (set "LAN=0"           & shift & goto :parse)
+if /i "%~1"=="--mirror"     (set "ARG_MIRROR=--mirror"    & shift & goto :parse)
+if /i "%~1"=="--no-mirror"  (set "ARG_MIRROR=--no-mirror" & shift & goto :parse)
 if /i "%~1"=="true"         (set "ARG_BUILD=true"  & shift & goto :parse)
 if /i "%~1"=="1"            (set "ARG_BUILD=true"  & shift & goto :parse)
 if /i "%~1"=="yes"          (set "ARG_BUILD=true"  & shift & goto :parse)
@@ -73,7 +88,13 @@ set "TXXY_WEB_HOST=127.0.0.1"
 echo ============================================
 echo   txxy 数据展示服务
 echo   主服务:   %TXXY_WEB_HOST%:%PORT%
+REM Mirror summary text. ASCII only here: Chinese inside quoted set/if lines can be
+REM mis-parsed by cmd (see the note at the top of this file). Address and readiness
+REM details are printed by start_web.py / mirror_service.py, not repeated here.
+set "MIRROR_DESC=auto"
+if /i "%ARG_MIRROR%"=="--no-mirror" set "MIRROR_DESC=off (--no-mirror)"
 echo   分享服务: %TXXY_WEB_HOST%:%SHAREPORT%
+echo   1024镜像: %MIRROR_DESC%
 echo ============================================
 
 REM ---------------- stop previous instance holding the port ----------------
@@ -149,11 +170,11 @@ echo   netsh advfirewall firewall add rule name="txxy-share-%SHAREPORT%" dir=in 
 :shfwok
 
 REM ---------------- start service ----------------
-REM 分享服务不再单独开窗口：由 start_web.py 以子进程方式同窗口拉起，
-REM 主服务退出时统一清理，避免留下第二个命令窗口或孤立进程。
+REM 分享服务不再单独开窗口：由 start_web.py 以子进程方式同窗口拉起.
+REM 主服务退出时统一清理，避免留下第二个命令窗口或孤立进程.
 :startsvc
-echo 启动主服务（分享服务将随主服务在同一窗口内启动）...
-python -X utf8 start_web.py %ARG_BUILD%
+echo 启动主服务（分享服务与 1024 镜像随主服务在同一窗口内启动）...
+python -X utf8 start_web.py %ARG_BUILD% %ARG_MIRROR%
 echo.
 echo 服务已退出
 pause

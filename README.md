@@ -24,7 +24,8 @@ txxy_test/
 ├── http_headers.py     # 唯一 UA 与 Accept 定义（零依赖，抓取与各下载模块共用，避免 UA 散落多份）
 ├── txt_export.py       # TXT 清单导出（磁力 / 云盘共用的「每行一条」写出逻辑）
 ├── scraper.py          # 单版块抓取器（写入 CSV + SQLite，断点续写、请求重试、连续失败保护、权限拦截检测）
-├── run_batch.py        # 多版块并发调度器（并发启动 scraper.py 子进程；1024 端口开关[可选入参] + web.exe 端口守护；运行记录落库）
+├── run_batch.py        # 多版块并发调度器（并发启动 scraper.py 子进程；1024 端口开关[可选入参] + 复用 mirror_service 的端口守护；运行记录落库）
+├── mirror_service.py   # 1024 本地镜像（web.exe）端口守护唯一实现：探测 / 启动（注入回车）/ 关闭，供 run_batch 与 start_web 共用
 ├── run_recorder.py     # 运行记录持久化（run_days / run_sections 写入 db/posts.db）
 ├── file_logger.py      # 统一日志模块（输出带时间戳，执行汇总不加）
 ├── download_files.py   # 帖子页下载主流程（页面访问 + 下载编排 + 执行汇总）
@@ -36,8 +37,8 @@ txxy_test/
 ├── media_download.py   # 通用下载核心（Referer 降级重试 / 内容校验 / 断点续传）
 ├── init_db.py          # SQLite 数据库一次性初始化（幂等：建表 + 中文注释表 + 全量查询索引）
 ├── run_daily.bat       # Windows 计划任务批处理入口（固定工作目录）
-├── start_web.bat       # 一键启动前端展示服务（调用 start_web.py；默认局域网可访问，支持 --rebuild 重新编译、--no-lan 仅本机访问；同时以子进程方式拉起分享服务 web/share_server.py（端口 8090，与主服务同窗口运行，不再另开命令窗口），主服务退出时统一清理；两服务日志统一经 file_logger 双写控制台与 outputs/ 下日志文件（[web]/[share] 标签区分），启动时会按保留期清理过期日志）
-├── start_web.py        # Web 启动器（默认用现有 dist 快速启动；传 true/--rebuild 重新编译前端；解释器缺依赖时自动切换）
+├── start_web.bat       # 一键启动前端展示服务（调用 start_web.py；默认局域网可访问，支持 --rebuild 重新编译、--no-lan 仅本机访问、--no-mirror 不管 1024 镜像；同时以子进程方式拉起分享服务 web/share_server.py（端口 8090，与主服务同窗口运行，不再另开命令窗口）并确保 1024 本地镜像可用，主服务退出时统一清理；两服务日志统一经 file_logger 双写控制台与 outputs/ 下日志文件（[web]/[share] 标签区分），启动时会按保留期清理过期日志）
+├── start_web.py        # Web 启动器（默认用现有 dist 快速启动；传 true/--rebuild 重新编译前端；--no-mirror 跳过 1024 镜像；解释器缺依赖时自动切换）
 ├── kill_port.bat       # 按端口结束占用进程（如释放 8088 端口）
 ├── requirements.txt
 ├── Dockerfile / docker-compose.yml                                     # Docker 化部署交付物（默认：命名卷隔离，web 非 root）
@@ -117,12 +118,14 @@ python run_batch.py true       # 可选入参：本次强制开启本地代理
 - 镜像关闭时：**1024 端口启不起来时的备选**——不再探测/启停端口，抓取直连业务域名；
 - **入库只存相对路径**：数据库/CSV 的 `url` 列存 `/htm_data/...`（不含域名，`txxy_env.to_storage_path` 规范化），换域名/换环境零成本；展示层渲染时再拼展示域名（`txxy_env.to_display_url`，本机有本地镜像则为镜像地址，否则为业务域名）。**Web 端导出的 CSV 同样只存相对路径**（与库内、采集端 CSV 形态一致，不带任何域名）。
 
-**端口守护（web 服务自动启停，仅 `USE_LOCAL_PROXY=True` 时生效）**：抓取目标由本机 `web.exe` 提供（`127.0.0.1:1024`），`run_batch.py` 自动管理该服务：
+**端口守护（web 服务自动启停，仅 `USE_LOCAL_PROXY=True` 时生效）**：抓取目标由本机 `web.exe` 提供（`127.0.0.1:1024`），实现唯一在 `mirror_service.py`（`run_batch.py` 与看板启动器 `start_web.py` 共用同一份，不再各写一份）：
 
-- 运行前先探测 1024 端口：**未监听**则启动 `WEB_APP_EXE`（默认 `D:\Tools\1024app_win10_2025_1.02\web.exe`）并等待端口就绪（最长 `WEB_APP_START_TIMEOUT`=15 秒），启动失败直接终止本次抓取，并提示改用 `python run_batch.py false` 直连业务域名；
-- 端口**已监听**：视为外部进程占用，跳过启动，任务结束后也不关闭（不干扰外部进程）；
-- 全部任务结束后：关闭本脚本启动的 web.exe 并等待端口释放（最长 `WEB_APP_SHUTDOWN_TIMEOUT`=10 秒）；`terminate` 失效时按端口定位 PID 强制结束进程树，确保无残留；
-- 启动、就绪、关闭、释放每个环节均打印 `[服务]` 前缀日志。
+- 运行前先探测 1024 端口：**未监听**则启动 `WEB_APP_EXE`（默认 `D:\Tools\1024app_win10_2025_1.02\web.exe`，PyInstaller 交互式程序，需注入回车才会真正监听）并等待端口就绪（最长 `WEB_APP_START_TIMEOUT`=15 秒），启动失败直接终止本次抓取，并提示改用 `python run_batch.py false` 直连业务域名；
+- 端口**已监听**：视为外部进程占用，跳过启动，任务结束后也不关闭（**单一 owner：谁启动谁关闭，看到已监听的一方只消费**）；
+- 全部任务结束后：关闭本次启动的 web.exe 并等待端口释放（最长 `WEB_APP_SHUTDOWN_TIMEOUT`=10 秒）；`terminate` 失效时按端口定位 PID 强制结束进程树（PyInstaller 引导进程与实际监听进程可能不是同一个 PID，实测如此），确保无残留；
+- 启动、就绪、关闭、释放每个环节均打印 `[1024服务]` 前缀日志。
+
+**看板启动器同样会确保镜像可用（`start_web.py` / `start_web.bat`，默认开启）**：启动看板前先确保 1024 镜像就绪，这样帖子链接才能优先走本机镜像（否则 `web/mirror.py` 会把链接降级到业务域名）。与抓取批次的分工：口径不同——**镜像起不来时看板照常启动**（只告警，链接自动降级），而抓取批次会直接终止（没镜像抓不了站）；退出时只关闭「本次启动的、且当前没有抓取批次在跑」的镜像（判据复用批次单实例锁，避免关掉批次正在用的镜像）。不需要时用 `start_web.bat --no-mirror` 跳过。
 
 ### 3. 单版块抓取
 
@@ -212,10 +215,12 @@ downloads/帖子标题/
 start_web.bat                      # 一键启动：默认监听 0.0.0.0（手机等同网设备可访问，无鉴权），不编译，用现有 dist 快速启动；未构建时自动 npm install + npm run build；解释器缺 fastapi 时自动切换可用 Python
 start_web.bat --rebuild            # 重新编译前端后启动（兼容旧写法 true / 1 / yes / on）
 start_web.bat --no-lan             # 仅本机访问（监听 127.0.0.1），不需要局域网暴露时用
-start_web.bat --rebuild --no-lan   # 重新编译 + 仅本机访问（两个参数顺序任意）
+start_web.bat --no-mirror          # 不管理 1024 本地镜像（默认会先确保它可用）
+start_web.bat --rebuild --no-lan   # 重新编译 + 仅本机访问（参数顺序任意，可组合）
 # 或手动：
 pip install fastapi uvicorn        # 首次（已写入 requirements.txt）
-python -X utf8 web/app.py          # 启动后访问 http://127.0.0.1:8088（需使用装有依赖的解释器）
+python -X utf8 web/app.py          # 仅起 API + SPA（不管理分享服务与 1024 镜像）
+python -X utf8 start_web.py        # 等价于 start_web.bat 的全部行为（分享服务 + 1024 镜像）
 ```
 
 - **技术栈**：FastAPI 后端 + Vue3 / Vite / TypeScript / Element Plus / Pinia / ECharts 前端（SPA）；
@@ -358,3 +363,4 @@ python -X utf8 web/app.py          # 启动后访问 http://127.0.0.1:8088（需
 | `docs/侧边栏折叠与大屏全屏优化方案.md` | 侧边栏折叠 / 移动端抽屉、数据总览大屏全屏按钮：现状问题、方案对比与落地说明（已实施） |
 | `docs/参数设置页调研与建议.md` | 全项目可调参数盘点、业界做法（aria2/AriaNg/qBittorrent 等）、独立「参数设置页」可行性、实时/准实时生效机制与分期建议（调研，未实施） |
 | `docs/内容资产沉淀进度调研与建议.md` | 「收录内容沉淀为本地媒体资产的进度」专项调研：现状实测（分层沉淀率 / 分版块缺口 / 未认领目录）、业界做法（\*arr Wanted-Missing、ArchiveBox、rclone check、DAMS、Grafana SLO 等）、差距诊断 D1-D9 与分期建议 C1-C12；**C1-C11 已实施（2026-09-13，落地说明见《数据总览大屏设计与优化总览.md》第二十节），C12 暂不做** |
+| `docs/帖子链接中继转发知识点.md` | **知识点总结**：为什么本机回环服务（`web.exe@127.0.0.1:1024`）必须由看板做同源中继 `/mirror`（手机等设备无法直连）、中继实现 8 要点与踩坑清单、链接基址按消费方分层、镜像单一 owner 与看板托管（`mirror_service.py`）、验证方法论与实测输出（**已实施，2026-09-17**） |
