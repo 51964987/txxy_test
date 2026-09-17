@@ -1927,7 +1927,10 @@ def posts_export(
                     (row["title"] or "").strip(),
                     row["fid"],
                     row["date"],
-                    db.normalize_url(row["url"]),
+                    # 导出链接与库内/采集端 CSV 同一形态：只存相对路径 /htm_data/...（不带域名）。
+                    # 导出物会离开本机，带任何域名都会在别的环境/设备上失效；相对路径由使用者
+                    # 自行按环境拼前缀（与「域名不入库」同一条原则）
+                    config.to_storage_path(row["url"]),
                     row["likes"] or "",
                     row["author"] or "",
                     row["replies"] or "",

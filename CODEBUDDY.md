@@ -161,6 +161,16 @@ alwaysApply: true
     - **本项目实例**：设置页「演示轮播」错位（宽控件行改堆叠，标签列 132px→1150px）与「链接黑名单」搜索+分页（每页 5 条、共 17 条实测 4 页）同期落地，15 项浏览器断言（桌面 + 移动）全通过。详见《参数设置页调研与建议.md》§十。
 
 
+26. **「只在本机可访问的服务」要让局域网其它设备用上，必须由本机进程做同源中继；链接基址必须按「谁最终发这个请求」分别派生**（2026-09-17 确立，源于用户问「手机怎么才能打开 http://127.0.0.1:1024/...」）：
+    - **触发场景**：需要让手机 / 局域网其它设备打开一个只在本机可达的资源（本项目：本地镜像 `web.exe` 提供的站点页面）。最容易犯的错是把「用 `127.0.0.1:1024` 访问它」当成「它只绑回环」的证据或反证——**这是两件事**；也最容易顺手选「把端口暴露到局域网」（改绑定 / `netsh portproxy` + 防火墙），那需要管理员权限、每台机器重做一遍、且失败点（绑定没改成功 / 规则没生效 / IP 变了）散在环境里，用户看到的是「手机打不开」而查不到原因。
+    - **强制动作（动手前先量）**：① 先实测监听地址（`netstat -ano | findstr :<port>` / `Get-NetTCPConnection -LocalPort <port>`），再决定方案；**绑定地址改不动时（第三方 exe / 无配置文件），正解是「本机进程做同源中继」**——浏览器只访问同源路径，由服务端转发到回环，从而与访问方式（本机 / 局域网 IP / 未来域名）解耦。本项目实例：`netstat` 实测 `TCP 127.0.0.1:1024 LISTENING`，安装目录只有 `web.exe`（无可改绑定的配置），故落地 `web/mirror.py` 的 `/mirror/{path}`。
+    - **链接基址必须按消费方派生，禁止用「服务端进程级常量」统一下发**。判据一句话：**谁最终发这个请求？** ① 浏览器打开的 → 同源中继相对路径（`/mirror/...`，任何访问方式自适应）；② 服务端自己发请求的（下载中心提交、抓取）→ 本机回环地址（对服务端有效）；③ 粘到别处 / 分享的 → 同源绝对地址；④ **离开本机环境的产物（CSV 导出）→ 不带任何域名，只存相对路径**（`txxy_env.to_storage_path`）：导出物会在未知环境 / 设备上被打开，**带任何域名都会有一类环境失效**——带本机镜像地址在手机/异地打不开，带业务域名在「只能靠镜像上网的桌面」打不开；相对路径与库内、采集端 CSV 同一形态，由使用者按环境拼前缀最稳（2026-09-17 按用户口径收敛，中途曾按业务域名实现一版，用户驳回：**"按现有链接导出即可"**）。
+    - **中继必须自带降级，且上游必须写死**：连不上回环服务 / 上游 5xx → 302 到公开域名同一路径（本项目需求即「1024 不行时用 PUBLIC_DOMAIN」）；上游地址只能取自唯一配置源（`txxy_env.LOCAL_PROXY`），**绝不接受调用方传入地址**，否则等于开了任意转发器（SSRF）。
+    - **HTML 重写要覆盖两类链接，只做静态属性会留下「看得见点不通」的链接**：① 静态属性（`href/src/action="/x"`）；② **页面 JS 运行时生成的**（本项目实测相关帖 `a[href="/htm_data/..."]` 由脚本注入，服务端重写看不到），后者用「点击瞬间兜底脚本」改写到中继前缀。判据不是我重写了多少条，而是**页面上每一条可点链接点下去都落到中继**。
+    - **降级 / 中继类功能必须两条链路都实测，并用可控上游逐项验证透传**：上游可用链路 + 上游不可用链路（本项目：真实镜像的 8089 隔离实例 + `TXXY_LOCAL_PROXY=http://127.0.0.1:1` 的死上游实例 + 置空表示「本环境无镜像」），加上一个可控上游（临时 20 行 `http.server`）逐项验证 Range(206/Content-Range)、gzip 原样透传、多条 Set-Cookie、上游 302 的 Location 改写、5xx 降级。**透传的坑**：`requests.iter_content` 默认会解压响应体，若同时透传 `Content-Encoding`/`Content-Length` 就会让浏览器解析失败——必须走 `raw.read`（本项目 `_iter_raw`）；上游不支持 HEAD 时（本项目 `web.exe` 对 HEAD 返回 404）要改用上游 GET 再按 HEAD 语义只回头。
+    - **本项目实例与实测证据（2026-09-17）**：新增 `web/mirror.py`（同源中继）+ `web/config.py` 的 `MIRROR_PREFIX/MIRROR_UPSTREAM/PUBLIC_DOMAIN` + `web/app.py` 注册（必须早于 SPA 兜底路由）+ 前端唯一实现 `utils/postUrl.ts`（`postOpenUrl` / `postCopyUrl`）替换 4 处入口（PostsView 打开与复制、DashboardView 榜单、ResourcesView 原帖）+ Vite dev 代理 `/mirror`。实测：真实镜像比对「直连页 vs 中继页」根相对属性全部改写到中继、页面不泄漏 `127.0.0.1:1024`；机制 9 项（请求头 / Range / Location / Set-Cookie / 5xx 降级 / gzip / HTML 重写 / 死上游降级 / 4xx 透传）全通过；降级两实例（未配置镜像、死上游）路径与查询串均正确；浏览器级桌面 1440 + 移动 390 双视口真实点击（含以局域网 IP 模拟手机：非安全上下文走 execCommand 复制降级），打开 URL 为 `/mirror/htm_data/...`（HTTP 200）、剪贴板为同源绝对地址、**浏览器全程未请求过 `127.0.0.1:1024`**；JS 运行时生成的链接点击后同样落到 `/mirror/...`（200）；CSV 导出实测 355 行「链接」列全为相对路径 `/htm_data/...`（0 行含 `127.0.0.1:1024`、0 行含 `txxy.com`），同时列表接口仍返回展示域名 `http://127.0.0.1:1024/...`（下载中心在服务端下载、前端取相对路径都依赖它，不能一起改）。文档索引：`README.md`（Web 服务说明）、`docs/项目结构介绍.md`（展示层）、`docs/Docker部署使用手册.md` §7.3（域名与链接分层）、`docs/参数设置页调研与建议.md` §十一（为何 `TXXY_PUBLIC_DOMAIN` 不进设置页）。
+
+
 ## 技术栈
 - 后端：Python3 + **FastAPI**；SQLite 只读（`db/posts.db`，WAL，`PRAGMA query_only=ON`）；统计接口经 `db.cached(key)` 做 **5s TTL** 内存缓存。
 - 数据写入由项目根目录独立 `scraper.py` 负责，**Web 进程严禁写库**（下载中心 `download_tasks.py` 仅做文件系统下载）。
@@ -177,6 +187,7 @@ txxy_test/                  # 抓取脚本在项目根：scraper.py / run_batch.
 └── web/
     ├── app.py        # FastAPI 入口（GZip + /api 耗时监控 + SPA 静态托管）
     ├── api.py        # 路由：/api/config、/api/schedule、/api/stats/*、/api/posts、/api/runs、/api/resources、/api/downloads
+    ├── mirror.py     # 帖子链接同源中继（/mirror → 127.0.0.1:1024，镜像不可用时 302 到业务域名）
     ├── config.py     # 配置（DB_FILE、ENABLE_AUTO_REFRESH 默认开启、下载中心参数、定时抓取默认值）
     ├── db.py         # 只读连接 + 5s TTL 缓存 + URL 归一化
     ├── ratelimit.py  # 接口限流（固定窗口，/posts/export、/resources 挂载，超限 429）
@@ -225,6 +236,8 @@ txxy_test/                  # 抓取脚本在项目根：scraper.py / run_batch.
 | JSON 原子落盘 | `web/atomicfile.py: write_json_atomic()` | 唯一的「临时文件 + 原子替换」实现，支持 `indent` 与 `backup` 轮转 |
 | 版块映射 | `txxy_env.SECTIONS` / `fid_name()` | 抓取端与展示端共用，禁止各存一份再靠注释提醒同步 |
 | 前端 HTTP 请求 | `web/frontend/src/api/index.ts` | 原生 fetch 封装（超时 / 同 key 去重 / `ApiError`）+ `sseUrl()`；新请求一律走它，禁止裸 `fetch` 或硬编码 `/api` |
+| 帖子链接拼装（打开 / 复制） | `web/frontend/src/utils/postUrl.ts` + `web/mirror.py` | 浏览器侧链接一律经同源中继 `/mirror`（本地镜像只绑回环，手机无法直连）；禁止在视图里直接 `window.open(row.url)` |
+| 本地镜像同源中继 | `web/mirror.py`（路由前缀常量 `web/config.py: MIRROR_PREFIX`） | 转发到 `txxy_env.LOCAL_PROXY`；连不上 / 5xx → 302 到业务域名。禁止另写第二个转发实现或在前端拼 `127.0.0.1:1024` |
 | 前端颜色 | `web/frontend/src/utils/fidColor.ts` | 唯一色板：`colorForFid()`（按 fid 取模）/ `colorByIndex()`（按排名）。禁止另建第二套色板 |
 | 前端时间格式化 | `web/frontend/src/utils/time.ts` | `formatFullTime` / `formatDateTime` / `formatMinuteTime` / `formatRelativeTime` / `formatShortTime`。禁止在页面内自己补零拼字符串 |
 | 回收站数据与操作 | `web/frontend/src/composables/useTrash.ts` | TrashView（表格版）与 ResourcesView（抽屉版）共用；额外刷新用 `onChanged` 回调 |

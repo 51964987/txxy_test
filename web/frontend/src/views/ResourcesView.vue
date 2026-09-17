@@ -21,6 +21,7 @@ import { useAppStore } from '../stores/app'
 import { useTrash } from '../composables/useTrash'
 import { formatMinuteTime } from '../utils/time'
 import { legacyCopy, copyText } from '../utils/clipboard'
+import { postOpenUrl } from '../utils/postUrl'
 import { categoryMeta, categoryColors, categoryOptions, categoryLabel, CATEGORY_ORDER, buildTypeSegments, type CategoryKey } from '../utils/category'
 
 const router = useRouter()
@@ -132,7 +133,8 @@ function sourceOf(name: string): ResourceSource | undefined {
 
 function openSourceUrl(name: string) {
   const url = sourceOf(name)?.url
-  if (url) window.open(url)
+  // 经同源中继打开（见 utils/postUrl）：本机镜像只监听回环，手机无法直连，必须由看板转发
+  if (url) window.open(postOpenUrl(url), '_blank', 'noopener')
 }
 
 /** Top10 大文件的「原帖」：rel_path 首段即目录名（= 帖子标题），据此回溯来源帖 */

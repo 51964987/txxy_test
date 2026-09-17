@@ -166,10 +166,10 @@ def to_storage_path(url: str | None) -> str:
     return rest
 
 
-def to_display_url(url: str | None) -> str:
-    """任意存储格式 → 展示用完整 URL（兼容历史完整 URL 与新相对路径，无需迁移）。
+def _with_domain(url: str | None, base: str) -> str:
+    """任意存储格式 → 指定域名前缀的完整 URL（to_display_url 的唯一实现）。
 
-    前缀取 display_domain()：本地环境是本机代理地址，Docker / Linux 是公开域名。
+    外部域名链接原样返回（不属于本站，不裁剪也不改前缀）。
     """
     if not url:
         return ""
@@ -177,11 +177,20 @@ def to_display_url(url: str | None) -> str:
     p = urlparse(s)
     if p.scheme:
         if p.netloc in _own_hosts():
-            # 本站完整 URL（旧数据）：统一归一化到当前展示域名
-            return display_domain() + to_storage_path(s)
+            # 本站完整 URL（旧数据）：统一归一化到目标域名
+            return base + to_storage_path(s)
         return s  # 外部域名链接：原样展示
     # 相对路径（新数据 /htm_data/...）
-    return display_domain() + to_storage_path(s)
+    return base + to_storage_path(s)
+
+
+def to_display_url(url: str | None) -> str:
+    """任意存储格式 → 展示用完整 URL（兼容历史完整 URL 与新相对路径，无需迁移）。
+
+    前缀取 display_domain()：本地环境是本机代理地址，Docker / Linux 是公开域名。
+    用于「浏览器/服务端当场就要用」的地址（接口下发、下载中心）。
+    """
+    return _with_domain(url, display_domain())
 
 
 def to_fetch_url(url: str) -> str:

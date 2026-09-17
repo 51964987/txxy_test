@@ -23,7 +23,7 @@
 import os
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 BASE_DIR = Path(__file__).resolve().parent.parent  # txxy_test/
 
@@ -81,6 +81,15 @@ DOWNLOADS_DIR = Path(os.environ.get("DOWNLOADS_DIR", str(BASE_DIR / "downloads")
 PUBLIC_ROOT = _TXXY_ENV.display_domain()
 # 当前运行环境（local / docker / linux），由 /api/health 暴露，便于确认配置来源
 RUN_ENV = _TXXY_ENV.RUN_ENV
+
+# ---- 帖子链接「同源中继」（/mirror，实现见 web/mirror.py）----
+# 背景（2026-09-17 实测）：web.exe 只绑回环（netstat 为 `TCP 127.0.0.1:1024 LISTENING`，
+# 安装目录里也没有可改监听地址的配置），所以手机等设备**无法直连 1024**；而看板进程本身
+# 是局域网可达的，于是改由看板转发（详见 web/mirror.py 顶部说明）。
+MIRROR_PREFIX = "/mirror"                 # 中继路径前缀（前端 utils/postUrl.ts 使用同一契约）
+MIRROR_UPSTREAM = _TXXY_ENV.LOCAL_PROXY   # 转发目标；空 = 本环境无镜像（Docker / 离线 Linux）
+# 镜像访问不了时的降级目标：同一路径交给业务域名。业务域名仍只定义在唯一配置源 txxy_env。
+PUBLIC_DOMAIN = _TXXY_ENV.PUBLIC_DOMAIN
 
 
 def to_display_url(url: str | None) -> str:
@@ -166,7 +175,9 @@ def normalize_times(raw: Any) -> list[str]:
     if isinstance(raw, str):
         items: list[Any] = re.split(r"[,;，；\s]+", raw)
     elif isinstance(raw, (list, tuple)):
-        items = list(raw)
+        # 入参声明为 Any，isinstance 收窄后元素类型仍未知；显式 cast 声明一次，
+        # 避免基于类型检查器报「x 类型未知」（语义未变：逐项 str() 化后由下方循环校验）
+        items = [str(x) for x in cast("list[Any]", raw)]
     else:
         items = []
     out: list[str] = []

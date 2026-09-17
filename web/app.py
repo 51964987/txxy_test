@@ -30,6 +30,7 @@ import config
 import scheduler
 import settings
 from api import router as api_router
+from mirror import router as mirror_router
 
 app = FastAPI(
     title="txxy 数据展示",
@@ -70,6 +71,9 @@ async def request_monitor(request: Request, call_next: RequestResponseEndpoint) 
 # 文本类响应（JSON / CSV 导出等）>1KB 自动 gzip，浏览器自动解压
 app.add_middleware(GZipMiddleware, minimum_size=1024)
 app.include_router(api_router, prefix="/api")
+# 帖子链接的同源中继（/mirror）：必须注册在下面 SPA 的兜底路由之前，
+# 否则 /mirror/... 会被兜底路由当成前端路由、返回 index.html
+app.include_router(mirror_router)
 
 
 @app.on_event("startup")
@@ -112,6 +116,9 @@ def health():
         "db": str(config.DB_FILE),
         "db_exists": config.DB_FILE.is_file(),
         "public_root": config.PUBLIC_ROOT,
+        # 帖子链接中继的转发目标（空 = 本环境无本地镜像，链接直接走业务域名）：
+        # 手机打不开帖子页时先看这里，再确认 web.exe 是否在运行
+        "mirror_upstream": config.MIRROR_UPSTREAM,
         # 运行环境（local / docker / linux）：域名是环境自适应取值的，
         # 页面显示不对时先看这里确认跑在哪个环境
         "env": config.RUN_ENV,

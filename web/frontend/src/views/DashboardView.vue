@@ -21,6 +21,7 @@ import { useAppStore } from '../stores/app'
 import { formatDate, formatShortTime, pad2 } from '../utils/time'
 import { colorByIndex, colorForFid } from '../utils/fidColor'
 import { buildTypeSegments, type CategoryKey } from '../utils/category'
+import { postOpenUrl } from '../utils/postUrl'
 import RollingNumber from '../components/RollingNumber.vue'
 
 use([
@@ -1715,7 +1716,8 @@ onBeforeUnmount(() => {
 })
 
 function openUrl(url: string) {
-  window.open(url, '_blank', 'noopener')
+  // 经同源中继打开（见 utils/postUrl）：本机镜像只监听回环，手机无法直连，必须由看板转发
+  window.open(postOpenUrl(url), '_blank', 'noopener')
 }
 
 /** 创建下载任务（榜单 / 待下载推荐每行「下载」按钮）：与帖子浏览同一套共用交互（D2 判重 + 防连点），

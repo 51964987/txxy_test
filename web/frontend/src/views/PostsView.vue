@@ -16,6 +16,7 @@ import {
 } from '../utils/queryMeta'
 import { formatRelativeTime, formatFullTime } from '../utils/time'
 import { copyText } from '../utils/clipboard'
+import { postCopyUrl, postOpenUrl } from '../utils/postUrl'
 import { useDownloadSubmit } from '../composables/useDownloadSubmit'
 import { colorForFid } from '../utils/fidColor'
 
@@ -481,7 +482,8 @@ function onSizeChange(s: number) {
 }
 
 function openPost(url: string) {
-  window.open(url, '_blank', 'noopener')
+  // 经同源中继打开（见 utils/postUrl）：本机镜像只监听回环，手机无法直连，必须由看板转发
+  window.open(postOpenUrl(url), '_blank', 'noopener')
 }
 
 function doExport() {
@@ -507,8 +509,9 @@ function doExport() {
 
 async function copyUrl(url: string) {
   // 复制实现统一走 utils/clipboard：含非安全上下文（手机 http 访问）降级与返回值校验，
-  // 此前直接调 navigator.clipboard 在无安全上下文时会抛异常且无提示
-  const ok = await copyText(url)
+  // 此前直接调 navigator.clipboard 在无安全上下文时会抛异常且无提示。
+  // 复制的链接统一走 utils/postUrl：本机镜像地址（127.0.0.1:1024）粘到别处打不开
+  const ok = await copyText(postCopyUrl(url))
   if (ok) ElMessage.success('链接已复制')
   else ElMessage.error('复制失败')
 }

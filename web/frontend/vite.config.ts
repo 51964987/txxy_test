@@ -10,6 +10,12 @@ export default defineConfig({
         target: 'http://127.0.0.1:8088',
         changeOrigin: true,
       },
+      // 帖子链接的同源中继（见 web/mirror.py）：开发模式下也由后端转发，
+      // 否则点帖子链接会落到 Vite 自己（404）
+      '/mirror': {
+        target: 'http://127.0.0.1:8088',
+        changeOrigin: true,
+      },
     },
   },
   build: {
