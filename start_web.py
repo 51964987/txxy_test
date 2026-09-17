@@ -245,6 +245,31 @@ def _preload_batch_lock() -> bool:
     return True
 
 
+def _warn_if_foreign_sitecustomize() -> None:
+    """警惕外部 `sitecustomize` 注入（IDE / 编辑器工具常把 shim 目录塞进 PYTHONPATH）。
+
+    危害（2026-09-17 实测）：某 IDE 注入的「安全删除 / 批量删除守卫」在
+    `POST /api/resources/delete` 里抛 `SystemExit(1)`，该异常穿透 uvicorn
+    （uvicorn 只兜 `Exception`），把整个看板进程带走——用户看到的是「删除报 500 +
+    服务直接退出」，日志里连 uvicorn 的 `Shutting down` 都没有。
+
+    只能告警，无法自救：shim 在解释器启动阶段就被导入了，此处卸载不掉；
+    正解是**用干净环境启动**（`start_web.bat` 已清空 PYTHONPATH）。
+    另外顺手把 `PYTHONPATH` 从环境里摘掉，让子进程（分享服务等）不再继承：
+    本项目靠自家 `sys.path` 自举，本就不需要它。
+    """
+    mod = sys.modules.get("sitecustomize")
+    path = getattr(mod, "__file__", None) if mod is not None else None
+    if path:
+        p = os.path.abspath(path)
+        allowed = (os.path.abspath(sys.prefix), os.path.abspath(BASE_DIR))
+        if not any(p.startswith(a) for a in allowed):
+            print("[警告] 检测到外部 sitecustomize 注入（可能拦截文件操作，导致删除类请求抛 SystemExit）:", file=sys.stderr)
+            print(f"        {p}", file=sys.stderr)
+            print("        建议用干净环境启动（如 start_web.bat，它会清空 PYTHONPATH）后重启看板。", file=sys.stderr)
+    os.environ.pop("PYTHONPATH", None)
+
+
 def _ensure_mirror() -> "subprocess.Popen[bytes] | None":
     """启动前确保 1024 本地镜像可用；起不来只告警，不阻断看板启动。
 
@@ -290,6 +315,7 @@ def _stop_mirror(proc: "subprocess.Popen[bytes] | None") -> None:
 
 def main() -> None:
     _ensure_python_env()
+    _warn_if_foreign_sitecustomize()
     args = _parse_args()
     os.chdir(BASE_DIR)
     if args.rebuild:

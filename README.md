@@ -332,6 +332,7 @@ python -X utf8 start_web.py        # 等价于 start_web.bat 的全部行为（�
 | 下载失败提示 `ConnectionError / Read timed out` | 网络暂时性超时，脚本已自动降级重试一次；仍失败可稍后重跑（断点续传） |
 | 数据库重复数据 | `posts` 表以 `title` 为主键，重复标题自动覆盖更新，无需清理 |
 | 手机上点帖子链接打不开 | 帖子链接经看板同源中继 `/mirror` 转发到本机镜像：`127.0.0.1:1024` 未监听（web.exe 没在跑）时中继会 302 到业务域名，手机若无直连业务域名则仍打不开——先启动 `web.exe`（或跑一次抓取批次）再试；另外看板本身要用局域网 IP 访问（`start_web.bat` 默认监听 `0.0.0.0`，可访问地址在启动日志里）；排查可用 `GET /api/health` 看 `mirror_upstream` 是否为空 |
+| 资源删除返回 500，且看板随后整个退出 | 启动看板的环境里带了**外部 `sitecustomize` 注入**（IDE / 编辑器工具会把 shim 目录塞进 `PYTHONPATH`）：它拦截文件操作，在资源删除请求里抛 `SystemExit(1)`，该异常穿透 uvicorn 直接结束进程（日志里连 `Shutting down` 都没有）。用干净环境启动即可——`start_web.bat` 已清空 `PYTHONPATH`；若直接 `python start_web.py`，请先用 `set PYTHONPATH=`（PowerShell：`$env:PYTHONPATH=''`）清掉；启动日志里若出现「检测到外部 sitecustomize 注入」告警即说明仍在被注入 |
 | 日志在哪里 | `outputs/日期/<程序名>_<日期>_<批次时间>.log`（与 CSV 同目录），如 `outputs/20260812/run_batch_20260812_164347.log` |
 
 ## 数据说明

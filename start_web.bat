@@ -6,6 +6,13 @@ chcp 65001 >nul
 setlocal
 cd /d %~dp0
 
+REM Do NOT inherit an external PYTHONPATH. IDE / editor tooling may put a shim dir on it
+REM that ships a sitecustomize.py intercepting file operations; such a shim can raise
+REM SystemExit inside a request and take the whole dashboard down (observed 2026-09-17:
+REM POST /api/resources/delete -> 500 -> server process exited). This project bootstraps
+REM sys.path itself and never needs PYTHONPATH. setlocal keeps this local to the script.
+set "PYTHONPATH="
+
 REM ============================================================
 REM  txxy web launcher
 REM  usage: start_web.bat [build-arg] [scope-arg]   order insensitive, case insensitive

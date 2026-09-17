@@ -38,8 +38,12 @@ from contextlib import contextmanager
 from datetime import datetime
 from typing import Any, TextIO
 
-# 日志根目录（与各脚本输出目录保持一致）
-LOG_ROOT = "outputs"
+# 日志根目录（与各脚本输出目录保持一致）。
+# 必须是**绝对路径**：相对路径按「进程 CWD」解析，而 start_web.py 在加载 web/app.py 前
+# 会 os.chdir(web/)，于是看板日志会被写进 `web/outputs/` 这个谁也没预期的目录里
+# （2026-09-17 实测：找看板日志时在项目根 outputs/ 下找不到，实际落在 web/outputs/）。
+# 以本文件所在目录（项目根）为基准，任何入口、任何 CWD 都落到同一个 outputs/。
+LOG_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "outputs")
 
 # 日志保留天数：cleanup_old_logs() 删除超过该天数的旧日志文件（默认保留最近 3 天）
 RETENTION_DAYS = 3
