@@ -7,6 +7,7 @@ import {
 } from 'element-plus'
 import {
   api,
+  formatDuration,
   isAborted,
   sseUrl,
   type DownloadTaskDetail,
@@ -180,10 +181,15 @@ function toggleSelectPage() {
   selectedIds.value = next
 }
 
-// ---- 主操作按钮：无在途任务时是「开始下载」，有在途任务时自动切换为「全部暂停」 ----
-/** 在途集合（排队中 + 下载中）：口径与统计卡「进行中」一致——
- *  按钮语义与用户看到的数字必须同源，否则「进行中 0」却显示「全部暂停」会被当成 bug。 */
+// ---- 主操作按钮：有在途任务=「全部暂停」，无在途但有未完成任务=「全部开始 / 开始下载」 ----
+/** 在途集合（排队中 + 下载中）与未完成任务集合（失败 / 已取消 / 已暂停）：
+ *  口径与统计卡 / 状态筛选一致——按钮语义与用户看到的数字必须同源。
+ *  设计对齐迅雷：进入下载中心，只要存在未完成任务，就直接给出「全部开始」一键启动，
+ *  不必先逐个勾选；勾选只是用来「收窄作用域」（只动勾选的那几个），而不是「解锁按钮的开关」。
+ *  旧设计里「开始下载」默认禁用、必须手动勾选才点亮，而手机端又无全选控件，
+ *  导致用户进来看不到可点的开始按钮——这与暂停模式下「无需勾选即可全部暂停」不对称。 */
 const pausableAll = computed(() => tasks.value.filter((t) => PAUSABLE.includes(t.status)))
+const startableAll = computed(() => tasks.value.filter((t) => STARTABLE.includes(t.status)))
 const startableSelected = computed(() =>
   selectedTasks.value.filter((t) => STARTABLE.includes(t.status)),
 )
@@ -195,12 +201,20 @@ const pauseMode = computed(() => pausableAll.value.length > 0)
 const pauseTargets = computed(() =>
   pausableSelected.value.length ? pausableSelected.value : pausableAll.value,
 )
+/** 开始作用域（与暂停对称）：勾选了未完成任务就只动这些；否则按「全部开始」作用于全部未完成任务 */
+const startTargets = computed(() =>
+  startableSelected.value.length ? startableSelected.value : startableAll.value,
+)
 /** 主按钮本次点击影响的任务数（显示在按钮上，让作用域可见，不必点下去才知道） */
 const primaryCount = computed(() =>
-  pauseMode.value ? pauseTargets.value.length : startableSelected.value.length,
+  pauseMode.value ? pauseTargets.value.length : startTargets.value.length,
 )
-const primaryLabel = computed(() => (pauseMode.value ? '全部暂停' : '开始下载'))
-const primaryDisabled = computed(() => (pauseMode.value ? false : startableSelected.value.length === 0))
+const primaryLabel = computed(() => {
+  if (pauseMode.value) return '全部暂停'
+  // 未勾选时给「全部开始」（迅雷入口态）；勾选了未完成任务则收窄为「开始下载」
+  return startableSelected.value.length ? '开始下载' : '全部开始'
+})
+const primaryDisabled = computed(() => primaryCount.value === 0)
 const primaryTip = computed(() => {
   if (pauseMode.value) {
     const n = pausableSelected.value.length
@@ -208,10 +222,15 @@ const primaryTip = computed(() => {
       ? `暂停勾选的 ${n} 个任务：不再提交新链接，已提交的链接收尾后停止；剩余链接可再「开始下载」继续`
       : `未勾选任务，将暂停全部 ${pausableAll.value.length} 个进行中任务；剩余链接可再「开始下载」继续`
   }
+  const all = startableAll.value.length
   const n = startableSelected.value.length
-  return n
-    ? `下载勾选 ${n} 个任务中未完成的链接（在原任务内继续，已成功的链接不重复下载）`
-    : '先勾选未完成的任务（失败 / 已取消 / 已暂停），再点「开始下载」'
+  if (n) {
+    return `下载勾选的 ${n} 个任务中未完成的链接（失败/已取消重跑、已暂停继续；已成功的链接不重复下载）`
+  }
+  if (all) {
+    return `一键开始全部 ${all} 个未完成任务中未完成的链接（失败/已取消重跑、已暂停继续；已成功的链接不重复下载）；如需只开始部分，先勾选对应任务`
+  }
+  return '当前没有未完成的任务（失败 / 已取消 / 已暂停），无需开始'
 })
 
 // ---- D2 重复提交提醒：区分「文件仍在 / 已不在 / 正在下载」三类 ----
@@ -360,10 +379,11 @@ function downloadTask(row: DownloadTaskSummary) {
   void startTasks([row])
 }
 
-/** 工具栏主按钮：有在途任务 → 全部暂停（勾选了在途任务则只暂停勾选的）；否则 → 开始下载勾选的未完成任务 */
+/** 工具栏主按钮：有在途任务 → 全部暂停（勾选了在途任务则只暂停勾选的）；
+ *  否则 → 开始下载（勾选了未完成任务则只动勾选的，否则一键全部开始） */
 function onPrimaryAction() {
   if (pauseMode.value) void pauseTasks(pauseTargets.value)
-  else void startTasks(startableSelected.value)
+  else void startTasks(startTargets.value)
 }
 
 async function prioritizeTask(row: DownloadTaskSummary) {
@@ -855,9 +875,10 @@ onBeforeUnmount(() => {
         <div class="toolbar-right">
           <!-- 勾选数常驻占位改为「有勾选才显示」：无勾选时不留空标签 -->
           <span v-if="selectedIds.size" class="sel-hint">已勾选 {{ selectedIds.size }} 个</span>
-          <!-- 单一主操作按钮：无在途任务=「开始下载」（作用于勾选的未完成任务，未勾选则禁用）；
-               有在途任务=「全部暂停」（作用于勾选的在途任务，未勾选则作用于全部在途任务）。
-               按钮上的数字即本次点击的影响范围，作用域不必点下去才知道 -->
+          <!-- 单一主操作按钮（对齐迅雷）：有在途任务=「全部暂停」；
+               无在途但有未完成任务=「全部开始」（默认作用于全部未完成任务，不必先勾选）
+               或「开始下载」（已勾选未完成任务时收窄为只动勾选的）。
+               按钮上的数字即本次点击的影响范围，作用域不必点下去才知道。 -->
           <el-tooltip :content="primaryTip" placement="top">
             <span class="tip-wrap">
               <el-button
@@ -912,6 +933,10 @@ onBeforeUnmount(() => {
             >
               <span class="progress-text">{{ row.done }}/{{ row.total }}</span>
             </el-progress>
+            <div v-if="row.speed != null" class="task-rate text-muted">
+              <span>{{ row.speed }} 个/分</span>
+              <span v-if="row.eta_sec">· 剩余 {{ formatDuration(row.eta_sec) }}</span>
+            </div>
           </template>
         </el-table-column>
         <!-- show-overflow-tooltip：单行省略号 + 悬浮显示完整时间，杜绝换行 -->
@@ -956,6 +981,18 @@ onBeforeUnmount(() => {
       <!-- 移动端卡片：与桌面表格同源数据，主信息 + 副信息 + 操作（操作全部可见，
            不再被固定列宽截断；结构与 ResourcesView 的 file-cards 同一模式） -->
       <div v-else class="task-cards">
+        <!-- 手机端补「全选本页」：桌面端靠表格表头勾选框，移动端卡片无对应控件，
+             此前用户进手机端既看不到全选、开始按钮又默认禁用，无从批量开始。
+             作用域与桌面表头勾选框一致（当前页），复用同一套选中集合。 -->
+        <div class="tc-select-all">
+          <el-checkbox
+            :model-value="pageAllSelected"
+            :indeterminate="pageSomeSelected && !pageAllSelected"
+            @change="toggleSelectPage"
+          >
+            全选本页（{{ pagedTasks.length }}）
+          </el-checkbox>
+        </div>
         <div v-for="row in pagedTasks" :key="row.id" class="task-card">
           <div class="tc-head">
             <!-- 勾选框与桌面表格共用同一选中集合（list 勾选，不跟视图走） -->
@@ -971,6 +1008,8 @@ onBeforeUnmount(() => {
           <div class="tc-meta text-muted">
             <span>{{ row.created_at }}</span>
             <span>进度 {{ row.done }}/{{ row.total }}</span>
+            <span v-if="row.speed != null">{{ row.speed }} 个/分</span>
+            <span v-if="row.eta_sec">剩余 {{ formatDuration(row.eta_sec) }}</span>
           </div>
           <el-progress
             :percentage="row.total ? Math.round((row.done / row.total) * 100) : 0"
@@ -1292,6 +1331,15 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+/* 手机端「全选本页」：与桌面表头勾选框同一作用域（当前页），承接批量操作的勾选入口 */
+.tc-select-all {
+  display: flex;
+  align-items: center;
+  padding: 4px 2px 2px;
+  font-size: 13px;
+  color: #606266;
 }
 
 .task-card {

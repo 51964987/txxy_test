@@ -397,12 +397,20 @@ class DownloadTaskManager:
             "ok": 0, "skip": 0, "fail": 0, "running": 0, "pending": 0, "cancelled": 0
         }
         saved_dirs: list[str] = []
+        # 已结束链接的耗时累计（用于推算速度/ETA）：仅统计真正执行过的链接
+        finished_elapsed: float = 0.0
+        finished_cnt: int = 0
         for it in t["items"]:
             s = it.get("status", "pending")
             counts[s] = counts.get(s, 0) + 1
             sd = it.get("saved_dir")
             if sd and sd not in saved_dirs:
                 saved_dirs.append(sd)
+            if s in ("ok", "skip", "fail"):
+                el = it.get("elapsed")
+                if isinstance(el, (int, float)):
+                    finished_elapsed += float(el)
+                    finished_cnt += 1
         base = self._public(t)
         base.pop("items", None)
         base.pop("urls", None)
@@ -412,6 +420,17 @@ class DownloadTaskManager:
         # 日志序号：SSE 靠它感知「日志在增长」——下载过程中任务级字段不变，
         # 没有这个信号前端就要等链接跑完才能刷新日志（实时性问题的根源）
         base["log_seq"] = int(t.get("log_seq", 0))
+        # 速度 / ETA（仅进行中 / 已暂停任务有意义；终态任务不再变化，置空）
+        # 速度 = 已结束链接的处理吞吐（个/分钟）；ETA = 剩余待处理链接数 × 单链接平均耗时
+        remaining: int = counts["pending"] + counts["running"]
+        if t["status"] in ("running", "paused", "pending") and finished_cnt > 0 \
+                and finished_elapsed > 0 and remaining > 0:
+            avg_sec: float = finished_elapsed / finished_cnt
+            base["speed"] = round(finished_cnt / finished_elapsed * 60, 1)  # 个/分钟
+            base["eta_sec"] = int(round(remaining * avg_sec))
+        else:
+            base["speed"] = None
+            base["eta_sec"] = None
         return base
 
     def get(self, tid: str) -> dict[str, Any] | None:

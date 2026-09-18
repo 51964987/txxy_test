@@ -1813,6 +1813,15 @@ def blacklist_remove(req: BlacklistRmReq) -> dict[str, Any]:
     return {"ok": True}
 
 
+# 黑名单命中表达式：与 posts_filtered 视图（db.py）同一口径（url / author / fid 三类任一命中即屏蔽）。
+# 浏览页「黑名单」筛选（WHERE 过滤）与「标记」（SELECT 列）共用此单一来源，避免两套判定漂移。
+_BLACKLISTED_EXPR = (
+    "substr(url, instr(url, '/htm_data/')) IN (SELECT substr(value, instr(value, '/htm_data/')) FROM blacklist WHERE type='url')"
+    " OR CAST(author AS TEXT) IN (SELECT value FROM blacklist WHERE type='author')"
+    " OR CAST(fid AS TEXT) IN (SELECT value FROM blacklist WHERE type='fid')"
+)
+
+
 @router.get("/posts")
 def posts_list(
     fid: str | None = None,
@@ -1828,6 +1837,7 @@ def posts_list(
     sort_by: Annotated[str | None, Query()] = None,
     sort_order: Annotated[str | None, Query(pattern="^(asc|desc)$")] = None,
     adv: Annotated[str | None, Query()] = None,
+    blacklisted: Annotated[bool, Query()] = False,
     ) -> dict[str, Any]:
     """帖子列表。
 
@@ -1851,6 +1861,9 @@ def posts_list(
             raise HTTPException(400, f"高级查询条件有误：{e}") from e
         clause = f"({clause}) AND {adv_sql}"
         params = params + adv_params
+    if blacklisted:
+        # 浏览页「仅看黑名单」勾选：只保留命中三类黑名单任一的帖，与标记口径完全一致
+        clause = f"({clause}) AND ({_BLACKLISTED_EXPR})"
     offset = (page - 1) * page_size
     # COUNT 与列表在单连接内完成，省一次连接开/关
     conn = db.open_conn()
@@ -1858,8 +1871,14 @@ def posts_list(
         total = conn.execute(
             f"SELECT COUNT(*) AS c FROM posts WHERE {clause}", tuple(params)
         ).fetchone()["c"]
+        # blacklisted：复用与 posts_filtered 视图完全一致的判定（url/author/fid 三类黑名单），
+        # 仅作标记、不改变返回集合（除非 blacklisted=True 已在上面并入 WHERE 过滤）；
+        # 浏览页保持「读原 posts 表、不受影响」的设计，但把被大屏看板排除的帖在列表里显式标出，
+        # 使下钻时「卡片 N 帖 ≠ 列表 N 帖」的差异可解释。
         rows = conn.execute(
-            f"SELECT title, fid, date, url, likes, author, replies, created_at, update_at, update_date FROM posts WHERE {clause}" +
+            f"SELECT title, fid, date, url, likes, author, replies, created_at, update_at, update_date,"
+            f" (CASE WHEN {_BLACKLISTED_EXPR} THEN 1 ELSE 0 END) AS blacklisted"
+            f" FROM posts WHERE {clause}"
             f" ORDER BY {order} LIMIT ? OFFSET ?",
             tuple(params) + (page_size, offset),
         ).fetchall()
@@ -1869,7 +1888,7 @@ def posts_list(
         "total": total,
         "page": page,
         "page_size": page_size,
-        "items": [db.row_to_post(r) for r in rows],
+        "items": [{**db.row_to_post(r), "blacklisted": bool(r["blacklisted"])} for r in rows],
     }
 
 
@@ -1884,6 +1903,7 @@ def posts_export(
     undownloaded: Annotated[bool, Query()] = False,
     downloaded: Annotated[bool, Query()] = False,
     adv: Annotated[str | None, Query()] = None,
+    blacklisted: Annotated[bool, Query()] = False,
     sort: Annotated[str, Query()] = "date_desc",
     sort_by: Annotated[str | None, Query()] = None,
     sort_order: Annotated[str | None, Query(pattern="^(asc|desc)$")] = None,
@@ -1907,6 +1927,9 @@ def posts_export(
             raise HTTPException(400, f"高级查询条件有误：{e}") from e
         clause = f"({clause}) AND {adv_sql}"
         params = params + adv_params
+    if blacklisted:
+        # 导出口径与列表逐项一致：列表勾选「仅看黑名单」时，导出同样只含被屏蔽帖
+        clause = f"({clause}) AND ({_BLACKLISTED_EXPR})"
     sql = (
         f"SELECT title, fid, date, url, likes, author, replies, created_at, update_at, update_date FROM posts WHERE {clause}" +
         f" ORDER BY {order}"

@@ -150,6 +150,9 @@ export interface Post {
   created_at: string
   update_at: string
   update_date: string
+  /** 是否命中链接黑名单（url/author/fid 任一被屏蔽）。浏览页仅作标记、不剔除，
+   *  与「今日发布」等大屏看板口径（posts_filtered 已排除被屏蔽帖）形成可见差异说明 */
+  blacklisted?: boolean
 }
 
 export interface FidMeta {
@@ -678,6 +681,10 @@ export interface DownloadTaskSummary {
   items_summary?: Record<string, number>
   /** 已产生的保存目录（供资源管理页 B7 关联） */
   saved_dirs?: string[]
+  /** 处理速度（个/分钟，基于已结束链接吞吐推算；未开始/终态任务为 null） */
+  speed?: number | null
+  /** 预计剩余时间（秒，基于剩余待处理链接 × 单链接平均耗时；同上为 null） */
+  eta_sec?: number | null
 }
 
 /** 任务详情（GET /downloads/{tid}：概要字段 + 逐 URL 明细与日志） */
@@ -758,6 +765,9 @@ export const api = {
     /** 是否仅看「已下载」：只保留已落盘（目录仍在磁盘）的帖子，
      *  与资产卡「已沉淀帖」下钻同口径（卡片多少条，列表就多少条） */
     downloaded?: boolean
+    /** 是否仅看「黑名单」：只保留命中 url/author/fid 三类黑名单任一的帖，
+     *  与列表内「黑名单」标记同口径（后端用与标记完全相同的判定过滤） */
+    blacklisted?: boolean
     /** 高级查询条件：条件树 JSON（可视化构建器）或表达式文本（高级模式），
      *  与 fid/日期/关键词/作者 这些基础筛选按 AND 合并 */
     adv?: string

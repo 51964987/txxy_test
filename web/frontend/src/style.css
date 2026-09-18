@@ -101,14 +101,39 @@ body {
   box-shadow: 0 4px 16px rgba(31, 45, 61, 0.08);
 }
 
-/* 可点击 KPI 卡（最热帖 / 媒体文件）：与图表卡一致的指针 + 键盘可达 */
+/* 可点击 KPI 卡（最热帖 / 媒体文件 / 今日发布）：与图表卡一致的指针 + 键盘可达 */
 .stat-clickable {
   cursor: pointer;
+  position: relative;
 }
 
 .stat-clickable:focus-visible {
   outline: 2px solid #2f6fed;
   outline-offset: 2px;
+}
+
+/* KPI 下钻入口提示：右上角常驻弱化的「下钻 ›」，hover 高亮，暗示整卡可点（业界 KPI 卡通用可达性提示）。
+   pointer-events:none 让点击穿透到卡片本身，不拦截 @click。 */
+.stat-drill {
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  font-size: 12px;
+  color: #c0c4cc;
+  transition: color 0.15s ease;
+  pointer-events: none;
+}
+
+.stat-clickable:hover .stat-drill {
+  color: #2f6fed;
+}
+
+/* 窄屏单列时卡片更高，提示位随内边距收一点即可 */
+@media (max-width: 640px) {
+  .stat-drill {
+    top: 6px;
+    right: 10px;
+  }
 }
 
 /* 统计卡加载态：骨架屏固定宽度，避免其内部结构瞬时撑宽引发横向滚动条闪现 */

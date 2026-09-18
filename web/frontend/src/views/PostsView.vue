@@ -42,6 +42,8 @@ const filters = reactive({
   undownloaded: false,
   /** 仅看「已下载」：来自数据总览「内容资产」卡「已沉淀帖」下钻，与卡片数字严格自洽 */
   downloaded: false,
+  /** 仅看「黑名单」：勾选后只列出命中 url/author/fid 三类黑名单任一的帖（与行内「黑名单」标记同口径） */
+  blacklisted: false,
 })
 const page = ref(1)
 const pageSize = ref(50)
@@ -319,6 +321,7 @@ async function load() {
       author: filters.author || undefined,
       undownloaded: filters.undownloaded || undefined,
       downloaded: filters.downloaded || undefined,
+      blacklisted: filters.blacklisted || undefined,
       adv: advParam() || undefined,
       page: page.value,
       page_size: pageSize.value,
@@ -349,10 +352,30 @@ function doReset() {
   filters.author = ''
   filters.undownloaded = false
   filters.downloaded = false
+  filters.blacklisted = false
   queryText.value = ''
   page.value = 1
   colSort.value = { by: 'date', order: 'desc' }
   syncHeaderSort()
+  load()
+}
+
+/** 勾选「仅看黑名单」：重置到第 1 页后重查（与标记同口径，只保留命中三类黑名单的帖） */
+function onBlacklistedToggle() {
+  page.value = 1
+  load()
+}
+
+/** 选择/取消版块即时筛选：下拉是「离散选择」控件，按业界做法（电商侧栏、Notion 数据库筛选、Gmail 筛选）
+ *  选完即返回结果，无需再点搜索按钮；重置到第 1 页避免停留在越界页。仅自由文本才需显式提交（避免逐字触发请求）。 */
+function onFidChange() {
+  page.value = 1
+  load()
+}
+
+/** 日期范围同属离散提交（确认区间/清空才触发），与版块同处理：即时筛选。 */
+function onDateChange() {
+  page.value = 1
   load()
 }
 
@@ -454,6 +477,17 @@ const activeFilters = computed(() => {
       },
     })
   }
+  if (filters.blacklisted) {
+    list.push({
+      key: 'blacklisted',
+      label: '黑名单',
+      clear: () => {
+        filters.blacklisted = false
+        page.value = 1
+        load()
+      },
+    })
+  }
   // 排序：仅非默认（日期倒序）时进摘要条，避免每条都显示噪音；清除即还原默认
   if (!(colSort.value.by === 'date' && colSort.value.order === 'desc')) {
     list.push({
@@ -497,6 +531,7 @@ function doExport() {
       author: filters.author || undefined,
       undownloaded: filters.undownloaded ? '1' : undefined,
       downloaded: filters.downloaded ? '1' : undefined,
+      blacklisted: filters.blacklisted ? '1' : undefined,
       adv: advParam() || undefined,
       sort_by: colSort.value.order ? colSort.value.by : undefined,
       sort_order: colSort.value.order ?? undefined,
@@ -580,6 +615,11 @@ onMounted(() => {
   if (qDl === '1' || qDl === 'true') {
     filters.downloaded = true
   }
+  // 浏览页「仅看黑名单」：支持从链接直接带入（与未下载/已下载下钻同构）
+  const qBl = route.query.blacklisted
+  if (qBl === '1' || qBl === 'true') {
+    filters.blacklisted = true
+  }
   loadFidMeta()
   load()
 })
@@ -600,6 +640,7 @@ onMounted(() => {
             clearable
             placeholder="全部版块"
             style="width: 220px"
+            @change="onFidChange"
           >
             <el-option
               v-for="f in fidMeta"
@@ -620,6 +661,7 @@ onMounted(() => {
             end-placeholder="结束日期"
             :shortcuts="dateShortcuts"
             style="width: 250px"
+            @change="onDateChange"
           />
         </div>
         <div class="filter-item grow">
@@ -635,6 +677,9 @@ onMounted(() => {
               <el-button :icon="Search" @click="doSearch" />
             </template>
           </el-input>
+        </div>
+        <div class="filter-item">
+          <el-checkbox v-model="filters.blacklisted" @change="onBlacklistedToggle">仅看黑名单</el-checkbox>
         </div>
         <el-button @click="doReset">重置</el-button>
         <el-button type="primary" plain @click="advOpen = !advOpen">
@@ -764,6 +809,11 @@ onMounted(() => {
                 :style="{ '--fid-color': colorForFid(row.fid) }"
                 :title="fidName(row.fid)"
               >{{ fidName(row.fid) }}</span>
+              <span
+                v-if="row.blacklisted"
+                class="bl-chip"
+                title="该帖命中链接黑名单（url / 作者 / 版块任一类），故不计入大屏看板统计（如「今日发布」）。浏览页默认保留，仅作标记"
+              >黑名单</span>
               <a class="title-link" :title="rowTip(row)" @click.prevent="openPost(row.url)">{{ row.title }}</a>
             </div>
           </template>
@@ -1009,6 +1059,20 @@ onMounted(() => {
   color: color-mix(in srgb, var(--fid-color, var(--el-color-primary)) 50%, #1f2937);
   background: color-mix(in srgb, var(--fid-color, var(--el-color-primary)) 10%, white);
   border: 1px solid color-mix(in srgb, var(--fid-color, var(--el-color-primary)) 30%, white);
+}
+
+/* 黑名单标记：与版块标签同款 chips 排版（固定不压缩、flex 对齐），用警告橙突出，
+   提示该帖被大屏看板口径（posts_filtered）排除但不从浏览页剔除 */
+.bl-chip {
+  flex-shrink: 0;
+  padding: 1px 7px;
+  border-radius: 10px;
+  font-size: 12px;
+  line-height: 18px;
+  white-space: nowrap;
+  color: #b45309;
+  background: #fef3c7;
+  border: 1px solid #fcd34d;
 }
 
 .title-cell .title-link {

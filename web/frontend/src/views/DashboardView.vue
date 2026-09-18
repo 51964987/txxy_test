@@ -379,6 +379,17 @@ function goPostsDownloaded() {
   router.push({ path: '/posts', query: { downloaded: '1' } })
 }
 
+/**
+ * 今日发布 KPI 下钻：跳帖子页并锁定「今日」日期窗（date_from=date_to=today_str）。
+ * 卡片主值 = posts.date == 今天的条数，下钻列表用同一日期窗过滤，保证「卡片 N 帖 = 列表 N 帖」口径自洽。
+ * 复用 goPostsInRange（与「最新最热」同口径的日期并入逻辑），排序按发布时间倒序（最新在前），贴合「今日发布」语义。
+ */
+function goTodayPosts() {
+  const today = overview.value?.today_str
+  if (!today) return
+  goPostsInRange({ sort: 'date_desc' }, dayRange(today))
+}
+
 /** 资产状态行（C3）：库存以外的状态才是「是否在推进」的信号；缺口项可下钻 */
 interface AssetStateRow {
   key: string
@@ -2418,12 +2429,24 @@ function renderFidTrendChart() {
             </div>
           </div>
         </div>
-        <div class="stat-card">
+        <!-- 今日发布 KPI 下钻：整卡可点，跳帖子页并锁定「今日」日期窗（卡片 N 帖 = 列表 N 帖，口径自洽）。
+             右上角常驻弱化的「下钻 ›」是业界 KPI 卡通用的可达性提示，hover 高亮暗示可点。 -->
+        <div
+          class="stat-card stat-clickable"
+          role="button"
+          tabindex="0"
+          :title="`今日发布 ${overview.today} 帖（${overview.today_str}）；点击下钻查看当日全部帖子明细`"
+          @click="goTodayPosts"
+          @keydown.enter="goTodayPosts"
+        >
           <div class="stat-icon" style="background: linear-gradient(135deg, #34d399, #10b981)">
             <el-icon><TrendCharts /></el-icon>
           </div>
           <div class="stat-body">
-            <div class="stat-label">今日发布</div>
+            <div class="stat-label">
+              今日发布
+              <span class="stat-drill" aria-hidden="true">下钻 ›</span>
+            </div>
             <div class="stat-value"><RollingNumber :value="overview.today" /></div>
             <div v-if="kpiSub" class="stat-sub">
               <span :class="kpiSub.todayDiff.cls">{{ kpiSub.todayDiff.text }}</span>
