@@ -280,13 +280,34 @@ def _db_detail(date_str: str) -> dict[str, Any] | None:
 
 # ==================== 日志回退解析（仅兼容旧数据） ====================
 
+# 抓取日志文件名前缀（file_logger 按 <程序名>_<批次时间>.log 双写到 outputs/<日期>/）：
+# 只有落了这两类日志的日期目录才算「当天跑过抓取」。web / share / download_files
+# 等服务的会话日志同样在该目录下，但不构成一次抓取，必须排除。
+_SCRAPE_LOG_PATTERNS = ("run_batch_*.log", "scraper_*.log")
+
+
+def _has_scrape_log(date_dir: Path) -> bool:
+    """日期目录是否存在抓取日志（run_batch 批次日志或 scraper 版块日志）"""
+    return any(
+        next(date_dir.glob(pattern), None) is not None for pattern in _SCRAPE_LOG_PATTERNS
+    )
+
+
 def list_date_dirs() -> list[str]:
+    """outputs/ 下「跑过抓取」的日期目录（YYYYMMDD，倒序）。
+
+    判定必须有**抓取日志**证据（run_batch_ / scraper_ 前缀），不能只看目录里有
+    任意 .log：file_logger 把所有进程的会话日志都按日期目录双写，web / share /
+    download_files 的日志文件同样落在 outputs/<日期>/ 下（如 web_20260919_000045.log）。
+    只开 Web + share 服务的日子会被判成「今天跑过一次抓取」→ 无 run_batch 日志 →
+    回退到 _parse_scraper_logs 得到空明细，列表首条出现 source=scraper、0 版块、
+    status=error 的伪记录（2026-09-19 用户上报），并被健康条当成「最近批次」。
+    """
     dates: list[str] = []
     if config.OUTPUTS_DIR.is_dir():
         for p in sorted(config.OUTPUTS_DIR.iterdir(), reverse=True):
-            if p.is_dir() and DATE_DIR_RE.match(p.name):
-                if any(f.name.lower().endswith(".log") for f in p.iterdir()):
-                    dates.append(p.name)
+            if p.is_dir() and DATE_DIR_RE.match(p.name) and _has_scrape_log(p):
+                dates.append(p.name)
     return dates
 
 
@@ -411,12 +432,20 @@ def get_run_detail_by_id(run_id: int) -> dict[str, Any] | None:
     return _db_detail_by_id(run_id)
 
 
-def get_run_detail(date_str: str) -> dict[str, Any]:
-    """优先读库（该日最新一次）；数据库无该日期记录时回退解析日志（兼容旧数据）"""
+def get_run_detail(date_str: str) -> dict[str, Any] | None:
+    """按日期取运行详情：优先读库（该日最新一次），否则回退解析日志（兼容旧数据）。
+
+    库里与日志里都没有这次运行的证据时返回 **None**（而不是返回一个 0 版块的空壳）：
+    outputs/<日期>/ 目录只要有人写过日志就会存在（web / share 服务每天都建），
+    目录存在 ≠ 当天跑过抓取，拼一个 source=scraper 的空明细出来会让列表与详情
+    出现「来源 scraper 单跑 / 状态异常 / 13 项全 0」的伪记录（2026-09-19 用户上报）。
+    """
     detail = _db_detail(date_str)
     if detail:
         return detail
     date_dir = config.OUTPUTS_DIR / date_str
+    if not _has_scrape_log(date_dir):
+        return None
     rb = _latest_log(date_dir, f"run_batch_{date_str}*.log")
     if rb is not None and rb.is_file():
         parsed = _parse_run_batch_log(rb)
@@ -436,6 +465,8 @@ def list_runs() -> list[dict[str, Any]]:
         if d in db_dirs:
             continue
         detail = get_run_detail(d)
+        if detail is None:  # 目录存在但无抓取日志（纯服务日志），不构成一次运行
+            continue
         if detail["source"] == "run_batch":
             overall = detail.get("overall") or {"ok": 0, "fail": 0, "skip": 0}
             ok, fail, skip = overall["ok"], overall["fail"], overall["skip"]

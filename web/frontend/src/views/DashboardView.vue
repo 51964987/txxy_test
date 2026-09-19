@@ -15,12 +15,12 @@ import type { ECharts } from 'echarts/core'
 import { ElMessage } from 'element-plus'
 import { Download, FolderOpened, Star } from '@element-plus/icons-vue'
 import { useDownloadSubmit } from '../composables/useDownloadSubmit'
-import { api, formatDuration, formatSize, isAborted, type Assets, type Boards, type BoardSort, type Compare, type FidDistItem, type Health, type Overview, type PendingDownloads, type RunSummary, type TodayTop, type TodayTopItem, type TopAuthor, type TopFid, type TrendByFid, type TrendPoint } from '../api'
+import { useAssets } from '../composables/useAssets'
+import { api, formatDuration, formatSize, isAborted, type Boards, type BoardSort, type Compare, type FidDistItem, type Health, type Overview, type PendingDownloads, type RunSummary, type TodayTop, type TodayTopItem, type TopAuthor, type TopFid, type TrendByFid, type TrendPoint } from '../api'
 import { useDashboardStore } from '../stores/dashboard'
 import { useAppStore } from '../stores/app'
 import { formatDate, formatShortTime, pad2 } from '../utils/time'
 import { colorByIndex, colorForFid } from '../utils/fidColor'
-import { buildTypeSegments, type CategoryKey } from '../utils/category'
 import { postOpenUrl } from '../utils/postUrl'
 import RollingNumber from '../components/RollingNumber.vue'
 
@@ -40,6 +40,10 @@ use([
 ])
 
 const router = useRouter()
+
+// 内容资产（媒体库沉淀进度）共享逻辑：数据总览只取「精简 KPI 摘要」所需的子集，
+// 完整卡片在资源管理页承接（同一份实现，禁止两处各写一份，见 composables/useAssets.ts）
+const { assets, loadAssets, assetsEmpty, goalBarWidth, goalTip, goalAria, goResources, goPendingPosts } = useAssets()
 
 const store = useDashboardStore()
 const app = useAppStore()
@@ -102,7 +106,6 @@ const p1AreaRef = ref<HTMLDivElement | null>(null)
 // ===== R1-R4：采集健康条 / 周期对比 / 资产漏斗 / 待下载推荐（后端接口已就绪，前端接入）=====
 const health = ref<Health | null>(null)
 const compare = ref<Compare | null>(null)
-const assets = ref<Assets | null>(null)
 const pending = ref<PendingDownloads | null>(null)
 const loadingPending = ref(false)
 
@@ -349,36 +352,6 @@ const fidTopDelta = computed(() => {
   return s ? cmpDelta(s.topDelta) : null
 })
 
-/** 资产漏斗：收录 → 已下载帖 的转化率（R4）；无数据返回 null 不渲染 */
-const downloadRate = computed(() => {
-  const a = assets.value
-  if (!a || !a.posts_total) return null
-  return ((a.downloaded_posts / a.posts_total) * 100).toFixed(1)
-})
-
-/** 资产空态：已下载帖与本地文件均为 0 时渲染引导空态，而非生硬的「0 漏斗」。
- *  只清任务不影响（下载履历独立留存，downloaded_posts 仍 >0）；
- *  仅当任务 + 文件 + 履历全部清空才触发——即真正「没有任何已下载资产」的极端场景。 */
-const assetsEmpty = computed(() => {
-  const a = assets.value
-  if (!a) return false
-  return a.downloaded_posts === 0 && a.files === 0 && a.folders === 0
-})
-
-/** R4 资产卡「类型分布（按大小）」：直接复用 utils/category 的 buildTypeSegments
- * （与资源管理页 B6 同派生、同口径，单一实现，杜绝两边各算一遍）。 */
-const typeRows = computed(() => buildTypeSegments(assets.value))
-
-/** R4 资产卡「类型分布（按大小）」下钻：跳资源管理页并按该类型筛选（继承类型上下文，口径自洽） */
-function goResourcesType(key: CategoryKey) {
-  router.push({ path: '/resources', query: { type: key } })
-}
-
-/** 资产卡「已沉淀帖」下钻：只保留已落盘帖子（卡片多少条，列表就多少条——数字自洽的硬校验） */
-function goPostsDownloaded() {
-  router.push({ path: '/posts', query: { downloaded: '1' } })
-}
-
 /**
  * 今日发布 KPI 下钻：跳帖子页并锁定「今日」日期窗（date_from=date_to=today_str）。
  * 卡片主值 = posts.date == 今天的条数，下钻列表用同一日期窗过滤，保证「卡片 N 帖 = 列表 N 帖」口径自洽。
@@ -389,127 +362,6 @@ function goTodayPosts() {
   if (!today) return
   goPostsInRange({ sort: 'date_desc' }, dayRange(today))
 }
-
-/** 资产状态行（C3）：库存以外的状态才是「是否在推进」的信号；缺口项可下钻 */
-interface AssetStateRow {
-  key: string
-  label: string
-  num: number
-  color: string
-  cls: string
-  title: string
-  clickable?: boolean
-}
-
-const stateRows = computed<AssetStateRow[]>(() => {
-  const s = assets.value?.state
-  if (!s) return []
-  return [
-    {
-      key: 'active',
-      label: '在途',
-      num: s.active,
-      color: '#2f6fed',
-      cls: '',
-      title: '排队中 / 正在下载的帖数（随自动刷新即时更新）',
-    },
-    {
-      key: 'failed',
-      label: '失败',
-      num: s.failed,
-      color: '#f56c6c',
-      cls: s.failed ? 'is-bad' : '',
-      title: '最近一次下载失败、此后未成功的帖数（持久记录，清空任务中心不会丢）',
-    },
-    {
-      key: 're_download',
-      label: '可重下',
-      num: s.re_download,
-      color: '#e6a23c',
-      cls: '',
-      title: '曾下载成功、但文件已被资源管理清理的帖数',
-    },
-    {
-      key: 'empty_dirs',
-      label: '空壳',
-      num: s.empty_dirs,
-      color: '#909399',
-      cls: '',
-      title: '目录存在但 0 个文件的残留（多为下载失败 / 取消留下）',
-    },
-    {
-      key: 'gap',
-      label: `近${s.gap_days}日缺口`,
-      num: s.gap_recent,
-      color: '#f59e0b',
-      cls: '',
-      clickable: true,
-      title: '该窗口内有互动、但尚未沉淀到本地的帖子数（点击下钻缺口明细）',
-    },
-  ]
-})
-
-/** 状态项点击：缺口项下钻到帖子页（与「未下载」筛选同口径；其余项无动作） */
-function onStateClick(r: AssetStateRow) {
-  if (r.clickable) goPendingPosts()
-}
-
-/** 目标进度说明：一行结构化「口径 · 目标 · 当前 → 缺口」（卡面已省字，明细按需展开）。
- *  不写「为何不下钻」——那是实现约束，属代码注释与文档，不是用户决策所需信息 */
-const goalTip = computed(() => {
-  const g = assets.value?.goal
-  if (!g) return ''
-  const head = `目标档 ${g.scope_label} · 目标 ${g.target_rate}% · 当前 ${g.downloaded}/${g.total}`
-  return g.reached ? `${head}（已达成）` : `${head} → 还差 ${g.remain} 帖`
-})
-
-/** 进度条无障碍文案：卡面文字收敛后，完整口径（含分母与档位）只在此处完整保留 */
-const goalAria = computed(() => {
-  const g = assets.value?.goal
-  if (!g) return '沉淀目标进度'
-  return (
-    `沉淀目标档 ${g.scope_label}，目标 ${g.target_rate}%，`
-    + `当前 ${g.current_rate}%（${g.downloaded} / ${g.total}）`
-  )
-})
-
-/** 对账提示（C10）：磁盘目录 = 已认领 + 未认领 + 空壳（三者互斥，不重复计数） */
-const reconcileTip = computed(() => {
-  const a = assets.value
-  if (!a) return ''
-  return (
-    `磁盘目录 ${a.folders} 个 = 已认领 ${a.reconcile.claimed} + 未认领 ${a.reconcile.unclaimed} + 空壳 ${a.reconcile.empty}。`
-    + '「未认领」= 目录有内容但未与任何收录帖对上（目录名是标题清理 + 截断 80 字后的结果，正常应为 0）'
-  )
-})
-
-/** 分版块沉淀集中度：只取确有沉淀的版块（其余为 0，无需占位），悬浮看明细 */
-const fidTop = computed(() => (assets.value?.by_fid ?? []).filter((f) => f.downloaded > 0))
-const fidTip = computed(() =>
-  fidTop.value.map((f) => `${f.name} ${f.downloaded} 帖 / 沉淀率 ${f.rate}%`).join(' · '),
-)
-
-/** 目标进度条宽度：以「目标刻度」为满格（当前覆盖率 / 目标覆盖率），超出由「已达成」表达 */
-const goalBarWidth = computed(() => {
-  const g = assets.value?.goal
-  if (!g || !g.target_rate) return '0%'
-  return `${Math.min(100, Math.round((g.current_rate / g.target_rate) * 100))}%`
-})
-
-/** 近 N 日新增沉淀的体积合计（体积按目录当前占用估算，非沉淀当日快照） */
-const recentSize = computed(() =>
-  (assets.value?.growth ?? []).reduce((sum, p) => sum + p.size, 0),
-)
-
-/** 增长迷你柱：高度按窗口内峰值归一（最小 4% 保基线，便于看出哪天断档） */
-const growthBars = computed(() => {
-  const g = assets.value?.growth ?? []
-  const max = Math.max(1, ...g.map((p) => p.posts))
-  return g.map((p) => ({ h: Math.max(4, Math.round((p.posts / max) * 100)) }))
-})
-const growthTip = computed(() =>
-  (assets.value?.growth ?? []).map((p) => `${p.date} +${p.posts} 帖`).join(' · '),
-)
 
 /** 健康条补充信息（R1）：悬浮展示批次明细（点击进运行记录页） */
 const healthDetail = computed(() => {
@@ -523,17 +375,6 @@ const healthDetail = computed(() => {
   parts.push('点击查看运行记录')
   return parts.join(' · ')
 })
-
-/** 内容资产卡取数（从 loadP0 抽出）：下载类写操作后只需重刷本卡 +
- *  「待下载推荐」，不必为一次点击重跑整个首屏（十余个接口）。失败静默保留旧值，
- *  下一轮轮询自动重试（与 loadP0 内其它补充卡同一容错策略）。 */
-async function loadAssets(): Promise<void> {
-  try {
-    assets.value = await api.assets()
-  } catch {
-    // 静默：保留旧值，等下一轮自动刷新
-  }
-}
 
 // ===== P0：首屏加载（KPI + 趋势 + 分布）=====
 async function loadP0(initial = false) {
@@ -1033,26 +874,7 @@ function goRuns() {
   router.push('/runs')
 }
 
-/** R4 资产卡入口：跳资源管理页（本地媒体资产总览） */
-function goResources() {
-  router.push('/resources')
-}
 
-/** R3 待下载推荐入口：下钻到帖子页，继承「近30日 · 未下载 · 按互动量」上下文（真下钻，数字自洽） */
-function goPendingPosts() {
-  const to = new Date()
-  const from = new Date()
-  from.setDate(from.getDate() - 29) // 近 30 日（含今天）
-  router.push({
-    path: '/posts',
-    query: {
-      date_from: `${to.getFullYear()}-${pad2(from.getMonth() + 1)}-${pad2(from.getDate())}`,
-      date_to: `${to.getFullYear()}-${pad2(to.getMonth() + 1)}-${pad2(to.getDate())}`,
-      undownloaded: '1',
-      sort: 'engagement_desc',
-    },
-  })
-}
 
 function initChart(el: HTMLDivElement): ECharts {
   return echartsInit(el)
@@ -2493,167 +2315,47 @@ function renderFidTrendChart() {
     </div>
     </div>
 
-    <!-- R4 内容 → 资产漏斗 + 沉淀进度：收录 → 已沉淀帖 → 本地文件（三级同量纲），
-         另附目标进度 / 五态 / 分层沉淀率 / 存储行 / 类型分布。
+    <!-- R4 内容资产（精简 KPI 摘要）：完整卡片已合并到「资源管理」页（KPI 优先形态）。
+         此处只保留一行「沉淀完成度」KPI：当前覆盖率 / 目标 + 缺口；点击进资源管理看漏斗 / 五态 / 分层率 / 存储。
          口径与依据见 docs/内容资产沉淀进度调研与建议.md -->
-    <div class="page-card asset-card">
+    <div class="page-card asset-kpi">
       <div class="chart-head">
         <div class="chart-head-left">
           <span class="chart-title">内容资产</span>
-          <span class="chart-sub">收录内容沉淀为本地媒体资产的进度</span>
+          <span class="chart-sub">沉淀完成度</span>
         </div>
         <div class="chart-head-right">
-          <el-link type="primary" :underline="false" class="more-link" @click="goResources">资源管理</el-link>
+          <span
+            class="drill-link"
+            role="link"
+            tabindex="0"
+            title="点击下钻到资源管理，查看漏斗 / 五态 / 分层沉淀率 / 存储明细"
+            @click="goResources"
+            @keydown.enter="goResources"
+          >下钻 ›</span>
         </div>
       </div>
-      <div v-if="assets && !assetsEmpty">
-        <div class="asset-flow">
-        <div class="asset-step as-posts">
-          <span class="as-label">收录帖子</span>
-          <span class="as-value">{{ assets.posts_total.toLocaleString() }}</span>
-        </div>
-        <span class="asset-arrow">
-          →
-          <em v-if="downloadRate" title="已沉淀帖 / 收录帖子（全库口径，会被长尾稀释；分层看下方）">{{ downloadRate }}%</em>
-        </span>
-        <div
-          class="asset-step as-downloaded"
-          role="button"
-          title="点击查看已沉淀帖子明细（与此处数字同口径）"
-          @click="goPostsDownloaded"
-        >
-          <span class="as-label">已沉淀帖</span>
-          <span class="as-value">{{ assets.downloaded_posts.toLocaleString() }}</span>
-        </div>
-        <span class="asset-arrow">→</span>
-        <div class="asset-step as-files" role="button" title="点击进入资源管理" @click="goResources">
-          <span class="as-label">本地文件</span>
-          <span class="as-value">{{ assets.files.toLocaleString() }}</span>
-          <span class="as-sub">{{ assets.folders }} 个目录</span>
-        </div>
-      </div>
-
-      <!-- 目标进度（SLO 式 / Grafana stat-vs-target 形态）：常驻只留行首标签 + 目标值小字 + 主值 + 缺口，
-           档位名与 downloaded/total 明细下沉到 tooltip 与下方「分层沉淀率」的目标档高亮——
-           同一卡内同一数字不复述三遍（2026-09-13 文案收敛，见 docs/数据总览大屏设计与优化总览.md §20.6） -->
-      <div class="asset-goal">
-        <div class="ag-head">
-          <span class="ag-title">
-            沉淀目标
-            <em class="ag-target">{{ assets.goal.target_rate }}%</em>
-          </span>
-          <span class="ag-now" :title="goalTip">{{ assets.goal.current_rate }}%</span>
-          <span v-if="assets.goal.reached" class="ag-done">已达成</span>
-          <!-- 目标缺口不做下钻：目标口径是「该档全量帖子」，帖子页无法表达（无互动量阈值筛选），
-               强行下钻必然口径不一致；可下钻的缺口是下方状态行的「近 N 日缺口」。
-               该理由属实现约束，只留在代码注释与文档，不写进面向用户的文案 -->
-          <span v-else class="ag-remain" :title="goalTip">
-            还差 {{ assets.goal.remain.toLocaleString() }} 帖
-          </span>
+      <div v-if="assets && !assetsEmpty" class="ak-body">
+        <div class="ak-rate">
+          <span class="ak-now">{{ assets.goal.current_rate }}%</span>
+          <span class="ak-target">目标 {{ assets.goal.target_rate }}%</span>
+          <span v-if="assets.goal.reached" class="ak-done">已达成</span>
+          <span v-else class="ak-remain" :title="goalTip">{{ assets.goal.scope_label }} 内还差 {{ assets.goal.remain.toLocaleString() }} 帖</span>
         </div>
         <div
-          class="ag-bar"
+          class="ak-bar"
           role="progressbar"
           :aria-label="goalAria"
           :aria-valuenow="assets.goal.current_rate"
           aria-valuemin="0"
           aria-valuemax="100"
         >
-          <div class="ag-fill" :class="{ 'is-reached': assets.goal.reached }" :style="{ width: goalBarWidth }"></div>
-          <span class="ag-mark" :style="{ left: assets.goal.target_rate + '%' }"></span>
+          <div class="ak-fill" :class="{ 'is-reached': assets.goal.reached }" :style="{ width: goalBarWidth }"></div>
+          <span class="ak-mark" :style="{ left: assets.goal.target_rate + '%' }"></span>
         </div>
-      </div>
-
-      <!-- 状态行：库存以外的四态 + 缺口（只看库存等于只看结果不看过程） -->
-      <div class="asset-state">
-        <span
-          v-for="s in stateRows"
-          :key="s.key"
-          class="ast-item"
-          :class="[s.cls, { 'is-click': s.clickable }]"
-          :role="s.clickable ? 'button' : undefined"
-          :title="s.title"
-          @click="onStateClick(s)"
-        >
-          <i class="ast-dot" :style="{ background: s.color }"></i>
-          <span class="ast-label">{{ s.label }}</span>
-          <b class="ast-num">{{ s.num.toLocaleString() }}</b>
-        </span>
-        <el-tooltip placement="top" effect="dark" :content="reconcileTip" :show-after="200">
-          <span class="ast-reconcile">
-            对账 已认领 {{ assets.reconcile.claimed }}/{{ assets.folders }}
-            <em v-if="assets.reconcile.unclaimed" class="ast-warn">· 未认领 {{ assets.reconcile.unclaimed }}</em>
-          </span>
-        </el-tooltip>
-      </div>
-
-      <!-- 分层沉淀率：全库会被长尾稀释，分档才可行动。当前目标档高亮——
-           目标行已省去档位名，分母口径由这里唯一表达（分母必须可解释，见项目专属约束第 12 条） -->
-      <div class="asset-coverage">
-        <span class="ac-label">分层沉淀率</span>
-        <span
-          v-for="c in assets.coverage"
-          :key="c.key"
-          class="ac-item"
-          :class="{ 'is-goal': c.key === assets.goal.scope }"
-          :title="c.key === assets.goal.scope ? `当前目标档（${c.downloaded} / ${c.total.toLocaleString()}）` : undefined"
-        >
-          {{ c.label }} <b>{{ c.rate }}%</b>
-          <em>{{ c.downloaded }}/{{ c.total.toLocaleString() }}</em>
-        </span>
-        <el-tooltip v-if="fidTop.length" placement="top" effect="dark" :content="fidTip" :show-after="200">
-          <span class="ac-fid">
-            集中在 {{ fidTop[0].name }}（{{ fidTop[0].downloaded }}/{{ assets.downloaded_posts }}）
-          </span>
-        </el-tooltip>
-      </div>
-
-      <!-- 存储行：计数与字节分列两个视图；附近 30 日沉淀增长（纯 CSS 迷你柱，不新开图表实例） -->
-      <div class="asset-store">
-        <span class="as2-item">占用 <b>{{ formatSize(assets.size) }}</b></span>
-        <span v-if="assets.disk_total" class="as2-item">
-          可用 <b>{{ formatSize(assets.disk_free) }}</b>
-          <em>/ {{ formatSize(assets.disk_total) }}</em>
-        </span>
-        <span class="as2-item as2-growth">
-          近 {{ assets.state.gap_days }} 日沉淀 <b>+{{ assets.state.recent_posts }}</b> 帖
-          <em v-if="recentSize">· {{ formatSize(recentSize) }}</em>
-        </span>
-        <span v-if="growthBars.length" class="as2-spark" :title="growthTip">
-          <i v-for="(b, i) in growthBars" :key="i" :style="{ height: b.h + '%' }"></i>
-        </span>
-        <span v-else class="as2-hint">历史沉淀时间不可考，新下载将自动生成增长曲线</span>
-      </div>
-      <div v-if="typeRows.length" class="asset-types">
-        <div class="at-head">
-          <span class="at-title">类型分布（按大小）</span>
-          <span class="at-hint">点击下钻到该类型</span>
+        <div class="ak-foot">
+          <span class="ak-sub">已沉淀 <b>{{ assets.downloaded_posts.toLocaleString() }}</b> / 收录 {{ assets.posts_total.toLocaleString() }}</span>
         </div>
-        <div class="at-bar" role="group" aria-label="各类型体积占比">
-          <div
-            v-for="r in typeRows"
-            :key="r.key"
-            class="at-seg"
-            :style="{ width: r.sizePct + '%', background: r.color }"
-            role="button"
-            @click="goResourcesType(r.key)"
-          ></div>
-        </div>
-        <div class="at-legend">
-          <span
-            v-for="r in typeRows"
-            :key="r.key"
-            class="at-item"
-            role="button"
-            @click="goResourcesType(r.key)"
-          >
-            <i class="at-dot" :style="{ background: r.color }"></i>
-            <span class="at-name">{{ r.label }}</span>
-            <span class="at-num">{{ r.files }} 个 · {{ formatSize(r.size) }}</span>
-            <span class="at-pct">{{ r.sizePctText }}</span>
-          </span>
-        </div>
-      </div>
       </div>
       <div v-else-if="assets && assetsEmpty" class="asset-empty">
         <el-icon class="ae-icon"><FolderOpened /></el-icon>
@@ -3310,10 +3012,9 @@ function renderFidTrendChart() {
   margin-bottom: 12px;
 }
 
-/* 大屏（全屏）态：健康条 / 资产卡同步收紧间距，避免挤压图表区
+/* 大屏（全屏）态：健康条同步收紧间距，避免挤压图表区
    （待下载推荐已移入 .trend-row 成为网格项，行距由该行的 gap 统一控制，不再单列） */
-.dashboard.is-fullscreen .health-bar,
-.dashboard.is-fullscreen .asset-card {
+.dashboard.is-fullscreen .health-bar {
   margin-bottom: 12px;
 }
 
@@ -3617,6 +3318,20 @@ function renderFidTrendChart() {
 
 .more-link {
   font-size: 12px;
+}
+
+/* 内容资产 KPI 卡下钻入口：与「今日发布」的「下钻 ›」统一视觉（弱化灰字，hover 变蓝暗示可点）。
+   此处仅链接可点（非整卡点击），故保留 pointer-events 与可访问性角色，区别于 .stat-drill 的穿透态。 */
+.asset-kpi .drill-link {
+  font-size: 12px;
+  color: #c0c4cc;
+  cursor: pointer;
+  transition: color 0.15s ease;
+  user-select: none;
+}
+.asset-kpi .drill-link:hover,
+.asset-kpi .drill-link:focus-visible {
+  color: #2f6fed;
 }
 
 .chart {
@@ -4029,188 +3744,61 @@ function renderFidTrendChart() {
   border-left-color: #2f6fed;
 }
 
-/* ================= R4 内容 → 资产漏斗 + 沉淀进度 =================
-   紧凑横条卡：三级漏斗（同量纲计数）+ 箭头（首级带全库转化率），
-   另附目标进度 / 五态状态行 / 分层沉淀率 / 存储行，窄屏自动换行。
-   步骤条配色沿用趋势统计卡家族色（蓝/绿/紫），不另建色板。 */
-.asset-card {
+/* ================= R4 内容资产（精简 KPI 摘要） =================
+   完整卡片（漏斗 / 五态 / 分层沉淀率 / 存储行 / 对账）已合并到「资源管理」页（KPI 优先形态），
+   此处只保留「沉淀完成度」一行 KPI：当前覆盖率 / 目标 + 缺口，点击进资源管理看详情。
+   口径与依据见 docs/内容资产沉淀进度调研与建议.md */
+.asset-kpi {
   margin-bottom: 16px;
 }
-
-/* 资产空态：无任何已下载资产时的引导态（替代生硬的「0 漏斗」），移动端同样居中 */
-.asset-empty {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  padding: 22px 0;
-  text-align: center;
+.asset-kpi .ak-body {
+  margin-top: 10px;
 }
-.asset-empty .ae-icon {
-  font-size: 34px;
-  color: #c0c4cc;
-}
-.asset-empty .ae-text {
-  font-size: 14px;
-  font-weight: 600;
-  color: #606266;
-}
-.asset-empty .ae-sub {
-  font-size: 12px;
-  color: #909399;
-}
-.asset-empty .ae-link {
-  margin-top: 2px;
-  font-size: 13px;
-}
-
-.asset-flow {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-  margin-top: 4px;
-  min-width: 0;
-}
-
-.asset-step {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 6px 14px;
-  border-radius: 6px;
-  background: #f7f8fa;
-  border-left: 3px solid #2f6fed;
-  min-width: 84px;
-  white-space: nowrap;
-}
-
-.as-posts {
-  border-left-color: #2f6fed;
-}
-.as-downloaded {
-  border-left-color: #10b981;
-}
-.as-files {
-  border-left-color: #8b5cf6;
-}
-.as-size {
-  border-left-color: #f59e0b;
-}
-
-.as-label {
-  font-size: 11px;
-  color: #909399;
-  line-height: 1;
-}
-
-.as-value {
-  font-size: 17px;
-  font-weight: 700;
-  color: #1f2d3d;
-  font-variant-numeric: tabular-nums;
-  line-height: 1.2;
-}
-
-.as-sub {
-  font-size: 10px;
-  color: #b0b3b8;
-}
-
-.asset-arrow {
-  color: #b0b3b8;
-  font-size: 14px;
-  flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-
-/* 首级转化率：收录 → 已沉淀帖（全库口径，会被长尾稀释；分层值见下方分层行） */
-.asset-arrow em {
-  font-style: normal;
-  font-size: 11px;
-  color: #10b981;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-}
-
-/* 可下钻步骤（已沉淀帖 / 本地文件）：悬浮反馈，移动端同样可点 */
-.asset-step[role='button'] {
-  cursor: pointer;
-  transition: background 0.15s, box-shadow 0.15s;
-}
-.asset-step[role='button']:hover {
-  background: #eef2fb;
-  box-shadow: 0 1px 6px rgba(47, 111, 237, 0.12);
-}
-
-/* 目标进度行（SLO 式）：进度条 + 目标刻度（橙线），达成后印「已达成」 */
-.asset-goal {
-  margin-top: 14px;
-  padding-top: 12px;
-  border-top: 1px dashed #ebeef5;
-}
-.ag-head {
+.asset-kpi .ak-rate {
   display: flex;
   align-items: baseline;
   gap: 10px;
   flex-wrap: wrap;
-  margin-bottom: 6px;
 }
-.ag-title {
-  font-size: 12px;
-  font-weight: 600;
-  color: #1f2d3d;
-}
-/* 目标值小字：紧贴行首标签（读作「沉淀目标 50%」，业界 stat-vs-target 的「of N% target」形态）。
-   不写「目标」二字——行首标签已含，避免「沉淀目标 目标 50%」叠字；档位名同样不复述 */
-.ag-target {
-  margin-left: 6px;
-  font-size: 12px;
-  font-style: normal;
-  font-weight: 400;
-  color: #909399;
-}
-/* 主值：层次「值大 / 目标小 / 缺口次要」，与业界 SLO 面板一致 */
-.ag-now {
-  font-size: 15px;
-  font-weight: 600;
+.asset-kpi .ak-now {
+  font-size: 22px;
+  font-weight: 700;
   color: #1f2d3d;
   font-variant-numeric: tabular-nums;
-  cursor: help;
+  line-height: 1.1;
 }
-.ag-done {
+.asset-kpi .ak-target {
+  font-size: 12px;
+  color: #909399;
+}
+.asset-kpi .ak-done {
   font-size: 12px;
   font-weight: 600;
   color: #10b981;
 }
-/* 目标缺口：不做下钻（口径无法在帖子页表达），用悬浮说明代替，故为 help 光标 */
-.ag-remain {
+.asset-kpi .ak-remain {
   margin-left: auto;
   font-size: 12px;
   color: #606266;
   cursor: help;
 }
-.ag-bar {
+.asset-kpi .ak-bar {
   position: relative;
   height: 8px;
   border-radius: 4px;
   background: #f0f2f5;
+  margin-top: 8px;
 }
-.ag-fill {
+.asset-kpi .ak-fill {
   height: 100%;
   border-radius: 4px;
   background: linear-gradient(90deg, #2f6fed, #10b981);
   transition: width 0.3s;
 }
-/* 达成后整条转绿：用颜色代替「已达成」之外的第二个文字标签（业界阈值型面板惯例） */
-.ag-fill.is-reached {
+.asset-kpi .ak-fill.is-reached {
   background: linear-gradient(90deg, #34d399, #10b981);
 }
-/* 目标刻度：竖向短线标出目标位置，让「当前」与「目标」同尺度可比 */
-.ag-mark {
+.asset-kpi .ak-mark {
   position: absolute;
   top: -3px;
   width: 2px;
@@ -4218,220 +3806,14 @@ function renderFidTrendChart() {
   background: #f59e0b;
   border-radius: 1px;
 }
-
-/* 状态行：在途 / 失败 / 可重下 / 空壳 / 缺口（缺口可下钻）+ 右侧对账悬浮 */
-.asset-state {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  flex-wrap: wrap;
-  margin-top: 12px;
-}
-.ast-item {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 12px;
-  color: #606266;
-  white-space: nowrap;
-}
-.ast-item.is-click {
-  cursor: pointer;
-}
-.ast-item.is-click:hover .ast-num {
-  text-decoration: underline;
-}
-.ast-item.is-bad .ast-num {
-  color: #f56c6c;
-}
-.ast-num {
-  font-weight: 700;
-  color: #1f2d3d;
-  font-variant-numeric: tabular-nums;
-}
-.ast-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 2px;
-  display: inline-block;
-}
-.ast-reconcile {
-  margin-left: auto;
-  font-size: 12px;
-  color: #909399;
-  cursor: help;
-}
-.ast-warn {
-  font-style: normal;
-  color: #e6a23c;
-  font-weight: 600;
-}
-
-/* 分层沉淀率：全库 / 互动≥N / TopN + 集中度提示（悬浮看分版块明细） */
-.asset-coverage {
-  display: flex;
-  align-items: baseline;
-  gap: 14px;
-  flex-wrap: wrap;
+.asset-kpi .ak-foot {
   margin-top: 8px;
   font-size: 12px;
-  color: #606266;
-}
-.ac-label {
   color: #909399;
 }
-.ac-item b {
-  color: #2f6fed;
-  font-variant-numeric: tabular-nums;
-}
-/* 当前目标档高亮：目标行已省去档位名，分母口径由这里唯一表达（底色 + 左侧色条） */
-.ac-item.is-goal {
-  padding: 1px 7px;
-  border-radius: 4px;
-  background: #eef2fb;
-  box-shadow: inset 2px 0 0 #2f6fed;
-  color: #1f2d3d;
-}
-.ac-item em {
-  font-style: normal;
-  color: #b0b3b8;
-  margin-left: 2px;
-}
-.ac-fid {
-  color: #909399;
-  cursor: help;
-}
-
-/* 存储行：占用 / 可用 + 近 N 日沉淀增长（纯 CSS 迷你柱，不新开 ECharts 实例） */
-.asset-store {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  flex-wrap: wrap;
-  margin-top: 10px;
-  font-size: 12px;
-  color: #606266;
-}
-.as2-item b {
+.asset-kpi .ak-foot b {
   color: #1f2d3d;
   font-variant-numeric: tabular-nums;
-}
-.as2-item em {
-  font-style: normal;
-  color: #b0b3b8;
-}
-.as2-hint {
-  color: #b0b3b8;
-  font-size: 11px;
-}
-.as2-spark {
-  display: inline-flex;
-  align-items: flex-end;
-  gap: 2px;
-  height: 18px;
-  cursor: help;
-}
-.as2-spark i {
-  width: 4px;
-  min-height: 2px;
-  background: #2f6fed;
-  border-radius: 1px 1px 0 0;
-  opacity: 0.75;
-}
-
-/* 按类型占比：横向占比条 + 图例（颜色复用 categoryColors 色板，不另建） */
-.asset-types {
-  margin-top: 14px;
-  padding-top: 12px;
-  border-top: 1px dashed #ebeef5;
-}
-
-.at-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  margin-bottom: 8px;
-}
-
-.at-title {
-  font-size: 12px;
-  font-weight: 600;
-  color: #606266;
-}
-
-.at-hint {
-  font-size: 11px;
-  color: #c0c4cc;
-}
-
-.at-bar {
-  display: flex;
-  width: 100%;
-  height: 14px;
-  border-radius: 7px;
-  overflow: hidden;
-  background: #f4f4f5;
-  cursor: pointer;
-}
-
-.at-seg {
-  height: 100%;
-  min-width: 2px;
-  transition: opacity 0.15s;
-}
-
-.at-seg:hover {
-  opacity: 0.82;
-}
-
-.at-legend {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px 16px;
-  margin-top: 10px;
-}
-
-.at-item {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 12px;
-  color: #606266;
-  cursor: pointer;
-  user-select: none;
-}
-
-.at-item:hover {
-  opacity: 0.8;
-}
-
-.at-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-
-.at-name {
-  font-weight: 600;
-}
-
-.at-num {
-  color: #909399;
-  font-variant-numeric: tabular-nums;
-}
-
-.at-pct {
-  color: #c0c4cc;
-  font-variant-numeric: tabular-nums;
-  min-width: 34px;
-  text-align: right;
-}
-
-@media (max-width: 480px) {
-  .at-legend {
-    gap: 4px 10px;
-  }
 }
 
 /* ================= R3 待下载推荐 =================

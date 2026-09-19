@@ -2098,9 +2098,12 @@ def runs_detail_by_id(run_id: int) -> dict[str, Any]:
 def runs_detail(date_str: str) -> dict[str, Any]:
     if not (len(date_str) == 8 and date_str.isdigit()):
         raise HTTPException(400, "日期格式应为 YYYYMMDD")
-    if not (config.OUTPUTS_DIR / date_str).is_dir():
+    # 目录存在不等于当天跑过抓取：outputs/<日期>/ 每天都会被 web / share 的会话日志建出来，
+    # 无 run_batch / scraper 日志时 get_run_detail 返回 None → 404，而不是返回 0 版块空壳
+    detail = db.cached(f"run_detail_{date_str}", lambda: runs.get_run_detail(date_str))
+    if detail is None:
         raise HTTPException(404, f"未找到 {date_str} 的运行记录")
-    return db.cached(f"run_detail_{date_str}", lambda: runs.get_run_detail(date_str))
+    return detail
 
 
 @router.get("/resources")

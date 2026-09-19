@@ -839,6 +839,27 @@ onBeforeUnmount(() => {
           <div class="stat-value">{{ failedCount }}</div>
         </div>
       </div>
+      <!-- 已暂停（非终态，仍需用户处置）/ 已取消（用户主动结束的终态）：
+           后端共 6 种状态，统计卡须全部覆盖，否则「任务总数」与下方卡片之和对不上
+           （此前只统计 4 种，漏掉这两种，表现为 100 != 99）。 -->
+      <div class="stat-card">
+        <div class="stat-icon" style="background: #e6a23c">
+          <el-icon><Warning /></el-icon>
+        </div>
+        <div>
+          <div class="stat-label">已暂停</div>
+          <div class="stat-value">{{ pausedCount }}</div>
+        </div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon" style="background: #909399">
+          <el-icon><CircleClose /></el-icon>
+        </div>
+        <div>
+          <div class="stat-label">已取消</div>
+          <div class="stat-value">{{ cancelledCount }}</div>
+        </div>
+      </div>
     </div>
 
     <!-- 任务列表 -->
@@ -1222,6 +1243,33 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+/* 下载中心 6 张状态卡：桌面一行 6 列；窄屏逐级折行自适应（覆盖全局 .stat-grid 的 3 列）。
+   作用域限定本组件，不影响资源页/看板的栅格。 */
+.stat-grid {
+  grid-template-columns: repeat(6, 1fr);
+}
+
+/* 桌面（>768px）始终保持 6 列一行；仅平板/手机逐级折行。
+   注意：内容区已减去左侧导航，实际宽度常 < 1280，故折叠断点要低于常见桌面宽度，
+   否则会过早折成 3 列（之前 1280 断点即此坑）。 */
+@media (max-width: 768px) {
+  .stat-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+@media (max-width: 520px) {
+  .stat-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 380px) {
+  .stat-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .submit-box {
   border: 1px dashed var(--app-border, #dcdfe6);
   border-radius: 8px;

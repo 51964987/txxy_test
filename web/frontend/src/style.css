@@ -197,3 +197,32 @@ body {
     display: none;
   }
 }
+
+/* ================= 内容资产空态（全局）：数据总览精简 KPI 与资源管理完整卡共用 =================
+   替代生硬的「0 漏斗」，移动端同样居中（单一来源，见 composables/useAssets.ts） */
+.asset-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 22px 0;
+  text-align: center;
+}
+.asset-empty .ae-icon {
+  font-size: 34px;
+  color: #c0c4cc;
+}
+.asset-empty .ae-text {
+  font-size: 14px;
+  font-weight: 600;
+  color: #606266;
+}
+.asset-empty .ae-sub {
+  font-size: 12px;
+  color: #909399;
+}
+.asset-empty .ae-link {
+  margin-top: 2px;
+  font-size: 13px;
+}

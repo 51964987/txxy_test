@@ -7,6 +7,7 @@ import {
   Aim, ArrowRight, CaretTop, ChatDotRound, CircleCheck, CircleClose, Clock, Coin, Collection,
   DataLine, Delete, Document, Download, Expand, Files, Fold, Folder, FolderOpened, FullScreen,
   InfoFilled, List, Loading, Menu, Odometer, Refresh, Search, Star, Timer, TrendCharts, User, VideoPlay,
+  Warning,
 } from '@element-plus/icons-vue'
 import 'element-plus/dist/index.css'
 
@@ -25,6 +26,7 @@ for (const [key, component] of Object.entries({
   Aim, ArrowRight, CaretTop, ChatDotRound, CircleCheck, CircleClose, Clock, Coin, Collection,
   DataLine, Delete, Document, Download, Expand, Files, Fold, Folder, FolderOpened, FullScreen,
   InfoFilled, List, Loading, Menu, Odometer, Refresh, Search, Star, Timer, TrendCharts, User, VideoPlay,
+  Warning,
 })) {
   app.component(key, component)
 }

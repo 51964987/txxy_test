@@ -181,6 +181,18 @@ alwaysApply: true
     - **举一反三（已排查）**：ResourcesView 的「全选当前结果」本就桌面/移动共用（无需改）；TrashView 仅行内「恢复/彻底删除」、无批量勾选（无此问题）；其余含 `:disabled` 的批量入口（PostsView / RunsView / SettingsView）按①重新核对「禁用是否仅因没先勾选、是否缺移动端全选」。
     - **本项目实例**：下载中心主按钮原实现 `primaryDisabled = 非暂停模式 && 勾选的未完成任务数===0`，手机端无全选时完全无法启动批量下载；改为「开始模式也支持无勾选默认全部开始、有勾选收窄」，并补手机端「全选本页」（作用域=当前页，与桌面表头勾选框一致）。落地见 `web/frontend/src/views/DownloadsView.vue` 的 `startTargets` / `primaryLabel` / `primaryDisabled` / `primaryTip` 及移动端 `.tc-select-all`。
 
+28. **顶部统计卡 / 汇总计数必须覆盖状态机的「全部状态」，否则「总数」与「分类之和」对不上**（2026-09-18 确立，源于用户上报「下载中心任务总数 100，进行中0+已完成99+失败0=99」）：
+    - **触发场景**：页面顶部有一组「总数 + 按状态分类」的统计卡（或任意「总和 = Σ 分类」的展示），而分类卡只列了状态机的**部分**状态。本项目下载中心后端任务共 6 种状态（`pending`/`running`/`paused`/`done`/`failed`/`cancelled`，见 `web/download_tasks.py` 的 `_TERMINAL` 与状态机），但原顶部卡只统计了 4 种（进行中=running+pending、已完成=done、失败=failed），漏掉了 `paused`(已暂停) 与 `cancelled`(已取消)；于是「任务总数 100 = 分卡之和 99」永远差那 1 个落在漏统状态里的任务，用户一眼判为 bug（实际是显示口径不全，数据本身未损坏）。
+    - **强制动作**：凡出现「总数 + 分类计数」并排的卡片，分类项必须**穷举状态机的每一个状态**，使 `总数 == Σ(各分类计数)` 恒成立。新增一个状态（或改某状态语义）时，除第 22 条要求的「逐处分支对齐」外，必须同步核对「这组统计卡有没有把它算进去」——统计卡是状态机的又一处分支点，漏接就会复现「100 != 99」。分类项过多（≥6）导致一行排不下时，按栅格换行（本项目 3 列 → 2 行 3 列）而非砍掉某些状态。
+    - **图标同理（前端）**：模板里 `<el-icon><Xxx /></el-icon>` 用的图标必须在 `web/frontend/src/main.ts` 的按需注册列表里显式列出（全量注册会增大主包），否则该图标静默不渲染；本项目本次补「已暂停」卡即新增注册了 `Warning`。
+    - **本项目实例**：下载中心补「已暂停」「已取消」两张卡（`pausedCount` / `cancelledCount` 两个 computed 本就存在，无需新增逻辑），6 卡正好对应 6 状态；`vue-tsc --noEmit` 与 `read_lints` 0 错误。
+
+29. **共用产物目录里判定「某类发生过」必须按文件语义取证，不能用「目录存在 / 目录里有任意文件」当证据**（2026-09-19 确立，源于用户上报「没跑批次，运行记录却出现 scraper 单跑异常」）：
+    - **触发场景**：某个业务的存在性靠扫文件系统判定（如「今天有没有跑过抓取」= `outputs/<日期>/` 里有没有产物），而该目录是**多个服务共用**的。本项目 `outputs/<日期>/` 既有抓取产物（`run_batch_*.log` / `scraper_*.log` / CSV / 进度），也有 `file_logger` 给任何进程双写的会话日志（`web_*.log` / `share_*.log` / `download_files_*.log`）——只要当天开过 Web / share 服务，目录必然存在且必然有 `.log`。
+    - **强制动作**：① 判据必须限定到**该类业务的产物语义**（文件名前缀 / 特定内容），不是「目录里有任何文件」；② **没有证据就承认没有**——返回空列表 / `None` / 404，**禁止拼一个「空明细 + 默认状态」的壳**（本项目旧逻辑：无 `run_batch_*.log` 就回退 `_parse_scraper_logs`，没 scraper 日志时返回「0 版块 + status=error」的伪记录）；③ 凡是**以「列表首条」为准**的下游（本项目 `/api/stats/health` 的「最近批次」= `runs.list_runs()[0]`）必须跟着一起验证——列表被污染，下游全部跟着错，且错得离「病历簿」很远（健康条直接报「最近批次异常结束」）。
+    - **修完后要往回看一层**：别只盯 `list`，同模块的 `detail` 通常躺着同一套拼壳逻辑（本项目 `get_run_detail(date)` 与 `list_runs()` 同源，只改 list 会让详情接口继续返回 200 + 空明细）。
+    - **本项目实例与实测**：`web/runs.py` 的 `list_date_dirs()` 旧判定「目录里有任意 `.log` 即一次运行」→ 只开 Web + share 的日子被判成一次抓取 → 无 `run_batch` 日志 → 回退 scraper 解析得到空明细 → 列表首条出现 `source=scraper / status=error / 13 项全 0` 的伪记录，前端显示为「scraper 单跑」异常，同时健康条被污染为 `warn`。修复：新增 `_has_scrape_log()`（只认 `run_batch_*.log` / `scraper_*.log`），`get_run_detail()` 无证据时返回 `None`，详情路由转 404。8089 隔离实例对照实测：修复前 `/api/runs` 119 条且首条为上述伪记录、`/api/runs/20260919` 返回 200 空明细、`/api/stats/health` 为 `warn`「最近批次异常结束」；修复后 118 条、首条恢复为真实批次 `#143`（2026-09-18 ok 13/13）、日期详情 404、健康条 `ok`。文档索引：`docs/项目结构介绍.md`（`/api/runs/{date_str}` 接口口径）。
+
 ## 技术栈
 - 后端：Python3 + **FastAPI**；SQLite 只读（`db/posts.db`，WAL，`PRAGMA query_only=ON`）；统计接口经 `db.cached(key)` 做 **5s TTL** 内存缓存。
 - 数据写入由项目根目录独立 `scraper.py` 负责，**Web 进程严禁写库**（下载中心 `download_tasks.py` 仅做文件系统下载）。
