@@ -2086,11 +2086,23 @@ def posts_list(
         ).fetchall()
     finally:
         conn.close()
+    # 逐行下载状态（已沉淀 / 下载中 / 可重下 / fresh）：与榜单「已沉淀」状态标同源同口径
+    # （_asset_snapshot 一处实现，_post_download_state 一处判定），供帖子浏览列表逐行打标，
+    # 使从数据总览各卡片下钻后与大屏卡片视觉一致。单次请求内只取一次资产快照。
+    done, active, gone = _download_path_sets()
+    items = [
+        {
+            **db.row_to_post(r),
+            "blacklisted": bool(r["blacklisted"]),
+            "state": _post_download_state(r["url"], done, active, gone),
+        }
+        for r in rows
+    ]
     return {
         "total": total,
         "page": page,
         "page_size": page_size,
-        "items": [{**db.row_to_post(r), "blacklisted": bool(r["blacklisted"])} for r in rows],
+        "items": items,
     }
 
 

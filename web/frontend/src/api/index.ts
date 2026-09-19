@@ -153,6 +153,10 @@ export interface Post {
   /** 是否命中链接黑名单（url/author/fid 任一被屏蔽）。浏览页仅作标记、不剔除，
    *  与「今日发布」等大屏看板口径（posts_filtered 已排除被屏蔽帖）形成可见差异说明 */
   blacklisted?: boolean
+  /** 下载状态四态（与榜单行「已沉淀」状态标同源同口径）：downloaded=已沉淀 / running=下载中 /
+   *  re_download=可重下 / fresh=从未下载（默认态，前端不展示标记）。供帖子浏览列表逐行打标，
+   *  使从数据总览下钻后与大屏卡片视觉一致 */
+  state?: BoardItemState
 }
 
 export interface FidMeta {

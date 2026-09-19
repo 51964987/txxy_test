@@ -1062,7 +1062,7 @@ onBeforeUnmount(() => {
         <div class="stat-icon" style="background: #2f6fed">
           <el-icon><List /></el-icon>
         </div>
-        <div>
+        <div class="stat-body">
           <div class="stat-label">任务总数</div>
           <div class="stat-value">{{ tasks.length }}</div>
         </div>
@@ -1071,7 +1071,7 @@ onBeforeUnmount(() => {
         <div class="stat-icon" style="background: #f59e0b">
           <el-icon><Loading /></el-icon>
         </div>
-        <div>
+        <div class="stat-body">
           <div class="stat-label">进行中</div>
           <div class="stat-value">{{ activeCount }}</div>
         </div>
@@ -1080,7 +1080,7 @@ onBeforeUnmount(() => {
         <div class="stat-icon" style="background: #10b981">
           <el-icon><CircleCheck /></el-icon>
         </div>
-        <div>
+        <div class="stat-body">
           <div class="stat-label">已完成</div>
           <div class="stat-value">{{ doneCount }}</div>
         </div>
@@ -1089,7 +1089,7 @@ onBeforeUnmount(() => {
         <div class="stat-icon" style="background: #ef4444">
           <el-icon><CircleClose /></el-icon>
         </div>
-        <div>
+        <div class="stat-body">
           <!-- 明确「任务」二字：与「失败缺口」的帖数区分量纲（此前都叫「失败」，数字必然对不上） -->
           <div class="stat-label">失败任务</div>
           <div class="stat-value">{{ failedCount }}</div>
@@ -1102,7 +1102,7 @@ onBeforeUnmount(() => {
         <div class="stat-icon" style="background: #e6a23c">
           <el-icon><Warning /></el-icon>
         </div>
-        <div>
+        <div class="stat-body">
           <div class="stat-label">已暂停</div>
           <div class="stat-value">{{ pausedCount }}</div>
         </div>
@@ -1111,7 +1111,7 @@ onBeforeUnmount(() => {
         <div class="stat-icon" style="background: #909399">
           <el-icon><CircleClose /></el-icon>
         </div>
-        <div>
+        <div class="stat-body">
           <div class="stat-label">已取消</div>
           <div class="stat-value">{{ cancelledCount }}</div>
         </div>
@@ -1766,30 +1766,92 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-/* 下载中心 6 张状态卡：桌面一行 6 列；窄屏逐级折行自适应（覆盖全局 .stat-grid 的 3 列）。
-   作用域限定本组件，不影响资源页/看板的栅格。 */
+/* ===== 下载中心 6 张状态卡：文字单行自适应 =====
+   目标：每张卡内「状态标签 / 数量」两行都完整显示于单行，不换行、不溢出、不截断。
+   折算依据（作用域内最坏情况，宽度算到像素）：
+   - 侧栏展开 212px + 内容区左右内边距 18px*2 = 248px 固定开销；
+   - 最长标签「任务总数 / 失败任务」4 个全角字 13px ≈ 52px；
+   - 单卡开销 = 内边距 32 + 图标 42 + 间距 12 + 边框 2 ≈ 88px；
+   - 6 列要求：6*88 + 5*16(gap) + 248 ≈ 1184px 视口，取 1200 断点留余量。
+   低于该宽度逐级折行（6 → 3 → 2 → 1 列）并压缩图标/内边距/字号，而不是硬塞一行。 */
 .stat-grid {
   grid-template-columns: repeat(6, 1fr);
 }
 
-/* 桌面（>768px）始终保持 6 列一行；仅平板/手机逐级折行。
-   注意：内容区已减去左侧导航，实际宽度常 < 1280，故折叠断点要低于常见桌面宽度，
-   否则会过早折成 3 列（之前 1280 断点即此坑）。 */
-@media (max-width: 768px) {
+/* flex 子项默认 min-width:auto 会被长文字撑破卡片，必须显式归零 */
+.stat-card {
+  min-width: 0;
+  padding: 16px;
+  gap: 12px;
+}
+
+.stat-card .stat-icon {
+  width: 42px;
+  height: 42px;
+  font-size: 20px;
+}
+
+/* 标签与数值锁定单行；数值用等宽数字，位数变化（99→100）时不抖动 */
+.stat-card .stat-label,
+.stat-card .stat-value {
+  white-space: nowrap;
+}
+
+.stat-card .stat-value {
+  font-size: 24px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+}
+
+/* 桌面窄窗（768-1199，侧栏展开是最坏情况）与移动端：3 列，单卡 ≥160px 有余量 */
+@media (max-width: 1199px) {
   .stat-grid {
     grid-template-columns: repeat(3, 1fr);
   }
 }
 
-@media (max-width: 520px) {
+/* 小屏手机（≤559，320px 为最坏）：2 列 + 压缩图标/内边距/字号。
+   折算：单卡 = (320-36-12)/2 ≈ 136px，开销 24+36+10+2=72px，剩 64px ≥ 标签 48px（12px*4）。 */
+@media (max-width: 559px) {
   .stat-grid {
     grid-template-columns: repeat(2, 1fr);
   }
+  .stat-card {
+    padding: 14px 12px;
+    gap: 10px;
+  }
+  .stat-card .stat-icon {
+    width: 36px;
+    height: 36px;
+    font-size: 18px;
+  }
+  .stat-card .stat-value {
+    font-size: 20px;
+  }
+  .stat-card .stat-label {
+    font-size: 12px;
+  }
 }
 
-@media (max-width: 380px) {
+/* 极窄（≤360）：单列，恢复常规字号，杜绝任何压缩换行 */
+@media (max-width: 360px) {
   .stat-grid {
     grid-template-columns: 1fr;
+  }
+  .stat-card {
+    padding: 16px;
+    gap: 12px;
+  }
+  .stat-card .stat-icon {
+    width: 42px;
+    height: 42px;
+    font-size: 20px;
+  }
+  .stat-card .stat-value {
+    font-size: 24px;
+  }
+  .stat-card .stat-label {
+    font-size: 13px;
   }
 }
 

@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { CopyDocument, Download, Search, View } from '@element-plus/icons-vue'
-import { api, exportCsvUrl, isAborted, type FidMeta, type Post, type PostsPage } from '../api'
+import { api, exportCsvUrl, isAborted, type BoardItemState, type FidMeta, type Post, type PostsPage } from '../api'
 import ConditionGroup from '../components/query/ConditionGroup.vue'
 import {
   describeNode,
@@ -19,6 +19,7 @@ import { copyText } from '../utils/clipboard'
 import { postCopyUrl, postOpenUrl } from '../utils/postUrl'
 import { useDownloadSubmit } from '../composables/useDownloadSubmit'
 import { colorForFid } from '../utils/fidColor'
+import { stateBadge } from '../utils/downloadState'
 
 const route = useRoute()
 
@@ -308,6 +309,18 @@ function treeToExpr(node: QueryNode): string {
 function fidName(fid: string | number | null | undefined) {
   if (fid === null || fid === undefined || fid === '') return '-'
   return fidMeta.value.find((m) => String(m.fid) === String(fid))?.name ?? String(fid)
+}
+
+/**
+ * 热议型判定（与大屏「最新最热 / 本月最热」行内「热议」标同源同口径）：
+ * 回复数 ≥ 点赞数时判定为热议型，否则每行都挂标签等于没有标签（只在讨论度高于点赞时出现）。
+ * 点赞为 0 的边界：有回复才算热议（避免「0 赞 0 回」被误标）；likes=0 但 replies>0 → 互动率视为 ∞ ≥ 1。
+ */
+function isHotTalkPost(p: Post): boolean {
+  const likes = Number(p.likes ?? 0)
+  const replies = Number(p.replies ?? 0)
+  if (likes <= 0) return replies > 0
+  return replies / likes >= 1
 }
 
 async function load() {
@@ -815,6 +828,16 @@ onMounted(() => {
                 class="bl-chip"
                 title="该帖命中链接黑名单（url / 作者 / 版块任一类），故不计入大屏看板统计（如「今日发布」）。浏览页默认保留，仅作标记"
               >黑名单</span>
+              <!-- 下载状态标：与数据总览榜单行「已沉淀」状态标同源同口径（后端 _post_download_state 一处判定），
+                   fresh 默认态不渲染，避免未下载行挂满标签的视觉噪音 -->
+              <el-tooltip v-if="stateBadge(row.state)" :content="stateBadge(row.state)!.tip" placement="top">
+                <el-tag size="small" :type="stateBadge(row.state)!.type" class="dl-state-tag">{{ stateBadge(row.state)!.text }}</el-tag>
+              </el-tooltip>
+              <!-- 热议标：与大屏「最新最热 / 本月最热」行内「热议」同口径（回复数 ≥ 点赞数），
+                   否则每行都挂标签等于没有标签 -->
+              <el-tooltip v-if="isHotTalkPost(row)" content="热议型：回复数不低于点赞数" placement="top">
+                <span class="hot-flag">热议</span>
+              </el-tooltip>
               <a class="title-link" :title="rowTip(row)" @click.prevent="openPost(row.url)">{{ row.title }}</a>
             </div>
           </template>
@@ -999,4 +1022,22 @@ onMounted(() => {
 /* 操作列 / 表头 / 标题单元格 / 版块标签 / 黑名单标记等清单表格单元样式，
    已抽取到全局 style.css 的「帖子浏览系清单表格共用单元样式」段（两视图共用一份），
    本表格通过 <el-table class="post-table"> 复用，勿在此重复定义。 */
+
+/* 下载状态标（已沉淀 / 下载中 / 可重下）：与数据总览榜单行 .board-state-tag 同视觉语言，
+   配色由 el-tag 的 type 承载；flex 不压缩，避免标题长短不一时标签被挤变形 */
+.dl-state-tag {
+  flex: 0 0 auto;
+}
+
+/* 热议标：与大屏 .board-flag 同款（回复数 ≥ 点赞数时出现），flex 不压缩 */
+.hot-flag {
+  flex: 0 0 auto;
+  font-size: 11px;
+  line-height: 16px;
+  padding: 0 4px;
+  border-radius: 3px;
+  color: #d46b08;
+  background: #fff7e6;
+  border: 1px solid #ffd591;
+}
 </style>

@@ -22,6 +22,7 @@ import { useDashboardStore } from '../stores/dashboard'
 import { useAppStore } from '../stores/app'
 import { formatDate, formatShortTime, pad2 } from '../utils/time'
 import { colorByIndex, colorForFid } from '../utils/fidColor'
+import { stateBadge } from '../utils/downloadState'
 import { postOpenUrl } from '../utils/postUrl'
 import RollingNumber from '../components/RollingNumber.vue'
 
@@ -561,32 +562,8 @@ const BOARD_SORT_HINT: Record<BoardSort, string> = {
   hot: '时间衰减热度（同分下越新越靠前）',
 }
 
-/** 榜单行「已沉淀」状态标（2026-09-19）：三态标签的文案 / el-tag 类型 / tooltip。
- *  fresh（从未下载）为默认态，不展示标记——未下载行挂满标签只会制造视觉噪音。
- *  口径边界：榜单刻意不参与下载后刷新（§21.12 既定边界），此标为进页时刻快照，
- *  行内下载按钮仍可提交（判重弹窗兜底），tooltip 已写明。 */
-const BOARD_STATE_BADGE: Record<Exclude<BoardItemState, 'fresh'>, { text: string; type: 'success' | 'primary' | 'warning'; tip: string }> = {
-  downloaded: {
-    text: '已沉淀',
-    type: 'success',
-    tip: '文件已在本地（行内下载按钮仍可提交，判重会拦截已存在的文件）',
-  },
-  running: {
-    text: '下载中',
-    type: 'primary',
-    tip: '下载任务进行中，可在下载中心查看进度',
-  },
-  re_download: {
-    text: '可重下',
-    type: 'warning',
-    tip: '曾下载过但文件已被清理，可重新下载',
-  },
-}
-
-/** 取榜单行的状态标配置；fresh / 缺省返回 undefined（不渲染标签） */
-function stateBadge(state?: BoardItemState) {
-  return state && state !== 'fresh' ? BOARD_STATE_BADGE[state] : undefined
-}
+// 下载状态标（已沉淀 / 下载中 / 可重下）的映射与取用统一走 utils/downloadState，
+// 与帖子浏览列表共用同一份，禁止两处各写一份（项目通用工程约束第 1 条）。
 
 /** 行内下载按钮 tooltip 按状态切换：已沉淀 / 在途时提醒判重行为，其余为普通「下载」 */
 function downloadTip(state?: BoardItemState): string {
