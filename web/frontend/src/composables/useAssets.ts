@@ -175,7 +175,7 @@ export function useAssets() {
 
   /** 已沉淀帖下钻：只保留已落盘帖子（卡片多少条，列表就多少条——数字自洽的硬校验） */
   function goPostsDownloaded() {
-    router.push({ path: '/posts', query: { downloaded: '1' } })
+    router.push({ path: '/posts', query: { state: 'downloaded' } })
   }
 
   /** 类型分布下钻：跳资源管理页并按该类型筛选（继承类型上下文，口径自洽） */
@@ -193,7 +193,7 @@ export function useAssets() {
       query: {
         date_from: `${to.getFullYear()}-${pad2(from.getMonth() + 1)}-${pad2(from.getDate())}`,
         date_to: `${to.getFullYear()}-${pad2(to.getMonth() + 1)}-${pad2(to.getDate())}`,
-        undownloaded: '1',
+        state: 'fresh,re_download',
         sort: 'engagement_desc',
       },
     })

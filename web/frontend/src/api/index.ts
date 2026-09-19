@@ -869,12 +869,10 @@ export const api = {
     date_to?: string
     q?: string
     author?: string
-    /** 是否仅看「未下载」：排除已下载（目录仍在）与下载中的帖子，
-     *  与数据总览「待下载推荐」下钻同口径（gone 视为「可重下」仍保留） */
-    undownloaded?: boolean
-    /** 是否仅看「已下载」：只保留已落盘（目录仍在磁盘）的帖子，
-     *  与资产卡「已沉淀帖」下钻同口径（卡片多少条，列表就多少条） */
-    downloaded?: boolean
+    /** 下载状态筛选（多选，四态取并集）：downloaded=已沉淀 / running=下载中 /
+     *  re_download=可重下 / fresh=未下载（从未下载）。与列表行内状态标同源同口径；
+     *  不传或空串表示不按状态过滤。取代原 undownloaded/downloaded 两个布尔，统一为一个多选。 */
+    state?: string
     /** 是否仅看「黑名单」：只保留命中 url/author/fid 三类黑名单任一的帖，
      *  与列表内「黑名单」标记同口径（后端用与标记完全相同的判定过滤） */
     blacklisted?: boolean

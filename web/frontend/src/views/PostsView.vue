@@ -39,13 +39,21 @@ const filters = reactive({
   dateRange: null as [string, string] | null,
   q: '',
   author: '',
-  /** 仅看「未下载」：来自数据总览「待下载推荐」下钻，与推荐同口径 */
-  undownloaded: false,
-  /** 仅看「已下载」：来自数据总览「内容资产」卡「已沉淀帖」下钻，与卡片数字严格自洽 */
-  downloaded: false,
+  /** 下载状态多选（四态并集）：来自数据总览下钻时由 state 查询参数带入，
+   *  与列表行内状态标同源同口径；空数组 = 不按状态过滤（取代原 undownloaded/downloaded 两个布尔） */
+  state: [] as string[],
   /** 仅看「黑名单」：勾选后只列出命中 url/author/fid 三类黑名单任一的帖（与行内「黑名单」标记同口径） */
   blacklisted: false,
 })
+
+/** 下载状态筛选项：与 downloadState.ts 的 DOWNLOAD_STATE_BADGE 文案同源（fresh 无徽标故单列）。
+ *  多选取并集，对应后端 _apply_state_filter 的 OR 合并语义。 */
+const STATE_OPTIONS = [
+  { value: 'downloaded', label: '已沉淀' },
+  { value: 'running', label: '下载中' },
+  { value: 're_download', label: '可重下' },
+  { value: 'fresh', label: '未下载' },
+]
 const page = ref(1)
 const pageSize = ref(50)
 
@@ -332,8 +340,8 @@ async function load() {
       date_to: filters.dateRange?.[1],
       q: queryText.value || undefined,
       author: filters.author || undefined,
-      undownloaded: filters.undownloaded || undefined,
-      downloaded: filters.downloaded || undefined,
+      // 下载状态多选：以逗号拼接多值，空数组不传（不过滤）
+      state: filters.state.length ? filters.state.join(',') : undefined,
       blacklisted: filters.blacklisted || undefined,
       adv: advParam() || undefined,
       page: page.value,
@@ -363,8 +371,7 @@ function doReset() {
   filters.dateRange = null
   filters.q = ''
   filters.author = ''
-  filters.undownloaded = false
-  filters.downloaded = false
+  filters.state = []
   filters.blacklisted = false
   queryText.value = ''
   page.value = 1
@@ -388,6 +395,12 @@ function onFidChange() {
 
 /** 日期范围同属离散提交（确认区间/清空才触发），与版块同处理：即时筛选。 */
 function onDateChange() {
+  page.value = 1
+  load()
+}
+
+/** 下载状态多选：离散选择，选完即返回结果（与版块同处理，业界侧栏 facet 做法），重置到第 1 页 */
+function onStateChange() {
   page.value = 1
   load()
 }
@@ -468,23 +481,13 @@ const activeFilters = computed(() => {
       },
     })
   }
-  if (filters.undownloaded) {
+  if (filters.state.length) {
+    const names = filters.state.map((s) => STATE_OPTIONS.find((o) => o.value === s)?.label ?? s)
     list.push({
-      key: 'undownloaded',
-      label: '未下载',
+      key: 'state',
+      label: `状态：${names.join('、')}`,
       clear: () => {
-        filters.undownloaded = false
-        page.value = 1
-        load()
-      },
-    })
-  }
-  if (filters.downloaded) {
-    list.push({
-      key: 'downloaded',
-      label: '已下载',
-      clear: () => {
-        filters.downloaded = false
+        filters.state = []
         page.value = 1
         load()
       },
@@ -542,8 +545,7 @@ function doExport() {
       date_to: filters.dateRange?.[1],
       q: queryText.value || undefined,
       author: filters.author || undefined,
-      undownloaded: filters.undownloaded ? '1' : undefined,
-      downloaded: filters.downloaded ? '1' : undefined,
+      state: filters.state.length ? filters.state.join(',') : undefined,
       blacklisted: filters.blacklisted ? '1' : undefined,
       adv: advParam() || undefined,
       sort_by: colSort.value.order ? colSort.value.by : undefined,
@@ -583,16 +585,26 @@ async function reloadAfterDownload() {
   }
 }
 
+/**
+ * 下载成功后是否需要重刷当前列表：下载会使该帖状态变为 downloaded。
+ * 仅当「当前状态筛选不含 downloaded」时，该帖才会退出列表，需立即重刷；
+ * 未选状态（不过滤）或已含 downloaded 时，帖仍在结果集内，无需重刷（避免打断滚动）。
+ * 是旧「仅看未下载」下钻后「提交即退出列表」语义的泛化（与下载中心写后失效同源）。
+ */
+function shouldReloadAfterDownload(): boolean {
+  return filters.state.length > 0 && !filters.state.includes('downloaded')
+}
+
 /** 批量下载：提交当前勾选行的 URL（走共用 composable 的 D2 判重交互） */
 async function downloadSelected() {
   const created = await submitDownload(selectedRows.value.map((row) => row.url))
-  if (created && filters.undownloaded) await reloadAfterDownload()
+  if (created && shouldReloadAfterDownload()) await reloadAfterDownload()
 }
 
-/** 行内「下载」：与批量同一套交互，「未下载」筛选下提交成功后该行应退出列表 */
+/** 行内「下载」：与批量同一套交互；状态筛选不含 downloaded 时提交成功后该行应退出列表 */
 async function downloadOne(url: string) {
   const created = await submitDownload([url])
-  if (created && filters.undownloaded) await reloadAfterDownload()
+  if (created && shouldReloadAfterDownload()) await reloadAfterDownload()
 }
 
 onMounted(() => {
@@ -618,15 +630,11 @@ onMounted(() => {
     filters.q = qauthor
     queryText.value = qauthor
   }
-  // 数据总览「待下载推荐」下钻：继承「未下载」上下文（仅看未下载帖子）
-  const qUndl = route.query.undownloaded
-  if (qUndl === '1' || qUndl === 'true') {
-    filters.undownloaded = true
-  }
-  // 数据总览「内容资产」卡「已沉淀帖」下钻：继承「已下载」上下文（仅看已落盘帖子）
-  const qDl = route.query.downloaded
-  if (qDl === '1' || qDl === 'true') {
-    filters.downloaded = true
+  // 数据总览下钻：继承「下载状态」上下文。已沉淀帖 → state=downloaded；
+  // 待下载推荐/缺口 → state=fresh,re_download（未下载：排除已落盘与在途）。
+  const qState = route.query.state
+  if (typeof qState === 'string' && qState) {
+    filters.state = qState.split(',').map((s) => s.trim()).filter(Boolean)
   }
   // 浏览页「仅看黑名单」：支持从链接直接带入（与未下载/已下载下钻同构）
   const qBl = route.query.blacklisted
@@ -690,6 +698,26 @@ onMounted(() => {
               <el-button :icon="Search" @click="doSearch" />
             </template>
           </el-input>
+        </div>
+        <div class="filter-item">
+          <span class="filter-label">下载状态</span>
+          <el-select
+            v-model="filters.state"
+            multiple
+            collapse-tags
+            collapse-tags-tooltip
+            clearable
+            placeholder="全部状态"
+            style="width: 200px"
+            @change="onStateChange"
+          >
+            <el-option
+              v-for="o in STATE_OPTIONS"
+              :key="o.value"
+              :label="o.label"
+              :value="o.value"
+            />
+          </el-select>
         </div>
         <div class="filter-item">
           <el-checkbox v-model="filters.blacklisted" @change="onBlacklistedToggle">仅看黑名单</el-checkbox>

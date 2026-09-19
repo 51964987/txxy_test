@@ -606,6 +606,29 @@ def _url_forms(paths: set[str]) -> list[str]:
     return list(out)
 
 
+def _url_match_segments(
+    values: list[str], *, negate: bool
+) -> tuple[str, list[str]]:
+    """生成 `url IN (...)` / `url NOT IN (...)` 片段（分块拼接规避变量数上限），不做 AND 包裹。
+
+    供两处复用：① `_apply_url_match` 直接包裹成过滤条件；
+    ② 状态筛选需把多个状态的路径集合用 OR 合并（并集语义）时，逐段拼接。
+    实测本机 SQLite 3.42 单语句变量上限 32766，每块 400 个参数 → 约 80 块；
+    多块之间 IN 用 OR、NOT IN 用 AND 连接，语义与集合运算一致。
+    """
+    if not values:
+        return "", []
+    op = "NOT IN" if negate else "IN"
+    params: list[str] = []
+    parts: list[str] = []
+    for i in range(0, len(values), 400):
+        part = values[i : i + 400]
+        parts.append(f"url {op} (" + ",".join("?" * len(part)) + ")")
+        params.extend(part)
+    joiner = " AND " if negate else " OR "
+    return joiner.join(parts), params
+
+
 def _apply_url_match(
     clause: str,
     params: list[str],
@@ -613,49 +636,60 @@ def _apply_url_match(
     *,
     negate: bool,
 ) -> tuple[str, list[str]]:
-    """按 URL 集合追加 IN（命中）/ NOT IN（排除）过滤，分块拼接规避变量数上限。
-
-    实测本机 SQLite 3.42 的单语句变量上限为 32766（不是老文档里的 999），
-    每块 400 个参数 → 单条语句可容纳约 80 块（3.2 万个 URL）；
-    多块之间 IN 用 OR、NOT IN 用 AND 连接，语义与「集合运算」一致。
-    """
-    if not values:
+    """按 URL 集合追加 IN（命中）/ NOT IN（排除）过滤。"""
+    seg, seg_params = _url_match_segments(values, negate=negate)
+    if not seg:
         return clause, params
-    op = "NOT IN" if negate else "IN"
-    parts: list[str] = []
-    for i in range(0, len(values), 400):
-        part = values[i : i + 400]
-        parts.append(f"url {op} (" + ",".join("?" * len(part)) + ")")
-        params.extend(part)
-    joiner = " AND " if negate else " OR "
-    return f"({clause}) AND ({joiner.join(parts)})", params
+    return f"({clause}) AND ({seg})", params + seg_params
 
 
-def _apply_undownloaded(clause: str, params: list[str]) -> tuple[str, list[str]]:
-    """追加「未下载」过滤：排除已下载（目录仍在磁盘）与正在下载中的链接。
+# 下载状态四态（与 _post_download_state 严格同源，唯一判定入口在 _download_path_sets）：
+# downloaded=已落盘且文件仍在；running=在途；re_download=曾成功但目录已清理；fresh=三个集合都不在。
+_VALID_STATES = {"downloaded", "running", "re_download", "fresh"}
 
-    与 /stats/pending_downloads 同一套判定（_download_path_sets），保证从「待下载推荐」
-    下钻到帖子页后，列表是把推荐口径（近 N 日 · 未下载 · 按互动量）展开后的全量明细，
-    数字严格自洽。
+
+def _apply_state_filter(
+    clause: str, params: list[str], state: str | None
+) -> tuple[str, list[str]]:
+    """追加「下载状态」筛选：state 为逗号分隔多值（四态取并集），与列表行内状态标同源同口径。
+
+    复用 _download_path_sets 三集合 + _url_match_segments 分块构造，不做任何新判定。
+    语义：每个选中状态 → 对应路径集合 IN；fresh → 不在任何集合（NOT IN 全部已知路径）；
+    选中多个状态取并集（OR 合并）。选中状态对应集合为空（如 running 但无在途）→ 该分支无匹配。
     """
-    done, active, _gone = _download_path_sets()
-    excluded = _url_forms(done | active)
-    if not excluded:
-        return clause, params  # 没有任何已下载记录，无需过滤
-    return _apply_url_match(clause, params, excluded, negate=True)
-
-
-def _apply_downloaded(clause: str, params: list[str]) -> tuple[str, list[str]]:
-    """追加「已下载」过滤：只保留已落盘（目录仍在磁盘）的帖子。
-
-    与 _apply_undownloaded 严格对称（同一集合、同一归一化），供资产卡「已沉淀帖」下钻：
-    卡片显示多少条，明细页就必须是多少条——这是「数字自洽」的硬校验。
-    无任何已下载记录时返回 0=1（结果为空），而不是「不过滤」。
-    """
-    done, _active, _gone = _download_path_sets()
-    if not done:
+    if not state:
+        return clause, params
+    wanted = {s.strip() for s in state.split(",") if s.strip()}
+    if bad := (wanted - _VALID_STATES):
+        raise HTTPException(
+            400,
+            f"不支持的下载状态：{', '.join(sorted(bad))}（可用：{', '.join(sorted(_VALID_STATES))}）",
+        )
+    done, active, gone = _download_path_sets()
+    known_all = _url_forms(done | active | gone)
+    forms = {
+        "downloaded": _url_forms(done),
+        "running": _url_forms(active),
+        "re_download": _url_forms(gone),
+    }
+    or_parts: list[str] = []
+    or_params: list[str] = []
+    for s in ("downloaded", "running", "re_download"):
+        if s in wanted and forms[s]:
+            seg, seg_params = _url_match_segments(forms[s], negate=False)
+            or_parts.append(seg)
+            or_params.extend(seg_params)
+    if "fresh" in wanted and known_all:
+        seg, seg_params = _url_match_segments(known_all, negate=True)
+        or_parts.append(seg)
+        or_params.extend(seg_params)
+    if not or_parts:
+        # 仅选中 fresh 且无任何已知路径（全是 fresh）→ 不追加条件（全量）；
+        # 仅选中空集合状态（如 running 但当前无在途）→ 无匹配。
+        if "fresh" in wanted and not known_all:
+            return clause, params
         return "0=1", params
-    return _apply_url_match(clause, params, _url_forms(done), negate=False)
+    return f"({clause}) AND ({' OR '.join(or_parts)})", params + or_params
 
 
 def _as_int(value: object) -> int:
@@ -2031,8 +2065,7 @@ def posts_list(
     date_to: str | None = None,
     q: str | None = None,
     author: str | None = None,
-    undownloaded: Annotated[bool, Query()] = False,
-    downloaded: Annotated[bool, Query()] = False,
+    state: Annotated[str | None, Query()] = None,
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=200)] = 50,
     sort: Annotated[str, Query()] = "date_desc",
@@ -2049,13 +2082,10 @@ def posts_list(
     """
     order = _resolve_order(sort, sort_by, sort_order)
     clause, params = _build_filters(fid, date_from, date_to, q, author)
-    if undownloaded:
-        # 下钻「待下载推荐」继承的上下文：排除已下载（目录仍在）与下载中链接，
-        # 与 /stats/pending_downloads 同口径（仅看 done ∪ active，gone 视为「可重下」保留）。
-        clause, params = _apply_undownloaded(clause, params)
-    if downloaded:
-        # 下钻资产卡「已沉淀帖」继承的上下文：只保留已落盘帖子，与卡片数字严格自洽
-        clause, params = _apply_downloaded(clause, params)
+    if state:
+        # 下载状态筛选（四态多选，与列表行内状态标同源）：state 非空才进入，
+        # 非法值由 _apply_state_filter 抛 400 并说明可用取值。
+        clause, params = _apply_state_filter(clause, params, state)
     if adv:
         try:
             adv_sql, adv_params = query_builder.compile_adv(adv)
@@ -2114,8 +2144,7 @@ def posts_export(
     date_to: str | None = None,
     q: str | None = None,
     author: str | None = None,
-    undownloaded: Annotated[bool, Query()] = False,
-    downloaded: Annotated[bool, Query()] = False,
+    state: Annotated[str | None, Query()] = None,
     adv: Annotated[str | None, Query()] = None,
     blacklisted: Annotated[bool, Query()] = False,
     sort: Annotated[str, Query()] = "date_desc",
@@ -2126,14 +2155,12 @@ def posts_export(
 
     历史问题：前端导出已带上 author / adv 参数，但本接口此前未声明这两个入参，
     FastAPI 会静默忽略未声明的查询参数——表现为「列表按作者筛过，导出的 CSV 却是全部」，
-    且不报错、无提示。此处与列表页对齐（含新增的 downloaded），杜绝静默丢条件。
+    且不报错、无提示。此处与列表页对齐（含 state 多值状态筛选），杜绝静默丢条件。
     """
     order = _resolve_order(sort, sort_by, sort_order)
     clause, params = _build_filters(fid, date_from, date_to, q, author)
-    if undownloaded:
-        clause, params = _apply_undownloaded(clause, params)
-    if downloaded:
-        clause, params = _apply_downloaded(clause, params)
+    if state:
+        clause, params = _apply_state_filter(clause, params, state)
     if adv:
         try:
             adv_sql, adv_params = query_builder.compile_adv(adv)
