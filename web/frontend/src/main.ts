@@ -4,8 +4,8 @@ import ElementPlus from 'element-plus'
 import zhCn from 'element-plus/es/locale/lang/zh-cn'
 // 按需注册模板中 <el-icon><Xxx /></el-icon> 实际用到的图标（全量注册会显著增大主包体积）
 import {
-  Aim, ArrowRight, CaretTop, ChatDotRound, CircleCheck, CircleClose, Clock, Coin, Collection,
-  DataLine, Delete, Document, Download, Expand, Files, Fold, Folder, FolderOpened, FullScreen,
+  Aim, ArrowDown, ArrowRight, CaretTop, ChatDotRound, CircleCheck, CircleClose, Clock, Coin, Collection,
+  DataLine, Delete, Document, Download, Expand, Files, Filter, Fold, Folder, FolderOpened, FullScreen,
   InfoFilled, List, Loading, Menu, Odometer, Refresh, Search, Star, Timer, TrendCharts, User, VideoPlay,
   Warning,
 } from '@element-plus/icons-vue'
@@ -23,8 +23,8 @@ app.use(router)
 app.use(ElementPlus, { locale: zhCn })
 
 for (const [key, component] of Object.entries({
-  Aim, ArrowRight, CaretTop, ChatDotRound, CircleCheck, CircleClose, Clock, Coin, Collection,
-  DataLine, Delete, Document, Download, Expand, Files, Fold, Folder, FolderOpened, FullScreen,
+  Aim, ArrowDown, ArrowRight, CaretTop, ChatDotRound, CircleCheck, CircleClose, Clock, Coin, Collection,
+  DataLine, Delete, Document, Download, Expand, Files, Filter, Fold, Folder, FolderOpened, FullScreen,
   InfoFilled, List, Loading, Menu, Odometer, Refresh, Search, Star, Timer, TrendCharts, User, VideoPlay,
   Warning,
 })) {

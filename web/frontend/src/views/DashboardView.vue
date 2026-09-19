@@ -8,6 +8,7 @@ import {
   DataZoomComponent,
   GridComponent,
   LegendComponent,
+  MarkAreaComponent,
   MarkLineComponent,
   TooltipComponent,
 } from 'echarts/components'
@@ -16,7 +17,7 @@ import { ElMessage } from 'element-plus'
 import { Download, FolderOpened, Star } from '@element-plus/icons-vue'
 import { useDownloadSubmit } from '../composables/useDownloadSubmit'
 import { useAssets } from '../composables/useAssets'
-import { api, formatDuration, formatSize, isAborted, type Boards, type BoardSort, type Compare, type FidDistItem, type Health, type Overview, type PendingDownloads, type RunSummary, type TodayTop, type TodayTopItem, type TopAuthor, type TopFid, type TrendByFid, type TrendPoint } from '../api'
+import { api, formatDuration, formatSize, isAborted, type Boards, type BoardItemState, type BoardSort, type Compare, type FidDistItem, type Health, type Overview, type PendingDownloads, type RunSummary, type ScheduleAction, type ScheduleStatus, type TodayTop, type TodayTopItem, type TopAuthor, type TopFid, type TrendByFid, type TrendPoint } from '../api'
 import { useDashboardStore } from '../stores/dashboard'
 import { useAppStore } from '../stores/app'
 import { formatDate, formatShortTime, pad2 } from '../utils/time'
@@ -37,13 +38,15 @@ use([
   // （2026-09-13 修复：分版块图「联动聚焦日」的 markLine 此前从未注册，标线实际不渲染；
   //  互动量趋势图的「今日未完整」虚线同样依赖它）
   MarkLineComponent,
+  // 同上教训（规则 17）：markArea（趋势图空窗标注）是新引入的组件，必须显式注册
+  MarkAreaComponent,
 ])
 
 const router = useRouter()
 
 // 内容资产（媒体库沉淀进度）共享逻辑：数据总览只取「精简 KPI 摘要」所需的子集，
 // 完整卡片在资源管理页承接（同一份实现，禁止两处各写一份，见 composables/useAssets.ts）
-const { assets, loadAssets, assetsEmpty, goalBarWidth, goalTip, goalAria, goResources, goPendingPosts } = useAssets()
+const { assets, loadAssets, assetsEmpty, goalBarWidth, goalTip, goalAria, goResources, goPendingPosts, goDownloadFailures } = useAssets()
 
 const store = useDashboardStore()
 const app = useAppStore()
@@ -108,6 +111,9 @@ const health = ref<Health | null>(null)
 const compare = ref<Compare | null>(null)
 const pending = ref<PendingDownloads | null>(null)
 const loadingPending = ref(false)
+// B1：定时抓取状态（GET /api/schedule，与设置页同源）。健康条报告抓取的「结果」，
+// 这里补齐「计划」——自动抓取是否活着、下次几点跑、今天跑了几轮，一眼可见
+const sched = ref<ScheduleStatus | null>(null)
 
 let trendObserver: IntersectionObserver | null = null
 let p1Observer: IntersectionObserver | null = null
@@ -235,7 +241,7 @@ watch(
 
 
 
-// 自动刷新：开关状态存于 dashboard store（header 控件共享），每 30 秒静默刷新一次
+// 自动刷新：开关状态存于 dashboard store（header 控件共享），每 5 秒静默刷新一次
 // 仅刷新已加载的区块，未进入视口的懒加载区块保持不动
 const REFRESH_INTERVAL = 5000
 // 活跃榜（活跃作者 / 活跃版块）窄屏断点：低于该容器宽度走「紧凑留白」配置，
@@ -311,6 +317,20 @@ const kpiSub = computed(() => {
   }
 })
 
+/**
+ * 发帖作者卡悬浮：只放口径说明 + 常驻位没展示的那个值（近 30 日新增），
+ * 不再重复今日活跃 / 活跃率（已回常驻副行，第 20 条「一处事实一处表达」）。
+ * 口径写明「近 N 个完整日（不含今天）」——今天抓取未覆盖全天，计入会被稀释（第 18 条）。
+ */
+const authorTip = computed(() => {
+  const o = overview.value
+  if (!o) return ''
+  return (
+    `近 7 个完整日（不含今天）首次出现的作者，含只发 1 帖的新面孔；` +
+    `近 30 日新增 ${o.new_authors_30d.toLocaleString()} 人`
+  )
+})
+
 /** 最新数据日期与今天相差的天数（大于 0 表示滞后）。 */
 function daysBetween(dateStr: string): number {
   const d = new Date(`${dateStr}T00:00:00`)
@@ -380,14 +400,16 @@ const healthDetail = computed(() => {
 async function loadP0(initial = false) {
   if (initial) loadingP0.value = true
   try {
-    // 健康条 / 周期对比 / 资产漏斗：随首屏并行加载（不阻塞主数据 await）；
+    // 健康条 / 周期对比 / 定时抓取状态：随首屏并行加载（不阻塞主数据 await）；
     // 失败静默保留旧值（与 runningBatch 徽标同一容错策略），下一轮刷新自动重试
     void Promise.allSettled([
       api.health(),
       api.compare(),
-    ]).then(([h, c]) => {
+      api.schedule(),
+    ]).then(([h, c, s]) => {
       if (h.status === 'fulfilled') health.value = h.value
       if (c.status === 'fulfilled') compare.value = c.value
+      if (s.status === 'fulfilled') sched.value = s.value
     })
     void loadAssets()
     const [o, t, te, f, authors, fids] = await Promise.all([
@@ -539,6 +561,40 @@ const BOARD_SORT_HINT: Record<BoardSort, string> = {
   hot: '时间衰减热度（同分下越新越靠前）',
 }
 
+/** 榜单行「已沉淀」状态标（2026-09-19）：三态标签的文案 / el-tag 类型 / tooltip。
+ *  fresh（从未下载）为默认态，不展示标记——未下载行挂满标签只会制造视觉噪音。
+ *  口径边界：榜单刻意不参与下载后刷新（§21.12 既定边界），此标为进页时刻快照，
+ *  行内下载按钮仍可提交（判重弹窗兜底），tooltip 已写明。 */
+const BOARD_STATE_BADGE: Record<Exclude<BoardItemState, 'fresh'>, { text: string; type: 'success' | 'primary' | 'warning'; tip: string }> = {
+  downloaded: {
+    text: '已沉淀',
+    type: 'success',
+    tip: '文件已在本地（行内下载按钮仍可提交，判重会拦截已存在的文件）',
+  },
+  running: {
+    text: '下载中',
+    type: 'primary',
+    tip: '下载任务进行中，可在下载中心查看进度',
+  },
+  re_download: {
+    text: '可重下',
+    type: 'warning',
+    tip: '曾下载过但文件已被清理，可重新下载',
+  },
+}
+
+/** 取榜单行的状态标配置；fresh / 缺省返回 undefined（不渲染标签） */
+function stateBadge(state?: BoardItemState) {
+  return state && state !== 'fresh' ? BOARD_STATE_BADGE[state] : undefined
+}
+
+/** 行内下载按钮 tooltip 按状态切换：已沉淀 / 在途时提醒判重行为，其余为普通「下载」 */
+function downloadTip(state?: BoardItemState): string {
+  if (state === 'downloaded') return '重新下载（文件已在本地，判重会拦截已存在的文件）'
+  if (state === 'running') return '下载任务进行中（重复提交会被剔除）'
+  return '下载'
+}
+
 async function reloadTodayTop() {
   loadingToday.value = true
   try {
@@ -648,6 +704,40 @@ function buildDayLineOption(
       },
     })
   }
+  // B3（原 R10）：空窗标注——连续 0 值日打浅灰底带，让「数据断档」在图上一眼可见。
+  // 0 值有两种含义（站点当天确实没动静 / 抓取缺勤），图上不替用户下结论，
+  // tooltip 里引导对照健康条；末日（今天）不标——它已有「今日未完整」橙虚线，0 属常态而非空窗。
+  const gapAreas: Record<string, unknown>[][] = []
+  {
+    let runStart = -1
+    for (let i = 0; i <= lastIdx; i++) {
+      const isZero = i < lastIdx && data[i] === 0
+      if (isZero && runStart < 0) runStart = i
+      if (runStart >= 0 && !isZero) {
+        const end = i - 1
+        const s = points[runStart]?.date.slice(5)
+        const e = points[end]?.date.slice(5)
+        const n = end - runStart + 1
+        if (s && e) {
+          gapAreas.push([
+            {
+              xAxis: s,
+              // 单日空窗太窄放不下文字，只留底色；连续 2 天以上才标「空窗 N 天」
+              label: {
+                show: n >= 2,
+                formatter: `空窗 ${n} 天`,
+                position: 'insideTop',
+                color: '#98a3b3',
+                fontSize: 10,
+              },
+            },
+            { xAxis: e },
+          ])
+        }
+        runStart = -1
+      }
+    }
+  }
   return {
     // 大屏态关闭过渡动画：图表放大后重绘成本更高，避免逐点描线拖慢轮询
     animation: !app.fullscreen,
@@ -696,6 +786,12 @@ function buildDayLineOption(
         if (idx === lastIdx) {
           html += `<div style="margin-top:6px;padding-top:6px;border-top:1px solid rgba(255,255,255,0.1);font-size:11px;color:#f0b775">`
           html += `今日数据未完整（当日抓取尚未覆盖全天），不计入峰值/谷值/日均`
+          html += `</div>`
+        }
+        // B3：空窗日提示——0 值不替用户定性，只给出「对照健康条」的判断路径
+        if (idx < lastIdx && cur === 0) {
+          html += `<div style="margin-top:6px;padding-top:6px;border-top:1px solid rgba(255,255,255,0.1);font-size:11px;color:#98a3b3">`
+          html += `空窗日（${opts.valueLabel}为 0）：健康条正常则为站点当日真实无动静，否则疑似抓取缺勤`
           html += `</div>`
         }
         return html
@@ -769,6 +865,15 @@ function buildDayLineOption(
               },
               lineStyle: { color: '#e6a23c', type: 'dashed', width: 1 },
               data: marks,
+            }
+          : undefined,
+        // B3：空窗浅灰底带。markArea 的 data 必须是「坐标对」[[起点, 终点]]（见上方实测教训），
+        // 且组件 MarkAreaComponent 必须已在 use() 注册——按需引入下未注册会静默不渲染（规则 17）
+        markArea: gapAreas.length
+          ? {
+              silent: true,
+              itemStyle: { color: 'rgba(144,147,153,0.13)' },
+              data: gapAreas,
             }
           : undefined,
       },
@@ -873,6 +978,66 @@ function goDist(fid?: string) {
 function goRuns() {
   router.push('/runs')
 }
+
+/** B1：定时抓取徽标点击去设置页（计划时刻与开关在那里维护） */
+function goSettings() {
+  router.push('/settings')
+}
+
+/** B2：资产条「下载失败」入口跳下载中心（带 view=failures 直达同口径的失败缺口清单） */
+function goDownloads() {
+  goDownloadFailures()
+}
+
+/** 调度动作的中文短文案（与设置页口径一致，此处仅用于悬浮说明） */
+const SCHEDULE_ACTION_TEXT: Record<ScheduleAction, string> = {
+  started: '已启动批次',
+  skipped: '跳过（上一批仍在跑）',
+  missed: '错过（当时服务未运行）',
+  failed: '启动失败',
+}
+
+/** 健康条定时抓取徽标：启用 → 「定时 08:00/20:00 · 下次 今天 20:00 · 今日 1/2」；未启用 → 灰字提示 */
+const schedLabel = computed(() => {
+  const s = sched.value
+  if (!s) return ''
+  if (!s.enabled || !s.times.length) return '定时抓取未启用'
+  return `定时 ${s.times.join('/')} · 下次 ${shortNextRun(s.next_run_at)} · 今日 ${s.today_done.length}/${s.times.length}`
+})
+
+const schedTip = computed(() => {
+  const s = sched.value
+  if (!s) return ''
+  if (!s.enabled || !s.times.length)
+    return '定时抓取未启用：大屏数据只随手动抓取更新。点击前往设置页启用。'
+  const last = s.last
+    ? `上次判定 ${s.last.at.slice(5, 16)}：${SCHEDULE_ACTION_TEXT[s.last.action]}${s.last.reason ? `（${s.last.reason}）` : ''}`
+    : '服务启动后还没有产生过调度判定'
+  return `定时抓取只在 Web 服务存活时执行，错过不补跑。「今日 n/N」为已处理的计划时刻数（含跳过/错过）。${last}。点击前往设置页调整计划时刻。`
+})
+
+/** next_run_at "YYYY-MM-DD HH:MM" → 「今天 20:00」/「明天 08:00」/「09-21 08:00」 */
+function shortNextRun(v: string | null): string {
+  if (!v) return '--'
+  const [d, t] = v.split(' ')
+  const now = new Date()
+  const dayStr = (ms: number) => {
+    const x = new Date(now.getTime() + ms)
+    return `${x.getFullYear()}-${pad2(x.getMonth() + 1)}-${pad2(x.getDate())}`
+  }
+  if (d === dayStr(0)) return `今天 ${t}`
+  if (d === dayStr(86_400_000)) return `明天 ${t}`
+  return `${d.slice(5)} ${t}`
+}
+
+/** B2：磁盘低位判据——剩余不足总量 10% 或不足 20 GB（本机存媒体，盘满是头号风险） */
+const diskLow = computed(() => {
+  const a = assets.value
+  if (!a || !a.disk_total) return false
+  return a.disk_free < a.disk_total * 0.1 || a.disk_free < 20 * 1024 ** 3
+})
+
+
 
 
 
@@ -2224,18 +2389,41 @@ function renderFidTrendChart() {
       >
         <span class="health-dot"></span>
         <span class="health-msg">{{ health.message }}</span>
+        <!-- B1：定时抓取「计划」徽标——健康条报告抓取结果，这里补齐计划本身：
+             启用没、下次几点跑、今天已处理几轮。点击去设置页（stop 防触发整条跳运行记录）；窄屏隐藏 -->
+        <el-tooltip v-if="sched" :content="schedTip" placement="top" :teleported="!app.fullscreen">
+          <span
+            class="health-sched"
+            :class="{ 'sched-off': !sched.enabled || !sched.times.length }"
+            role="link"
+            tabindex="0"
+            @click.stop="goSettings"
+            @keydown.enter.stop="goSettings"
+          >{{ schedLabel }}</span>
+        </el-tooltip>
         <span class="health-go">运行记录 ›</span>
       </div>
 
     <!-- 统计卡片 -->
     <div class="stat-grid">
       <template v-if="overview">
-        <div class="stat-card">
+        <!-- B5（R5 补齐）：累计收录下钻——跳帖子页全量列表（不带任何筛选，卡面 N = 列表 N） -->
+        <div
+          class="stat-card stat-clickable"
+          role="button"
+          tabindex="0"
+          :title="`累计收录 ${overview.total.toLocaleString()} 帖；点击查看全部帖子明细`"
+          @click="goPostsWith({})"
+          @keydown.enter="goPostsWith({})"
+        >
           <div class="stat-icon" style="background: linear-gradient(135deg, #4f83f1, #2f6fed)">
             <el-icon><Collection /></el-icon>
           </div>
           <div class="stat-body">
-            <div class="stat-label">累计收录</div>
+            <div class="stat-label">
+              累计收录
+              <span class="stat-drill" aria-hidden="true">下钻 ›</span>
+            </div>
             <div class="stat-value"><RollingNumber :value="overview.total" /></div>
             <div class="stat-sub">
               <span class="sub-neutral">近7日发布 +{{ overview.week_new.toLocaleString() }}</span>
@@ -2283,18 +2471,40 @@ function renderFidTrendChart() {
           <div class="stat-body">
             <div class="stat-label">发帖作者</div>
             <div class="stat-value"><RollingNumber :value="overview.total_users" /></div>
+            <!-- 副行两行四值（用户指定格式）：第一行「今日更新 · 活跃率」讲存量，
+                 第二行「昨日 · 近7日新增」讲增量。主值是累计作者数，四个副值各属不同窗口；
+                 口径说明（近 N 个完整日、只判首次出现）按第 20 条进悬浮，不占常驻位。 -->
             <div v-if="kpiSub" class="stat-sub">
-              <span class="sub-up">今日更新 {{ overview.active_users.toLocaleString() }} 人</span>
-              <span class="sub-neutral">活跃率 {{ kpiSub.activeShare ?? 0 }}%</span>
+              <span class="sub-line">
+                <span class="sub-up">今日更新 {{ overview.active_users.toLocaleString() }} 人</span>
+                <span class="sub-neutral">· 活跃率 {{ kpiSub.activeShare ?? 0 }}%</span>
+              </span>
+              <span class="sub-line">
+                <span class="sub-neutral">昨日 {{ overview.yesterday_users.toLocaleString() }} 人，近7日新增</span>
+                <el-tooltip :content="authorTip" placement="top" :teleported="!app.fullscreen">
+                  <span class="sub-new">{{ overview.new_authors_7d.toLocaleString() }} 人</span>
+                </el-tooltip>
+              </span>
             </div>
           </div>
         </div>
-        <div class="stat-card">
+        <!-- B5（R5 补齐）：最近入库下钻——运行记录页就是它的明细（批次、进度、日志） -->
+        <div
+          class="stat-card stat-clickable"
+          role="button"
+          tabindex="0"
+          title="最近入库时间与抓取批次明细；点击查看运行记录"
+          @click="goRuns"
+          @keydown.enter="goRuns"
+        >
           <div class="stat-icon" style="background: linear-gradient(135deg, #fbbf24, #f59e0b)">
             <el-icon><Clock /></el-icon>
           </div>
           <div class="stat-body">
-            <div class="stat-label">最近入库</div>
+            <div class="stat-label">
+              最近入库
+              <span class="stat-drill" aria-hidden="true">查看 ›</span>
+            </div>
             <div class="stat-value">{{ kpiSub?.latestDate ? kpiSub.latestDate.slice(5) : '—' }}</div>
             <div v-if="kpiSub" class="stat-sub">
               <span v-if="runningBatch" class="running-badge">
@@ -2355,6 +2565,23 @@ function renderFidTrendChart() {
         </div>
         <div class="ak-foot">
           <span class="ak-sub">已沉淀 <b>{{ assets.downloaded_posts.toLocaleString() }}</b> / 收录 {{ assets.posts_total.toLocaleString() }}</span>
+          <!-- B2：运维数字——下载失败（点击进下载中心处理）+ 磁盘剩余（低于阈值标红）。
+               数据 /stats/assets 早已给出（state.failed / disk_free），此前只在资源页展示，大屏补一眼位 -->
+          <span class="ak-ops">
+            <el-tooltip content="最近一次下载尝试失败、且此后未再成功的帖数（持久记录）。这是帖 / 链接级口径，与下载中心按任务统计的「失败任务」不是同一个量纲；点击直达同口径的失败缺口清单（N 条对 N 个），可逐条重下" placement="top" :teleported="!app.fullscreen">
+              <span
+                class="ak-op ak-op-link"
+                :class="{ 'ak-warn': assets.state.failed > 0 }"
+                role="link"
+                tabindex="0"
+                @click="goDownloads"
+                @keydown.enter="goDownloads"
+              >下载失败 <b>{{ assets.state.failed.toLocaleString() }}</b> ›</span>
+            </el-tooltip>
+            <el-tooltip v-if="assets.disk_total > 0" content="本地媒体资产所在卷的可用容量；剩余不足总量 10% 或低于 20 GB 时标红" placement="top" :teleported="!app.fullscreen">
+              <span class="ak-op" :class="{ 'ak-danger': diskLow }">磁盘剩余 {{ formatSize(assets.disk_free) }}</span>
+            </el-tooltip>
+          </span>
         </div>
       </div>
       <div v-else-if="assets && assetsEmpty" class="asset-empty">
@@ -2769,11 +2996,11 @@ function renderFidTrendChart() {
             <div class="chart-head-left">
               <span class="chart-title">点赞最高帖</span>
               <el-tooltip
-                content="全站累计口径（不受下方任何时间筛选影响）；按帖子点赞数取前 10。行内「下载」按钮可直接创建下载任务；点击整行可下钻到该版块帖子页并按点赞排序。"
+                content="全站累计口径（不受下方任何时间筛选影响）；每个版块各取点赞最高的 1 帖（13 个版块 = 13 行，并列时取更新的一条），非全站 Top10。行内「下载」按钮可直接创建下载任务；点击整行可下钻到该版块帖子页并按点赞排序；「查看更多」为全站按点赞排序的 Top 榜。"
                 placement="top"
                 :teleported="!app.fullscreen"
               >
-                <span class="chart-sub">全站累计 · 按点赞数</span>
+                <span class="chart-sub">全站累计 · 每版块最高 1 帖</span>
               </el-tooltip>
             </div>
             <div class="chart-head-right">
@@ -2792,7 +3019,11 @@ function renderFidTrendChart() {
               <a class="title-link board-title" :title="`${item.name} · ${item.title}`" @click.stop.prevent="openUrl(item.url)">
                 {{ item.title }}
               </a>
-              <el-tooltip content="下载" placement="top" :teleported="!app.fullscreen">
+              <!-- 「已沉淀」状态标（fresh 默认态不渲染）：紧贴下载按钮，资产相关信号聚合一处 -->
+              <el-tooltip v-if="stateBadge(item.state)" :content="stateBadge(item.state)!.tip" placement="top" :teleported="!app.fullscreen">
+                <el-tag size="small" :type="stateBadge(item.state)!.type" class="board-state-tag">{{ stateBadge(item.state)!.text }}</el-tag>
+              </el-tooltip>
+              <el-tooltip :content="downloadTip(item.state)" placement="top" :teleported="!app.fullscreen">
                 <el-button link size="small" type="success" :icon="Download" class="board-download" @click.stop.prevent="downloadUrl(item.url)" />
               </el-tooltip>
               <span class="board-metric">
@@ -2807,11 +3038,11 @@ function renderFidTrendChart() {
             <div class="chart-head-left">
               <span class="chart-title">回复最高帖</span>
               <el-tooltip
-                content="全站累计口径（不受下方任何时间筛选影响）；按帖子回复数取前 10。行内「下载」按钮可直接创建下载任务；点击整行可下钻到该版块帖子页并按回复排序。"
+                content="全站累计口径（不受下方任何时间筛选影响）；每个版块各取回复最高的 1 帖（13 个版块 = 13 行，并列时取更新的一条），非全站 Top10。行内「下载」按钮可直接创建下载任务；点击整行可下钻到该版块帖子页并按回复排序；「查看更多」为全站按回复排序的 Top 榜。"
                 placement="top"
                 :teleported="!app.fullscreen"
               >
-                <span class="chart-sub">全站累计 · 按回复数</span>
+                <span class="chart-sub">全站累计 · 每版块最高 1 帖</span>
               </el-tooltip>
             </div>
             <div class="chart-head-right">
@@ -2830,7 +3061,11 @@ function renderFidTrendChart() {
               <a class="title-link board-title" :title="`${item.name} · ${item.title}`" @click.stop.prevent="openUrl(item.url)">
                 {{ item.title }}
               </a>
-              <el-tooltip content="下载" placement="top" :teleported="!app.fullscreen">
+              <!-- 「已沉淀」状态标（fresh 默认态不渲染）：紧贴下载按钮，资产相关信号聚合一处 -->
+              <el-tooltip v-if="stateBadge(item.state)" :content="stateBadge(item.state)!.tip" placement="top" :teleported="!app.fullscreen">
+                <el-tag size="small" :type="stateBadge(item.state)!.type" class="board-state-tag">{{ stateBadge(item.state)!.text }}</el-tag>
+              </el-tooltip>
+              <el-tooltip :content="downloadTip(item.state)" placement="top" :teleported="!app.fullscreen">
                 <el-button link size="small" type="success" :icon="Download" class="board-download" @click.stop.prevent="downloadUrl(item.url)" />
               </el-tooltip>
               <span class="board-metric">
@@ -2885,7 +3120,11 @@ function renderFidTrendChart() {
               <el-tooltip v-if="isHotTalk(item)" content="热议型：回复数不低于点赞数" placement="top" :teleported="!app.fullscreen">
                 <span class="board-flag">热议</span>
               </el-tooltip>
-              <el-tooltip content="下载" placement="top" :teleported="!app.fullscreen">
+              <!-- 「已沉淀」状态标（fresh 默认态不渲染）：紧贴下载按钮，资产相关信号聚合一处 -->
+              <el-tooltip v-if="stateBadge(item.state)" :content="stateBadge(item.state)!.tip" placement="top" :teleported="!app.fullscreen">
+                <el-tag size="small" :type="stateBadge(item.state)!.type" class="board-state-tag">{{ stateBadge(item.state)!.text }}</el-tag>
+              </el-tooltip>
+              <el-tooltip :content="downloadTip(item.state)" placement="top" :teleported="!app.fullscreen">
                 <el-button link size="small" type="success" :icon="Download" class="board-download" @click.stop.prevent="downloadUrl(item.url)" />
               </el-tooltip>
 
@@ -2952,7 +3191,11 @@ function renderFidTrendChart() {
                 <span class="board-flag">热议</span>
               </el-tooltip>
               <span class="board-postdate" :title="`发布于 ${item.date}`">{{ item.date.slice(5) }}</span>
-              <el-tooltip content="下载" placement="top" :teleported="!app.fullscreen">
+              <!-- 「已沉淀」状态标（fresh 默认态不渲染）：紧贴下载按钮，资产相关信号聚合一处 -->
+              <el-tooltip v-if="stateBadge(item.state)" :content="stateBadge(item.state)!.tip" placement="top" :teleported="!app.fullscreen">
+                <el-tag size="small" :type="stateBadge(item.state)!.type" class="board-state-tag">{{ stateBadge(item.state)!.text }}</el-tag>
+              </el-tooltip>
+              <el-tooltip :content="downloadTip(item.state)" placement="top" :teleported="!app.fullscreen">
                 <el-button link size="small" type="success" :icon="Download" class="board-download" @click.stop.prevent="downloadUrl(item.url)" />
               </el-tooltip>
 
@@ -3673,6 +3916,30 @@ function renderFidTrendChart() {
   opacity: 0.75;
 }
 
+/* B1：定时抓取计划徽标（健康条右侧，点击去设置页）。竖线与主条分隔；
+   未启用时降透明度弱化；窄屏隐藏保住健康条单行（配置入口在设置页不受影响） */
+.health-sched {
+  flex-shrink: 0;
+  font-size: 12px;
+  opacity: 0.85;
+  padding-left: 10px;
+  border-left: 1px solid currentColor;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.health-sched:hover {
+  opacity: 1;
+  text-decoration: underline;
+}
+.health-sched.sched-off {
+  opacity: 0.55;
+}
+@media (max-width: 768px) {
+  .health-sched {
+    display: none;
+  }
+}
+
 .health-ok {
   background: #f0faf4;
   border-color: #d4f0e0;
@@ -3810,10 +4077,46 @@ function renderFidTrendChart() {
   margin-top: 8px;
   font-size: 12px;
   color: #909399;
+  /* B2：左侧沉淀/收录比、右侧运维数字（下载失败 / 磁盘剩余），两端对齐 */
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 .asset-kpi .ak-foot b {
   color: #1f2d3d;
   font-variant-numeric: tabular-nums;
+}
+/* B2：运维数字组 */
+.ak-ops {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  flex-shrink: 0;
+}
+.ak-op-link {
+  cursor: pointer;
+}
+.ak-op-link:hover {
+  text-decoration: underline;
+}
+.ak-op.ak-warn,
+.ak-op.ak-warn b {
+  color: #e6a23c;
+}
+.ak-op.ak-danger {
+  color: #f56c6c;
+  font-weight: 600;
+}
+/* 热门榜四卡：卡头统一为两行（第一行 标题+口径，第二行 右对齐操作区），
+   保证四列列表起始线对齐——此前「本月最热」控件多被挤到折行（57px）、
+   其余卡单行（21px），四列列表起点错位。
+   min-height 对齐第二行：链接行高 16px 与 el-select 小尺寸 24px 混排时
+   仍差 8px（实测 49 vs 57），统一按操作控件高度撑齐 */
+.board-row .chart-head-right {
+  width: 100%;
+  min-height: 24px;
 }
 
 /* ================= R3 待下载推荐 =================
@@ -3835,6 +4138,13 @@ function renderFidTrendChart() {
 .re-download-tag {
   flex: 0 0 auto;
   margin: 0 4px;
+}
+
+/* 「已沉淀」状态标（榜单四卡，2026-09-19）：已沉淀=绿 / 下载中=蓝 / 可重下=橙，
+   配色由 el-tag 的 type 承载；fresh 默认态不渲染，避免未下载行挂满标签的视觉噪音。
+   与待下载推荐的 .re-download-tag 同为 el-tag，视觉语言一致；flex 收缩由 board-title 承担 */
+.board-state-tag {
+  flex: 0 0 auto;
 }
 
 .pending-empty {

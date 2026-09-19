@@ -6,13 +6,14 @@ import { formatDateTime, formatFullTime } from '../utils/time'
  * Dashboard 全局共享状态：
  * - Header 右侧展示【更新时间】与【自动刷新】控件
  * - DashboardView 复用同一开关并保持轮询逻辑
- * - 自动刷新由后端 /api/config 下发的 enableAutoRefresh 控制（默认关闭，
- *   未启用时隐藏开关且不启动轮询，避免页面进入 / 停留时被定时刷新拖慢）
+ * - 自动刷新由后端 /api/config 下发的 enableAutoRefresh 控制（代码默认开启，
+ *   .env 显式设 TXXY_ENABLE_AUTO_REFRESH=0 或设置页覆盖可关闭；未启用时隐藏
+ *   开关且不启动轮询，避免页面进入 / 停留时被定时刷新拖慢）
  */
 export const useDashboardStore = defineStore('dashboard', () => {
-  // 自动刷新总开关：由后端 /api/config 下发（默认关闭）
+  // 自动刷新总开关：由后端 /api/config 下发（代码默认开启，见 web/config.py）
   const enableAutoRefresh = ref(false)
-  // 自动刷新开关（默认关闭；配置启用时初始为开启，每 30 秒静默刷新一次，逻辑在 DashboardView 中）
+  // 自动刷新开关（配置启用时初始为开启，每 5 秒静默刷新一次，逻辑在 DashboardView 中）
   const autoRefresh = ref(false)
   // 黑名单版本号：设置页增删黑名单后 +1，供 Dashboard 监听并强制重拉卡片口径。
   // 后端 posts_filtered 视图已过滤，此处解决「点赞/回复最高帖等卡片不参与轮询刷新」导致的不同步。

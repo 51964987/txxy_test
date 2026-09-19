@@ -523,8 +523,10 @@ class DownloadTaskManager:
           的权威依据，供待下载队列排除与资产漏斗取交集）；「gone」= 曾成功但目录已清理
           （供待下载推荐标「可重下」）；「active」= 排队/下载中（供排除并发重复提交）。
         - `claimed_dirs`：被履历认领、且目录仍在磁盘的目录名集合（资产卡「对账」的已认领一侧）。
-        - `first_at`：{url: 首次落盘时间}（仅含 alive 且有时间戳的条目，资产增长曲线用）。
-        - `dir_of`：{url: 目录名}（仅含 alive 且目录非空的条目，增长曲线按目录聚合体积用）。
+        - `first_at`：{url: 首次落盘时间}（含所有曾成功的条目——alive 与 gone 都算，
+          因为「首次成功」是历史事实，清理目录后不应丢失；gone 项的首次时间用于「可重下」清单排序）。
+        - `dir_of`：{url: 目录名}（含所有曾成功的条目，gone 项的旧目录名即「原目录」，
+          供可重下清单展示「文件原本落在哪」；增长曲线用 dir_of 查当前目录体积时 gone 项查不到，自然计 0，不影响曲线）。
         - `failures`：最近一次尝试失败且此后未成功的条目（真实「失败缺口」清单，任务面板
           被清空也不会丢——这是履历从「只记成功」升级后新增的能力）。
 
@@ -540,13 +542,15 @@ class DownloadTaskManager:
             failures: list[dict[str, str]] = []
             for url, ent in self._history.items():
                 d = str(ent.get("dir") or "")
-                if url in alive:
-                    if d:
-                        claimed_dirs.add(d)
-                        dir_of[url] = d
-                    fa = ent.get("first_at")
-                    if fa:
-                        first_at[url] = str(fa)
+                # dir_of / first_at 覆盖所有曾成功的条目（alive + gone）：
+                # gone 的旧目录名即「原目录」、首次时间用于可重下清单排序，清理目录后不该丢失。
+                if d:
+                    dir_of[url] = d
+                fa = ent.get("first_at")
+                if fa:
+                    first_at[url] = str(fa)
+                if url in alive and d:
+                    claimed_dirs.add(d)
                 elif ent.get("fail_at"):
                     failures.append(
                         {

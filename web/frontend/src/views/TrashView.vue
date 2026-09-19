@@ -17,6 +17,7 @@ const {
   restoreItem,
   purgeItem,
   purgeAll,
+  purgeExpired,
 } = useTrash()
 
 // 搜索与排序均在前端完成：回收站条目量远小于资源清单，无需后端分页
@@ -66,7 +67,7 @@ onMounted(load)
         <el-icon style="margin-right: 6px"><InfoFilled /></el-icon>
         <span>
           资源删除后先移入回收站（<code>outputs/trash/</code>），默认保留
-          <b>{{ keepDays }}</b> 天，期间可恢复；到期条目不会自动清理，需手动彻底删除或清空。
+          <b>{{ keepDays }}</b> 天，期间可恢复；到期条目不会自动清理，可「清理过期项」或手动彻底删除。
           彻底删除不可恢复，请谨慎操作。
         </span>
       </div>
@@ -122,6 +123,15 @@ onMounted(load)
           <el-button size="small" @click="toggleSort('size')">大小{{ sortIcon('size') }}</el-button>
           <el-button size="small" @click="toggleSort('name')">名称{{ sortIcon('name') }}</el-button>
         </div>
+        <el-button
+          type="warning"
+          plain
+          :icon="'Delete'"
+          :disabled="!expiredCount"
+          @click="purgeExpired"
+        >
+          清理过期项{{ expiredCount ? ` (${expiredCount})` : '' }}
+        </el-button>
         <el-button type="danger" plain :disabled="!items.length" @click="purgeAll">
           清空回收站
         </el-button>

@@ -13,7 +13,7 @@
                   详见项目根 txxy_env.py——那是全项目域名的唯一配置源
   TXXY_WEB_HOST   监听地址（默认 127.0.0.1，局域网访问设 0.0.0.0）
   TXXY_WEB_PORT   监听端口（默认 8080）
-  TXXY_ENABLE_AUTO_REFRESH  是否启用数据总览自动刷新（默认 0/关闭，设为 1 开启）
+  TXXY_ENABLE_AUTO_REFRESH  是否启用数据总览自动刷新（默认 1/开启，设为 0 关闭）
   以下为下载中心（URL 批量下载）配置，均可通过环境变量覆盖：
   TXXY_DOWNLOAD_CONCURRENCY  单任务内并行下载的 URL 数（默认 2）
   TXXY_DOWNLOAD_MAX_BATCH    单次批量提交的 URL 数量上限（默认 50）

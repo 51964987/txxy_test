@@ -82,6 +82,11 @@ class OverviewResp(BaseModel):
     today_str: str
     total_users: int
     active_users: int
+    # 昨日活跃作者数：mx_d = 昨天（昨日为完整日，无需像今天那样排除）
+    yesterday_users: int
+    # 新作者（库内首次出现）：窗口为「近 N 个完整日」，不含今天（当日抓取未覆盖全天）
+    new_authors_7d: int
+    new_authors_30d: int
 
 
 class BoardTopResp(BaseModel):
@@ -90,6 +95,9 @@ class BoardTopResp(BaseModel):
     title: str
     url: str
     value: str
+    # 下载状态四态（榜单行「已沉淀」状态标）：downloaded=已落盘且文件仍在 / running=在途 /
+    # re_download=曾成功但目录已清理（可重下）/ fresh=从未下载（默认态，前端不展示标记）
+    state: str = "fresh"
 
 
 class BoardsResp(BaseModel):
@@ -108,6 +116,8 @@ class TodayTopItemResp(BaseModel):
     date: str
     # 新入榜：对比快照为首次出现（标记持续到当天结束）。仅本月最热计算，最新最热恒为 False
     is_new: bool = False
+    # 下载状态四态（榜单行「已沉淀」状态标），枚举同 BoardTopResp.state
+    state: str = "fresh"
 
 
 class TodayTopResp(BaseModel):
@@ -170,6 +180,7 @@ class TrendPointResp(BaseModel):
 class TrendByFidResp(BaseModel):
     dates: list[str]
     series: list[dict[str, Any]]
+
 
 
 class FidDistItemResp(BaseModel):
@@ -315,6 +326,28 @@ class AssetsGoalResp(BaseModel):
     reached: bool = False
 
 
+class SourceUsageItem(BaseModel):
+    """来源占用单条：某版块 / 某作者的已沉淀目录体积合计。"""
+    key: str = ""              # fid 或作者名（未收录时为 ""）
+    name: str = ""             # 展示名（版块名 / 作者名）
+    posts: int = 0             # 该来源已沉淀帖数
+    dirs: int = 0              # 归属目录数（一个目录只算一次）
+    size: int = 0              # 占用体积（字节）
+    share: float = 0.0         # 占该维度总占用的百分比
+
+
+class SourceUsageDim(BaseModel):
+    """来源占用单维度（版块 / 作者）Top 列表。"""
+    total_size: int = 0        # 该维度全部归属体积之和（用于算占比）
+    items: list[SourceUsageItem] = []
+
+
+class SourceUsageResp(BaseModel):
+    """来源占用（容量洞察卡「来源占用 Top」）：版块 / 作者两个维度各一份 Top。"""
+    fid: SourceUsageDim = SourceUsageDim()
+    author: SourceUsageDim = SourceUsageDim()
+
+
 class AssetsResp(BaseModel):
     """内容 → 资产漏斗（AS1）：收录 → 已沉淀帖 → 本地文件（+ 沉淀进度）。
 
@@ -340,6 +373,7 @@ class AssetsResp(BaseModel):
     by_fid: list[AssetsFidItem] = []                # 分版块沉淀率（集中度信号）
     growth: list[AssetsGrowthPoint] = []            # 资产增长曲线（按首次落盘日）
     goal: AssetsGoalResp = AssetsGoalResp()         # 沉淀目标（SLO 式进度）
+    source_usage: SourceUsageResp = SourceUsageResp()  # 来源占用 Top（版块/作者，容量洞察卡）
     disk_total: int = 0                             # 存储卷总容量（字节）
     disk_free: int = 0                              # 存储卷可用容量（字节）
 
@@ -744,15 +778,27 @@ def stats_overview() -> OverviewResp:
                 "SELECT MAX(created_at) AS c, MAX(updated_at) AS u FROM run_days"
             ).fetchone()
             latest_run_at = max(str(run_ts["c"] or ""), str(run_ts["u"] or "")) or None
-            # 用户指标：author 非空去重（累计用户 = 全部帖子的去重作者，活跃用户 = 当日帖子的去重作者）
+            # 用户指标：一条 GROUP BY author 聚合同时产出「累计 / 今日活跃 / 昨日活跃 / 新作者」，
+            # 替代原先两条 COUNT(DISTINCT)（实测 167ms vs 两条合计 134ms，同量级但少扫一遍全表）。
+            #   mx_d = 某日 ⇔ 该作者该日发过帖（与「date = 某日 的去重作者」等价，已实测 54 = 54）
+            #   mn_d = 该作者在本库的最早发布日 → 新作者即「首次出现」（与 GitHub new contributors
+            #   口径一致：只判首次出现，不加产量门槛）
+            # 窗口取「近 N 个完整日」（mn_d < 今天）：今天抓取未覆盖全天，计入会被稀释
+            # （实测含今天 7 日 = 65 人 vs 前 7 个完整日 = 72 人，见项目约束第 18 条）。
+            # 昨日是完整日，与今日同样直接按 mx_d 命中，无需窗口修饰。
+            # 日期脏数据（<2000 的 18 行、14 个作者）无需额外过滤：其 mn_d 落在远端，
+            # 永远不会被判为新作者（实测过滤前后近 30 日新作者同为 212）。
             user_where = "author IS NOT NULL AND author <> ''"
-            total_users = conn.execute(
-                f"SELECT COUNT(DISTINCT author) AS c FROM posts_filtered WHERE {user_where}"
-            ).fetchone()["c"]
-            active_users = conn.execute(
-                f"SELECT COUNT(DISTINCT author) AS c FROM posts_filtered WHERE {user_where} AND date = ?",
-                (today,),
-            ).fetchone()["c"]
+            users = conn.execute(
+                "SELECT COUNT(*) AS total_u," +
+                " SUM(CASE WHEN mx_d = ? THEN 1 ELSE 0 END) AS active_u," +
+                " SUM(CASE WHEN mx_d = ? THEN 1 ELSE 0 END) AS yest_u," +
+                " SUM(CASE WHEN mn_d >= date(?, '-7 days') AND mn_d < ? THEN 1 ELSE 0 END) AS new_7d," +
+                " SUM(CASE WHEN mn_d >= date(?, '-30 days') AND mn_d < ? THEN 1 ELSE 0 END) AS new_30d" +
+                " FROM (SELECT author, MIN(date) AS mn_d, MAX(date) AS mx_d" +
+                " FROM posts_filtered WHERE " + user_where + " GROUP BY author)",
+                (today, yesterday, today, today, today, today),
+            ).fetchone()
         finally:
             conn.close()
         return {
@@ -764,11 +810,16 @@ def stats_overview() -> OverviewResp:
             "latest_date": latest["date"],
             "latest_run_at": latest_run_at,
             "today_str": today,
-            "total_users": total_users,
-            "active_users": active_users,
+            "total_users": users["total_u"],
+            "active_users": users["active_u"],
+            # SUM 在空集上返回 NULL（SQL 聚合语义），统一折算为 0，避免 None 下发到前端
+            "yesterday_users": users["yest_u"] or 0,
+            "new_authors_7d": users["new_7d"] or 0,
+            "new_authors_30d": users["new_30d"] or 0,
         }
 
-    return db.cached("overview_v3", _calc)
+    # 缓存键升版：响应新增 yesterday_users / new_authors_* 字段，旧快照结构不含新键
+    return db.cached("overview_v5", _calc)
 
 
 def _health_verdict(
@@ -995,12 +1046,20 @@ def stats_compare() -> CompareResp:
 
 @router.get("/stats/boards")
 def stats_boards() -> BoardsResp:
-    """各版块点赞 / 回复最高帖（方案 C：前端热门榜区块懒加载时单独请求）。"""
+    """各版块点赞 / 回复最高帖（方案 C：前端热门榜区块懒加载时单独请求）。
+
+    2026-09-19：条目补 `state`（榜单行「已沉淀」状态标），判据与待下载推荐同源；
+    缓存 key v1 → v2（响应体新增字段，避免 TTL 内旧结构返回前端）。
+    """
 
     def _calc():
-        return {"top_likes": _board_top("likes"), "top_replies": _board_top("replies")}
+        dl = _download_path_sets()  # 两个榜单共用一次资产快照
+        return {
+            "top_likes": _attach_download_state(_board_top("likes"), dl),
+            "top_replies": _attach_download_state(_board_top("replies"), dl),
+        }
 
-    return db.cached("boards", _calc)
+    return db.cached("boards_v2", _calc)
 
 
 @router.get("/stats/today_top")
@@ -1035,25 +1094,29 @@ def stats_today_top(
             ).fetchone()["c"]
         finally:
             conn.close()
+        items = [
+            {
+                "fid": r["fid"],
+                "name": config.fid_name(r["fid"]),
+                "title": r["title"],
+                "url": db.normalize_url(r["url"]),
+                "likes": _as_int(r["likes"]),
+                "replies": _as_int(r["replies"]),
+                "date": r["date"],
+            }
+            for r in rows
+        ]
+        # 榜单行「已沉淀」状态标（2026-09-19）：判据与待下载推荐同源
+        _attach_download_state(items, _download_path_sets())
         return {
             "date": latest,
             "total": total,
             "days": 1,
-            "items": [
-                {
-                    "fid": r["fid"],
-                    "name": config.fid_name(r["fid"]),
-                    "title": r["title"],
-                    "url": db.normalize_url(r["url"]),
-                    "likes": _as_int(r["likes"]),
-                    "replies": _as_int(r["replies"]),
-                    "date": r["date"],
-                }
-                for r in rows
-            ],
+            "items": items,
         }
 
-    return db.cached(f"today_top_v3:{sort}:{limit}", _calc)
+    # 缓存 key v3 → v4：响应体新增 state 字段（2026-09-19），避免 TTL 内旧结构返回前端
+    return db.cached(f"today_top_v4:{sort}:{limit}", _calc)
 
 
 @router.get("/stats/today_fids")
@@ -1244,27 +1307,30 @@ def stats_month_top(
         today = date_cls.today().isoformat()
         # 快照 key 按排序维度分开：四种排序各有独立首见历史，切换排序互不覆盖
         fresh = _mark_new_and_save(f"month_top:{sort}", urls, today)
+        items = [
+            {
+                "fid": r["fid"],
+                "name": config.fid_name(r["fid"]),
+                "title": r["title"],
+                "url": db.normalize_url(r["url"]),
+                "likes": _as_int(r["likes"]),
+                "replies": _as_int(r["replies"]),
+                "date": r["date"],
+                "is_new": db.normalize_url(r["url"]) in fresh,
+            }
+            for r in rows
+        ]
+        # 榜单行「已沉淀」状态标（2026-09-19）：判据与待下载推荐同源
+        _attach_download_state(items, _download_path_sets())
         return {
             "date": month,
             "total": total,
             "days": days,
-            "items": [
-                {
-                    "fid": r["fid"],
-                    "name": config.fid_name(r["fid"]),
-                    "title": r["title"],
-                    "url": db.normalize_url(r["url"]),
-                    "likes": _as_int(r["likes"]),
-                    "replies": _as_int(r["replies"]),
-                    "date": r["date"],
-                    "is_new": db.normalize_url(r["url"]) in fresh,
-                }
-                for r in rows
-            ],
+            "items": items,
         }
 
-    # 缓存 key 由 v3 → v4：响应体去掉了 daily 字段，避免 5s 内旧结构继续返回给前端
-    return db.cached(f"month_top_v4:{sort}:{limit}", _calc)
+    # 缓存 key v4 → v5：响应体新增 state 字段（2026-09-19），避免 TTL 内旧结构返回前端
+    return db.cached(f"month_top_v5:{sort}:{limit}", _calc)
 
 
 @router.get("/stats/trend")
@@ -1446,6 +1512,41 @@ def _download_path_sets() -> tuple[set[str], set[str], set[str]]:
     return snap["done"], snap["active"], snap["gone"]
 
 
+def _post_download_state(
+    url: str, done: set[str], active: set[str], gone: set[str]
+) -> str:
+    """帖子级下载状态四态（榜单行「已沉淀」状态标用，2026-09-19）。
+
+    判据与待下载推荐 / 提交前判重同源（_asset_snapshot 一处实现）：
+    先把任意形态 URL 归一化为入库相对路径，再与三个路径集合比对：
+    - downloaded：已落盘且文件仍在（已沉淀）；
+    - running：在途（排队 / 下载中）；
+    - re_download：曾成功但目录已被清理（可重下）；
+    - fresh：从未下载（默认态，前端不展示标记，避免未下载行挂满标签的视觉噪音）。
+    """
+    path = config.to_storage_path(url)
+    if path in done:
+        return "downloaded"
+    if path in active:
+        return "running"
+    if path in gone:
+        return "re_download"
+    return "fresh"
+
+
+def _attach_download_state(
+    items: list[dict[str, Any]], dl: tuple[set[str], set[str], set[str]]
+) -> list[dict[str, Any]]:
+    """为榜单条目就地补 `state` 字段（榜单「已沉淀」状态标）。
+
+    调用方先取一次 _download_path_sets() 传入：同一响应内多个榜单共用同一份
+    资产快照，避免重复扫描下载履历与文件系统。"""
+    done, active, gone = dl
+    for it in items:
+        it["state"] = _post_download_state(it["url"], done, active, gone)
+    return items
+
+
 def _invalidate_download_stats() -> None:
     """失效「依赖下载 / 本地资产状态」的统计缓存（写操作后必须调用）。
 
@@ -1462,6 +1563,12 @@ def _invalidate_download_stats() -> None:
     db.invalidate("pending_downloads_")
     db.invalidate("assets_")
     db.invalidate("health_")
+    # 失败缺口清单同样由下载履历派生：提交 / 重跑 / 删除文件后必须立即改口，
+    # 否则资产卡「失败」已变而清单还是旧快照（违反「写后即失效」约定）。
+    db.invalidate("download_failures_")
+    # 可重下清单由 gone 集合派生：删除本地文件 → 该帖应立刻出现在「可重下」清单里；
+    # 重新下载成功 → 应立刻退出清单。
+    db.invalidate("re_downloads_")
 
 
 def _pct(part: int, total: int) -> float:
@@ -1491,6 +1598,100 @@ def _count_posts_by_paths(
         )
         total += int(db.query(sql, tuple(part) + extra_params)[0]["c"])
     return total
+
+
+def _post_rows_by_paths(paths: set[str]) -> list[dict[str, Any]]:
+    """按入库相对路径取帖子明细行（url / title / fid / author），顺序不限。
+
+    与 `_count_posts_by_paths` 同一套 URL 形态展开与 400 分块，**同一份 WHERE 语义**：
+    区别只是它 COUNT、本函数取行。明细清单必须用本函数而不是 `_post_meta_by_paths`——
+    后者以路径为 dict 键，遇到库内重复行会折叠，导致「卡上 N ≠ 清单 N」。
+    """
+    values = _url_forms(paths)
+    if not values:
+        return []
+    rows: list[dict[str, Any]] = []
+    for i in range(0, len(values), 400):
+        part = values[i : i + 400]
+        sql = (
+            "SELECT url, title, fid, author FROM posts_filtered WHERE url IN ("
+            + ",".join("?" * len(part))
+            + ")"
+        )
+        rows.extend(db.query(sql, tuple(part)))
+    return rows
+
+
+def _source_usage(snap: dict[str, Any], res: dict[str, Any], top: int = 10) -> dict[str, Any]:
+    """按来源聚合已沉淀目录的占用（容量洞察卡「来源占用 Top」用）。
+
+    - 维度：版块（fid）/ 作者（author）。两者都是「把占用的目录体积归到发帖主体上」，
+      口径一致、各出一份 Top10，不另造一套聚合逻辑。
+    - 体积来源：复用 `/stats/assets` 已做的资源扫描 `res["items"]` 的目录体积，
+      **不再二次扫描**（与 B6 类型分布同一份数据，单一实现）。
+    - 归属：目录体积按「目录」归到来源，一个目录只算一次（首帖先到先得），避免同目录
+      多条帖子重复累加体积；帖数则按真实帖子数计（可能 > 目录数，属正常）。
+    - 未收录 / 已剔除的帖子（路径不在 dir_of 中）无目录归属，不进来源聚合。
+    - 每个维度返回 `total_size`（该维度全部归属体积之和，用于算占比）与 Top `top` 条。
+    """
+    dir_size = {str(it["name"]): int(it["total_size"]) for it in res.get("items") or []}
+    dir_of = snap.get("dir_of") or {}
+    rows = _post_rows_by_paths(snap.get("done") or set())
+    agg: dict[str, dict[str, dict[str, Any]]] = {"fid": {}, "author": {}}
+    dir_owner: dict[str, dict[str, str]] = {"fid": {}, "author": {}}
+    for r in rows:
+        path = config.to_storage_path(str(r["url"]))
+        d = str(dir_of.get(path) or "")
+        if not d:
+            continue
+        sz = dir_size.get(d, 0)
+        fid = str(r["fid"]) if r["fid"] is not None else None
+        author = str(r.get("author") or "") or None
+        for dim, raw_key in (("fid", fid), ("author", author)):
+            if raw_key is None:
+                continue  # 无版块 / 无作者（多为未收录帖）不计入来源占用
+            bucket = agg[dim].setdefault(raw_key, {"size": 0, "dirs": set(), "posts": 0})
+            bucket["posts"] += 1
+            if d not in dir_owner[dim]:
+                dir_owner[dim][d] = raw_key
+                bucket["size"] += sz
+                bucket["dirs"].add(d)
+    out: dict[str, Any] = {}
+    for dim in ("fid", "author"):
+        items: list[dict[str, Any]] = []
+        for k, b in agg[dim].items():
+            items.append(
+                {
+                    "key": k,
+                    "name": config.fid_name(k) if dim == "fid" else k,
+                    "posts": b["posts"],
+                    "dirs": len(b["dirs"]),
+                    "size": b["size"],
+                }
+            )
+        items.sort(key=lambda x: (-x["size"], -x["posts"]))
+        total = sum(i["size"] for i in items)
+        for i in items:
+            i["share"] = round(i["size"] / total * 100, 1) if total else 0.0
+        out[dim] = {"total_size": total, "items": items[:top]}
+    return out
+
+
+def _post_meta_by_paths(paths: set[str]) -> dict[str, dict[str, Any]]:
+    """按入库相对路径取帖子元信息（标题 / 版块），键为归一化后的相对路径。
+
+    与 _count_posts_by_paths 同一套 URL 形态展开（相对路径 + 展示域名完整 URL），
+    保证「失败缺口清单」显示的是帖子标题与版块，而不是一串裸链接。
+    库中查不到（帖子已被剔除 / 从未收录）时该路径不入结果，由调用方兜底为 url。
+    """
+    out: dict[str, dict[str, Any]] = {}
+    for r in _post_rows_by_paths(paths):
+        fid = r["fid"]
+        out[config.to_storage_path(str(r["url"]))] = {
+            "title": str(r["title"] or ""),
+            "fid": str(fid) if fid is not None else None,
+        }
+    return out
 
 
 def _count_by_fid(paths: set[str]) -> dict[str, int]:
@@ -1740,6 +1941,7 @@ def stats_assets(
             "by_fid": by_fid,
             "growth": growth,
             "goal": goal,
+            "source_usage": _source_usage(snap, res),
             "disk_total": disk_total,
             "disk_free": disk_free,
         }
@@ -2269,9 +2471,16 @@ class ResourceDeleteReq(BaseModel):
 
 
 class ResourceIdReq(BaseModel):
-    """按回收站条目 ID 操作（恢复 / 彻底删除）。"""
+    """按回收站条目 ID 操作（恢复）。"""
 
     id: str
+
+
+class ResourcePurgeReq(BaseModel):
+    """彻底删除请求体：`ids` 批量指定条目，或 `all_items=True` 清空回收站（二者不混用）。"""
+
+    ids: list[str] = []
+    all_items: bool = False
 
 
 @router.post("/resources/delete")
@@ -2334,9 +2543,15 @@ def resources_restore(_: DeleteRateLimit, req: ResourceIdReq) -> dict[str, Any]:
 
 
 @router.post("/resources/purge")
-def resources_purge(_: DeleteRateLimit, req: ResourceIdReq) -> dict[str, Any]:
-    """彻底删除：id 非空时删除该项，id 为空字符串时清空回收站全部条目。"""
-    r = resources.purge_trash(req.id)
+def resources_purge(_: DeleteRateLimit, req: ResourcePurgeReq) -> dict[str, Any]:
+    """彻底删除回收站条目：`ids` 批量指定，或 `all_items=True` 清空回收站。
+
+    批量入口同时承载「单条彻底删除」与「一键清理已过期项」两种前端动作——
+    前者传 1 个 ID，后者传列表页里 `expired=true` 的那些 ID。
+    """
+    if not req.ids and not req.all_items:
+        raise HTTPException(400, "未指定要彻底删除的条目")
+    r = resources.purge_trash(req.ids, all_items=req.all_items)
     if not r["ok"]:
         raise HTTPException(400, str(r["reason"]))
     # 彻底删除只动回收站副本，但为统一「文件状态变更即失效」的口径一并处理
@@ -2382,6 +2597,136 @@ def downloads_list() -> dict[str, Any]:
     tasks = download_tasks.manager.summary()
     tasks.sort(key=lambda t: t["created_at"], reverse=True)
     return {"tasks": tasks}
+
+
+class DownloadFailureItem(BaseModel):
+    """失败缺口清单的一条（帖级，与任务级「失败任务」是两个量纲）。"""
+
+    # 提交下载时的原始链接（与下载履历同源，可能是镜像 / 业务域名形态）
+    url: str
+    # 入库相对路径（/htm_data/...）：判重、去重与展示归属都以它为准
+    path: str
+    # 收录帖标题；未收录 / 已剔除时为空，前端回退显示链接
+    title: str = ""
+    fid: str | None = None
+    fid_name: str = ""
+    # 最近一次失败时间
+    fail_at: str = ""
+    # 最近一次失败原因（后端截断 200 字保存）
+    error: str = ""
+
+
+class DownloadFailuresResp(BaseModel):
+    """失败缺口清单：`count` 与资产卡 `state.failed` 严格同源（同一份 failures 派生）。"""
+
+    count: int = 0
+    items: list[DownloadFailureItem] = []
+
+
+@router.get("/downloads/failures")
+def downloads_failures() -> DownloadFailuresResp:
+    """失败缺口清单（资产卡「下载失败 N」的下钻落点）。
+
+    为什么单独成一个接口、而不是复用任务列表的状态筛选：
+    - **量纲不同**：本清单是「帖 / 链接级」的持久缺口（下载履历 `_history` 中
+      最近一次失败且此后未成功的条目），任务列表的 `failed` 是「任务级」状态；
+      一个失败任务可含多条失败链接，且任务被清空 / 按 MAX_KEEP 轮转后从列表消失，
+      缺口却依然存在。两个数字天然不等，混在一处只会让用户以为其中一个算错了。
+    - 业界口径（Sonarr/Radarr 的 Wanted→Missing、qBittorrent 的 Errored 条目）同样是
+      「缺失清单」与「任务历史」分栏承载，清单可逐条重试。
+    因此资产卡下钻到这里，任务页的「失败任务」筛选保留但仍按任务数计。
+    """
+    def _calc() -> dict[str, Any]:
+        failures = _asset_snapshot()["failures"]
+        # 一条失败记录一个条目（不按路径去重）：资产卡的 failed 就是 len(failures)，
+        # 这里逐条输出才能保证「卡上 N = 清单 N」——去重会凭空少几条。
+        paths = {config.to_storage_path(str(f["url"])) for f in failures}
+        meta = _post_meta_by_paths(paths)
+        items: list[dict[str, Any]] = []
+        for f in failures:
+            url = str(f["url"])
+            path = config.to_storage_path(url)
+            m = meta.get(path) or {}
+            fid = m.get("fid")
+            items.append(
+                {
+                    "url": url,
+                    "path": path,
+                    "title": str(m.get("title") or ""),
+                    "fid": fid,
+                    "fid_name": config.fid_name(fid) if fid else "",
+                    "fail_at": str(f.get("fail_at") or ""),
+                    "error": str(f.get("error") or ""),
+                }
+            )
+        # 最近失败的排前面（用户最先要处理的通常是刚出问题的那些）
+        items.sort(key=lambda x: x["fail_at"], reverse=True)
+        return {"count": len(items), "items": items}
+
+    return DownloadFailuresResp(**db.cached("download_failures_v1", _calc))
+
+
+class ReDownloadItem(BaseModel):
+    """可重下清单的一条（帖级，与资产卡 `state.re_download` 同源）。"""
+
+    # 可直接提交给 POST /api/downloads 的完整 URL（与本清单展示的路径同源，不会出现
+    # 「清单里是这个链接、下载中心却认成另一个帖子」）
+    url: str
+    # 入库相对路径（/htm_data/...）：判重与归属都以它为准
+    path: str
+    title: str = ""
+    fid: str | None = None
+    fid_name: str = ""
+    # 原保存目录名（已被资源管理清理，磁盘上已不存在）
+    dir: str = ""
+    # 首次落盘时间（取自下载履历，回答「什么时候下过」）
+    first_at: str = ""
+
+
+class ReDownloadsResp(BaseModel):
+    """可重下清单：`count` 与资产卡 `state.re_download` 严格同源（同一份 gone 派生）。"""
+
+    count: int = 0
+    items: list[ReDownloadItem] = []
+
+
+@router.get("/downloads/re-downloads")
+def downloads_re_downloads() -> ReDownloadsResp:
+    """可重下清单（资产卡「可重下 N」的下钻落点）。
+
+    为什么单独成接口（与 /downloads/failures 同一套理由）：
+    - **量纲不同**：这是「帖级」的 gone 集合（曾成功、目录已被资源管理清理），
+      任务列表的状态筛选里根本没有这一态，混进去只会让用户以为数字算错了；
+    - **必须同源**：卡上 `state.re_download = _count_posts_by_paths(gone)`，本清单用
+      同一份 gone、同一套 URL 形态展开取明细行（`_post_rows_by_paths`，与 COUNT 同 WHERE），
+      条数严格相等。刻意不用 `_post_meta_by_paths`——它按路径做 dict 会折叠重复行，
+      正是「卡上 N ≠ 清单 N」的经典成因。
+    - 行内动作：把 `url` 直接提交给 POST /api/downloads 即可重下；提交前判重会把这条识别为
+      「历史曾成功但文件已不在」（gone），不会误报重复。
+    """
+    def _calc() -> dict[str, Any]:
+        snap = _asset_snapshot()
+        rows = _post_rows_by_paths(snap["gone"])
+        items: list[dict[str, Any]] = []
+        for r in rows:
+            path = config.to_storage_path(str(r["url"]))
+            fid = r["fid"]
+            items.append(
+                {
+                    "url": db.normalize_url(str(r["url"])),
+                    "path": path,
+                    "title": str(r["title"] or ""),
+                    "fid": str(fid) if fid is not None else None,
+                    "fid_name": config.fid_name(str(fid)) if fid is not None else "",
+                    "dir": str(snap["dir_of"].get(path) or ""),
+                    "first_at": str(snap["first_at"].get(path) or ""),
+                }
+            )
+        # 最近下过的排前面（用户最可能想优先补回刚清理掉的那批）
+        items.sort(key=lambda x: x["first_at"], reverse=True)
+        return {"count": len(items), "items": items}
+
+    return ReDownloadsResp(**db.cached("re_downloads_v1", _calc))
 
 
 class DownloadCheckReq(BaseModel):

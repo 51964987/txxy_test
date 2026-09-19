@@ -573,17 +573,25 @@ def batch_delete(items: list[dict[str, Any]], permanent: bool) -> dict[str, Any]
     return {"ok": True, "deleted": deleted, "failed": failed}
 
 
+def _trash_age_days(it: dict[str, Any], keep: int, now: datetime) -> float:
+    """条目已保留天数（列表展示与过期判定共用同一处算法，避免两处各算一套）。
+
+    `deleted_at` 缺失 / 非法时回退为 `keep`，即按「尚未过期」处理：宁可让用户手动删，
+    也不让一条时间戳坏掉的记录被「清理过期项」顺手带走（那是不可恢复操作）。
+    """
+    try:
+        return (now - datetime.fromisoformat(str(it["deleted_at"]))).total_seconds() / 86400.0
+    except (ValueError, KeyError, TypeError):
+        return float(keep)
+
+
 def list_trash() -> dict[str, Any]:
     """回收站清单：含每项是否已过期与剩余保留天数（保留天数取当前设置值）"""
     keep = settings.get_int("trash_keep_days", config.TRASH_KEEP_DAYS)
     now = datetime.now()
     out: list[dict[str, Any]] = []
     for it in _load_trash():
-        try:
-            deleted = datetime.fromisoformat(it["deleted_at"])
-            age_days = (now - deleted).total_seconds() / 86400.0
-        except (ValueError, KeyError):
-            age_days = float(keep)
+        age_days = _trash_age_days(it, keep, now)
         out.append({**it, "expired": age_days > keep, "remain_days": max(0, math.ceil(keep - age_days))})
     return {"items": out, "keep_days": keep, "total_size": sum(int(i.get("size") or 0) for i in out)}
 
@@ -616,30 +624,49 @@ def restore_trash(item_id: str) -> dict[str, Any]:
     return {"ok": True, "rel": str(hit["rel"])}
 
 
-def purge_trash(item_id: str = "") -> dict[str, Any]:
-    """永久删除：指定 id 时删该项，id 为空时清空回收站全部条目"""
+def purge_trash(ids: list[str] | None = None, *, all_items: bool = False) -> dict[str, Any]:
+    """永久删除回收站条目（不可恢复）。
+
+    - `all_items=True`：清空回收站全部条目；
+    - 否则按 `ids` 批量删除。
+
+    批量是唯一实现：单条删除 = 只传 1 个 ID 的批量（不再保留一套单条分支，
+    否则守卫 / 统计口径迟早漂移）。返回值如实反映三种结果：
+    - `count`：确实删掉的条目数；
+    - `failed`：磁盘目录被占用 / 权限不足而没删掉的条目数——这些条目**保留在索引里**
+      （`remain` 按「没删掉就留着」推导），用户可重试，不会出现「索引没了但目录还在」的孤儿；
+    - `missing`：请求里未在回收站命中的 ID 数（并发下可能已被另一入口清掉，静默跳过）。
+      整批都没命中时直接失败，避免「点了没反应」被当成成功。
+    """
+    want = {str(i) for i in (ids or [])}
+    if not all_items and not want:
+        return {"ok": False, "reason": "未指定要彻底删除的条目"}
     with _trash_lock:
         items = _load_trash()
-        if item_id:
-            targets = [i for i in items if i.get("id") == item_id]
-            if not targets:
-                return {"ok": False, "reason": "回收站中不存在该项"}
-            remain = [i for i in items if i.get("id") != item_id]
-        else:
-            targets = list(items)
-            remain = []
-        count = 0
+        targets = list(items) if all_items else [i for i in items if str(i.get("id")) in want]
+        if not targets:
+            return {"ok": False, "reason": "回收站中不存在指定的条目"}
+        done: set[str] = set()
+        failed = 0
         for it in targets:
-            d = config.TRASH_DIR / str(it.get("id") or "")
-            if d.is_dir():
+            tid = str(it.get("id") or "")
+            d = config.TRASH_DIR / tid
+            if d.exists():
                 try:
                     shutil.rmtree(d)
                 except OSError:
+                    failed += 1
                     continue
-            count += 1
-        _save_trash(remain)
+            # 目录已不在（磁盘副本早被清掉）也算清理成功，索引项可安全移除
+            done.add(tid)
+        _save_trash([i for i in items if str(i.get("id")) not in done])
     invalidate_cache()
-    return {"ok": True, "count": count}
+    return {
+        "ok": True,
+        "count": len(done),
+        "failed": failed,
+        "missing": 0 if all_items else len(want - {str(i.get("id")) for i in targets}),
+    }
 
 
 # ================= 类型兼容操作（2026-09-01） =================

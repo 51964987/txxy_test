@@ -162,12 +162,25 @@ export interface FidMeta {
   latest_date: string | null
 }
 
+/**
+ * 下载状态四态（榜单行「已沉淀」状态标，2026-09-19）。
+ * 判据在后端与待下载推荐同源（asset_snapshot 一处实现），前端只上色展示：
+ * - fresh：从未下载（默认态，不展示标记）
+ * - downloaded：已落盘且文件仍在（已沉淀）
+ * - running：在途（排队 / 下载中）
+ * - re_download：曾成功但目录已被清理（可重下）
+ * 注意：榜单刻意不参与下载后刷新（§21.12 既定边界），该状态为进页时刻快照，
+ * 行内下载按钮仍可提交（判重弹窗兜底）。
+ */
+export type BoardItemState = 'fresh' | 'downloaded' | 'running' | 're_download'
+
 export interface BoardTop {
   fid: string
   name: string
   title: string
   url: string
   value: string
+  state?: BoardItemState
 }
 
 export interface Overview {
@@ -181,6 +194,11 @@ export interface Overview {
   today_str: string
   total_users: number
   active_users: number
+  /** 昨日活跃作者数（昨日为完整日，与 active_users 同为「当日发过帖的去重作者」口径） */
+  yesterday_users: number
+  /** 新作者（库内首次出现）：窗口为近 N 个完整日，不含今天（当日抓取未覆盖全天） */
+  new_authors_7d: number
+  new_authors_30d: number
 }
 
 export interface Boards {
@@ -198,6 +216,8 @@ export interface TodayTopItem {
   date: string
   /** 新入榜（仅本月最热计算，最新最热恒为 false） */
   is_new?: boolean
+  /** 下载状态四态（榜单行「已沉淀」状态标），枚举见 BoardItemState */
+  state?: BoardItemState
 }
 
 /** 榜单排序维度：综合互动量 / 点赞 / 回复 / 时间衰减热度 */
@@ -396,6 +416,29 @@ export interface AssetsGoal {
   reached: boolean
 }
 
+/** 来源占用单条（版块 / 作者） */
+export interface AssetsSourceUsageItem {
+  key: string
+  name: string
+  posts: number
+  dirs: number
+  size: number
+  /** 占该维度总占用的百分比 */
+  share: number
+}
+
+/** 来源占用单维度（版块 / 作者）Top 列表 */
+export interface AssetsSourceUsageDim {
+  total_size: number
+  items: AssetsSourceUsageItem[]
+}
+
+/** 来源占用（容量洞察卡「来源占用 Top」）：版块 / 作者两个维度各一份 Top */
+export interface AssetsSourceUsage {
+  fid: AssetsSourceUsageDim
+  author: AssetsSourceUsageDim
+}
+
 /**
  * 内容 → 资产漏斗 + 沉淀进度：收录 → 已沉淀帖 → 本地文件。
  * 口径要点：漏斗三级同量纲（计数）；体积走 disk_total/disk_free + type_breakdown；
@@ -415,6 +458,8 @@ export interface Assets {
   by_fid: AssetsFid[]
   growth: AssetsGrowthPoint[]
   goal: AssetsGoal
+  /** 来源占用 Top（版块 / 作者）：容量洞察卡「来源占用」用 */
+  source_usage: AssetsSourceUsage
   /** 存储卷总容量 / 可用容量（字节，0 = 未知） */
   disk_total: number
   disk_free: number
@@ -589,6 +634,17 @@ export interface TrashResp {
   total_size: number
 }
 
+/** 回收站彻底删除结果（count 为确实删掉的条目数；failed/missing 用于如实反馈） */
+export interface PurgeResult {
+  ok: boolean
+  /** 确实删除的条目数 */
+  count: number
+  /** 磁盘目录被占用 / 权限不足而未删除的条目数（保留在回收站可重试） */
+  failed: number
+  /** 请求中未在回收站命中的 ID 数（并发下可能已被另一入口清掉） */
+  missing: number
+}
+
 export interface ResourceItem {
   name: string
   file_count: number
@@ -692,6 +748,56 @@ export interface DownloadTaskDetail extends DownloadTaskSummary {
   urls: string[]
   items: DownloadItem[]
   logs: string[]
+}
+
+/**
+ * 失败缺口清单的一条（帖级）。
+ * 与任务级「失败任务」是两个量纲：一个失败任务可含多条失败链接，
+ * 且任务被清空 / 轮转后从任务列表消失，缺口依然存在。
+ */
+export interface DownloadFailureItem {
+  /** 提交下载时的原始链接 */
+  url: string
+  /** 入库相对路径（/htm_data/...） */
+  path: string
+  /** 收录帖标题；未收录 / 已剔除时为空，展示回退为链接 */
+  title: string
+  fid: string | null
+  fid_name: string
+  /** 最近一次失败时间 */
+  fail_at: string
+  /** 最近一次失败原因 */
+  error: string
+}
+
+/** 失败缺口清单响应：count 与资产卡 state.failed 严格同源（卡上 N = 清单 N 条） */
+export interface DownloadFailuresResp {
+  count: number
+  items: DownloadFailureItem[]
+}
+
+/**
+ * 可重下清单的一条（帖级）。
+ * 与「失败缺口」互斥且互补：那是「下过但没下成」，这是「下成过、文件已被资源管理清理」。
+ */
+export interface ReDownloadItem {
+  /** 可直接提交下载的完整链接（与清单内其它字段同源，不会指向另一个帖子） */
+  url: string
+  /** 入库相对路径（/htm_data/...） */
+  path: string
+  title: string
+  fid: string | null
+  fid_name: string
+  /** 原保存目录名（已被清理，磁盘上已不存在） */
+  dir: string
+  /** 首次落盘时间；无履历时为空 */
+  first_at: string
+}
+
+/** 可重下清单响应：count 与资产卡 state.re_download 严格同源（卡上 N = 清单 N 条） */
+export interface ReDownloadsResp {
+  count: number
+  items: ReDownloadItem[]
 }
 
 /**
@@ -821,7 +927,11 @@ export const api = {
     }),
   trashList: () => get<TrashResp>('/resources/trash'),
   restoreResource: (id: string) => post<{ ok: boolean; rel: string }>('/resources/restore', { id }),
-  purgeResource: (id: string) => post<{ ok: boolean; count: number }>('/resources/purge', { id }),
+  /** 彻底删除回收站条目（不可恢复）：传 ids 批量删除。
+   *  单条删除 = 只传 1 个 ID，「清理过期项」= 传所有 expired 条目的 ID —— 同一入口一套语义。 */
+  purgeResource: (ids: string[]) => post<PurgeResult>('/resources/purge', { ids }),
+  /** 清空回收站（all_items 与 ids 二选一，由后端校验） */
+  purgeAllTrash: () => post<PurgeResult>('/resources/purge', { all_items: true }),
   batchDeleteResource: (
     items: { path: string; is_dir: boolean }[],
     permanent: boolean,
@@ -835,6 +945,10 @@ export const api = {
     }>('/resources/batch-delete', undefined, { method: 'POST', body: { items, permanent }, dedupe: false, timeout: 0 }),
   submitDownload: (urls: string[]) => post<{ id: string; count: number }>('/downloads', { urls }),
   downloadTasks: () => get<{ tasks: DownloadTaskSummary[] }>('/downloads'),
+  /** 失败缺口清单（资产卡「下载失败 N」的下钻落点；与任务级 failed 不同量纲） */
+  downloadFailures: () => get<DownloadFailuresResp>('/downloads/failures'),
+  /** 可重下清单（资产卡「可重下 N」的下钻落点；帖级 gone 集合，与任务列表无关） */
+  downloadReDownloads: () => get<ReDownloadsResp>('/downloads/re-downloads'),
   downloadTask: (id: string) => get<DownloadTaskDetail>(`/downloads/${id}`),
   checkDownloadDup: (urls: string[]) =>
     post<DownloadDupResult>('/downloads/check-dup', { urls }),

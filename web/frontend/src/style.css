@@ -89,6 +89,16 @@ body {
   color: #10b981;
 }
 
+/* 发帖作者卡副行：一行一语义（今日更新 / 活跃率 → 昨日 / 近 7 日新增）。
+   .stat-sub 本身 flex-wrap: wrap，这里用 flex-basis: 100% 强制换行，行内小间距避免与
+   行间 10px 混同，读起来是「两组事实」而非「一串并列项」。 */
+.stat-sub .sub-line {
+  flex-basis: 100%;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
 .stat-sub .sub-down {
   color: #ef4444;
 }
@@ -181,6 +191,97 @@ body {
   color: var(--brand);
 }
 
+/* ===== 「帖子浏览」系清单表格共用单元样式 =====
+   PostsView 与 DownloadsView 的清单表格共用这一份（不各自复制），
+   让「DownloadsView 照搬 PostsView」由同一份 CSS 结构保证，杜绝两处漂移。
+   用法：两处 <el-table> 均加 class="post-table"（表头规则按该类限定，
+   避免影响其它页面的表格）。 */
+
+/* 表头：列标题与排序箭头必须同行显示。Element Plus 默认允许 .cell 换行，
+   窄列下箭头会被挤到第二行，导致表头高度不齐、点击排序时整表布局跳动。
+   业界表格（Ant Design / GitHub / Jira）的排序指示器一律与列标题同行。 */
+.post-table th.el-table__cell > .cell {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  /* 比默认的 12px 收窄，给窄列（点赞 / 回复）的「文字 + 箭头」腾出空间 */
+  padding-left: 6px;
+  padding-right: 6px;
+}
+
+/* 居中列（点赞 / 回复 / 操作）改成 flex 后，需要 justify-content 才能保持居中 */
+.post-table th.is-center > .cell {
+  justify-content: center;
+}
+
+/* 箭头不参与压缩，否则窄列下会被挤变形 */
+.post-table th.el-table__cell > .cell .caret-wrapper {
+  flex-shrink: 0;
+}
+
+/* 标题单元格：版块标签 + 标题同行。标签固定不压缩，标题超长省略，
+   两者用 flex 排版避免标题长短不一时标签位置跳动 */
+.title-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow: hidden;
+}
+
+.title-cell .title-link {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 版块标签：用与「数据总览 - 活跃版块」柱形图相同的版块色（--fid-color 由行内传入）。
+   底色 / 边框 / 文字都由该色用 color-mix 派生：
+   - 文字混入深色，保证色板里偏亮的颜色（如 #eab308 黄）在浅底上仍满足对比度
+   - 这是 GitHub Labels 的做法：一个品牌色派生出整套标签配色，而不是为每个色手写三套值 */
+.fid-chip {
+  flex-shrink: 0;
+  max-width: 104px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 1px 7px;
+  border-radius: 10px;
+  font-size: 12px;
+  line-height: 18px;
+  /* 混入比例按色板里最亮的 #84cc16 校准：文字混 50% 深色、底色只用 10%，
+     才能让最亮的版块也满足 WCAG AA 小字对比度 4.5:1（实测 4.56） */
+  color: color-mix(in srgb, var(--fid-color, var(--el-color-primary)) 50%, #1f2937);
+  background: color-mix(in srgb, var(--fid-color, var(--el-color-primary)) 10%, white);
+  border: 1px solid color-mix(in srgb, var(--fid-color, var(--el-color-primary)) 30%, white);
+}
+
+/* 黑名单标记：与版块标签同款 chips 排版（固定不压缩、flex 对齐），用警告橙突出，
+   提示该帖被大屏看板口径（posts_filtered）排除但不从浏览页剔除 */
+.bl-chip {
+  flex-shrink: 0;
+  padding: 1px 7px;
+  border-radius: 10px;
+  font-size: 12px;
+  line-height: 18px;
+  white-space: nowrap;
+  color: #b45309;
+  background: #fef3c7;
+  border: 1px solid #fcd34d;
+}
+
+/* 操作列：图标按钮单行不换行，消除相邻按钮默认 12px 间距 */
+.op-btns {
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
+}
+
+.op-btns .el-button + .el-button {
+  margin-left: 0;
+}
+
 /* ================= 移动端分页（全局）：修复窄屏页码错位 =================
    el-pagination 根元素默认 nowrap，total/sizes/pager/jumper 组合在手机上
    超出视口宽度后按钮挤出屏幕、压缩变形（全部 6 处分页统一在此修复）。
@@ -195,6 +296,30 @@ body {
   .el-pagination .el-pagination__sizes,
   .el-pagination .el-pagination__jump {
     display: none;
+  }
+}
+
+/* ================= 窄屏筛选条横向滑动（全局）：避免筛选项被裁掉 =================
+   el-segmented 是 inline-flex、按内容撑开（8 档实测约 460px），窄屏容器放不下时，
+   若祖先 overflow-x 为 hidden（.el-main 即为 hidden）会直接裁掉尾部选项且不可滚动 ——
+   资源管理页实测「云盘清单 / 文本 / 其他」三档右缘 397/447/497 > 视口 390，点不到。
+   业界移动端通行做法：筛选条自身横向滑动，选项全部可达（不做「窄屏换下拉」的第二套控件）。
+   使用方：资源管理（类型 8 档：工具栏 + 目录浏览抽屉）、下载中心（状态 6 档）。
+   断点取 768px（比布局层的 <768px 宽一档）：下载中心原实现即为 768px，
+   768px（iPad 竖屏）下其筛选条宽 638px 而可用宽仅 478px，收回 767px 会立刻被裁掉。
+   本块为唯一实现，页面内不得再写一份（见 CODEBUDDY.md 通用工程约束第 1 条）。 */
+.filter-scroll {
+  min-width: 0;
+}
+@media (max-width: 768px) {
+  .filter-scroll {
+    width: 100%;
+    overflow-x: auto;
+  }
+
+  /* 分段控件内部不允许换行，否则会折成两行而不是横向滑动 */
+  .filter-scroll .el-segmented__group {
+    flex-wrap: nowrap;
   }
 }
 

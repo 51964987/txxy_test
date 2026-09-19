@@ -39,6 +39,7 @@ const GROUPS: { title: string; desc?: string; keys: string[]; extra?: 'schedule'
       'scrape_schedule_times',
       'scrape_schedule_restart',
       'scrape_schedule_use_proxy',
+      'scrape_schedule_miss_tolerance',
     ],
   },
   {
@@ -319,11 +320,17 @@ async function save() {
 }
 
 async function resetOne(it: SettingItem) {
-  await ElMessageBox.confirm(
+  // 与 resetAll 同款写法：取消必须 return。此前用 .catch(() => false) 吞掉取消后
+  // 未拦截，继续执行 doReset——用户点「取消」也会恢复默认，确认弹窗形同虚设。
+  const ok = await ElMessageBox.confirm(
     `将「${it.label}」恢复为默认值 ${String(it.default)}，确定吗？`,
     '恢复默认',
     { type: 'warning', confirmButtonText: '恢复默认', cancelButtonText: '取消' },
-  ).catch(() => false)
+  ).then(
+    () => true,
+    () => false,
+  )
+  if (!ok) return
   await doReset([it.key])
 }
 

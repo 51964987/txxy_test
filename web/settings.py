@@ -104,6 +104,17 @@ WHITELIST: dict[str, dict[str, Any]] = {
         "scope": "immediate",
         "desc": "与手动「启动抓取」弹窗的开关同一含义；关＝直连业务域名",
     },
+    # 单位与 TXXY_SCRAPE_SCHEDULE_MISS_TOLERANCE 环境变量保持一致（秒），
+    # 同一参数两层入口（env / 页内）同一口径，避免换算引入第二份单位定义。
+    # min=60：小于 tick 间隔（60s）会让刚到点的时刻直接被判「错过」；
+    # max=3600：再大就违背「不补跑陈年批次」的 skip 策略初衷。
+    "scrape_schedule_miss_tolerance": {
+        "label": "错过容差（秒）",
+        "min": 60,
+        "max": 3600,
+        "scope": "immediate",
+        "desc": "晚于计划时刻超过该值即视为「当时服务未运行」，记为未执行且不补跑；默认 600（10 分钟）",
+    },
     "trash_keep_days": {
         "label": "回收站保留天数",
         "min": 1,
@@ -224,6 +235,8 @@ def _env_or_default(key: str) -> Any:
         return config.SCRAPE_SCHEDULE_RESTART
     if key == "scrape_schedule_use_proxy":
         return config.SCRAPE_SCHEDULE_USE_PROXY
+    if key == "scrape_schedule_miss_tolerance":
+        return config.SCRAPE_SCHEDULE_MISS_TOLERANCE
     if key == "share_host":
         return config.SHARE_HOST
     if key == "enable_auto_refresh":

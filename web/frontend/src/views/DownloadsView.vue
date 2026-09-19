@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import {
   ElMessage,
   ElMessageBox,
@@ -10,13 +11,20 @@ import {
   formatDuration,
   isAborted,
   sseUrl,
+  type DownloadFailureItem,
   type DownloadTaskDetail,
   type DownloadTaskSummary,
+  type ReDownloadItem,
 } from '../api'
+import { Download, Search } from '@element-plus/icons-vue'
 import { useAppStore } from '../stores/app'
 import { briefList } from '../utils/text'
+import { postOpenUrl, postPathOf } from '../utils/postUrl'
+import { colorForFid } from '../utils/fidColor'
 
 const app = useAppStore()
+const route = useRoute()
+const router = useRouter()
 /** 与布局层同一断点（<768px）：窄屏下表格列宽固定必然横向溢出，
  *  操作列会被截掉大半，故小屏改为卡片列表（与 ResourcesView 同一模式）。 */
 const isMobile = computed(() => app.isMobile)
@@ -28,6 +36,183 @@ const loading = ref(false)
 const error = ref('') // 轮询失败提示信息
 
 let pollTimer: number | null = null
+
+// ---- 视图：下载任务（任务级）/ 失败缺口（帖级） ----
+// 两者是**不同量纲**，混在一张列表里必然对不上数：
+// - 失败缺口 = 下载履历里「最近一次失败、此后未成功」的帖 / 链接，持久记录，
+//   任务被清空或按 TASK_MAX_KEEP 轮转后依然存在（资产卡「下载失败 N」就是它）；
+// - 失败任务 = 任务列表里 status === 'failed' 的任务数，一个任务可含多条失败链接，
+//   且会随任务清空 / 轮转消失。
+// 业界口径与此一致（Sonarr/Radarr 的 Wanted→Missing 与 Activity 分栏、qBittorrent 的 Errored 条目）；
+// 且下钻必须落到**与 KPI 同口径**的列表（Grafana/Datadog 的 drill-down 一致性），
+// 故资产卡下钻带 `?view=failures` 直达本视图，数字与清单条数严格相等。
+//
+// 第三视图「可重下」是「帖级 gone」：曾下载成功、此后目录被资源管理清理的帖。
+// 它不在任务列表（任务可能早已清空 / 轮转），也不在失败缺口（那批从未下成过），
+// 三者量纲互不相同，故各自独立分栏，且各自落一个与卡上数字严格同源的清单接口。
+type ViewName = 'tasks' | 'failures' | 're-downloads'
+const view = computed<ViewName>(() => {
+  const q = route.query.view
+  return q === 'failures' || q === 're-downloads' ? q : 'tasks'
+})
+/** 视图切换写入 URL query：刷新 / 前进后退 / 二次下钻都能保持同一视图 */
+function setView(v: string | number | boolean) {
+  const name = String(v)
+  router.replace({ path: '/downloads', query: name === 'tasks' ? {} : { view: name } })
+}
+
+const failures = ref<DownloadFailureItem[]>([])
+const failuresLoading = ref(false)
+
+// ---- 可重下清单（帖级 gone）----
+const reDownloads = ref<ReDownloadItem[]>([])
+const reDownloadsLoading = ref(false)
+
+// ---- 两帖级清单的筛选（参考帖子浏览：关键词跨 版块/标题/链接 模糊匹配）----
+const failSearch = ref('')
+const reSearch = ref('')
+function _match<T extends { fid_name: string; title: string; url: string }>(
+  items: T[],
+  q: string,
+): T[] {
+  const k = q.trim().toLowerCase()
+  if (!k) return items
+  return items.filter(
+    (r) =>
+      (r.fid_name && r.fid_name.toLowerCase().includes(k)) ||
+      (r.title && r.title.toLowerCase().includes(k)) ||
+      r.url.toLowerCase().includes(k),
+  )
+}
+const filteredFailures = computed(() => _match(failures.value, failSearch.value))
+const filteredReDownloads = computed(() => _match(reDownloads.value, reSearch.value))
+// 输入即回到第 1 页（筛选后停留越界页会显示空列表）
+function onFailSearch() {
+  failPage.value = 1
+}
+function onReSearch() {
+  rePage.value = 1
+}
+
+/** 视图切换项：把各自的条数直接标在选项上（切换时无需先点进去才知道有多少） */
+const viewOptions = computed(() => [
+  { label: `下载任务（${tasks.value.length}）`, value: 'tasks' },
+  { label: `失败缺口（${failures.value.length}）`, value: 'failures' },
+  { label: `可重下（${reDownloads.value.length}）`, value: 're-downloads' },
+])
+
+/** 失败缺口清单（接口与资产卡同源：卡上 N = 清单 N 条）。
+ *
+ *  自带「在途则跳过」守卫：api 层对同 URL 请求会中止前一个在途请求，
+ *  而本函数会被挂载与任务变化同时触发——不守卫就会出现「后发的把先发的掐掉」，
+ *  徽标与清单要等下一轮才补上（实测表现为下钻后短暂显示 0 条）。 */
+let failuresInflight = false
+async function loadFailures(first = false) {
+  if (failuresInflight) return
+  if (first && !failures.value.length) failuresLoading.value = true
+  failuresInflight = true
+  try {
+    const r = await api.downloadFailures()
+    failures.value = r.items
+  } catch {
+    // 静默：保留旧值，等下一轮刷新（与页面其它补充数据同容错策略）
+  } finally {
+    failuresInflight = false
+    failuresLoading.value = false
+  }
+}
+
+/** 可重下清单（与失败缺口同一套守卫策略：在途跳过、失败静默保留旧值） */
+let reDownloadsInflight = false
+async function loadReDownloads(first = false) {
+  if (reDownloadsInflight) return
+  if (first && !reDownloads.value.length) reDownloadsLoading.value = true
+  reDownloadsInflight = true
+  try {
+    const r = await api.downloadReDownloads()
+    reDownloads.value = r.items
+  } catch {
+    // 静默：保留旧值，等下一轮刷新
+  } finally {
+    reDownloadsInflight = false
+    reDownloadsLoading.value = false
+  }
+}
+
+// 缺口清单分页：与「帖子浏览」同款——前端切片 + 顶/底双分页条 + 每页条数可选（[20,50,100,200]）。
+// 数据已在内存（接口全量返回），故无需后端分页；双分页条与帖子浏览一致（长列表滚到顶也能翻页）。
+const failPage = ref(1)
+const failPageSize = ref(20)
+
+// ---- 两帖级清单的表头排序（参考帖子浏览：sortable="custom" + @sort-change 三态）----
+// 数据已在内存，故排序对**全量过滤结果**生效后再切片分页；不能用 el-table 本地排序
+// （本地排序只作用于当前页，等于没排——与帖子浏览「分页列表必须走服务端排序」同一结论，
+//  此处因数据本就全量在前端，故在切片前排序等价于服务端排序的效果）。
+type SortState = { prop: string; order: 'ascending' | 'descending' | null }
+const failSort = ref<SortState>({ prop: '', order: null })
+const reSort = ref<SortState>({ prop: '', order: null })
+
+/** 按排序状态排序全量数组：空值恒沉底（与「-」占位一致），文本按 localeCompare 比较 */
+function sortItems<T>(items: T[], s: SortState): T[] {
+  if (!s.prop || !s.order) return items
+  const dir = s.order === 'ascending' ? 1 : -1
+  const at = (o: T): unknown => (o as unknown as Record<string, unknown>)[s.prop]
+  return [...items].sort((a, b) => {
+    const av = at(a)
+    const bv = at(b)
+    const ae = av === undefined || av === null || av === ''
+    const be = bv === undefined || bv === null || bv === ''
+    if (ae && be) return 0
+    if (ae) return 1 // 空值恒沉底，不随升降序翻转
+    if (be) return -1
+    return String(av).localeCompare(String(bv)) * dir
+  })
+}
+
+/** 表头三态：升序 → 降序 → 取消（取消即回接口原始顺序）；排序变化回第 1 页 */
+function onFailSortChange(s: { prop: string | null; order: 'ascending' | 'descending' | null }) {
+  failSort.value = { prop: s.prop ?? '', order: s.order }
+  failPage.value = 1
+}
+
+const pagedFailures = computed(() =>
+  sortItems(filteredFailures.value, failSort.value).slice(
+    (failPage.value - 1) * failPageSize.value,
+    failPage.value * failPageSize.value,
+  ),
+)
+// 可重下清单分页：与失败缺口共用同一分页模式（不另起一套分页参数）
+const rePage = ref(1)
+const rePageSize = ref(20)
+function onReSortChange(s: { prop: string | null; order: 'ascending' | 'descending' | null }) {
+  reSort.value = { prop: s.prop ?? '', order: s.order }
+  rePage.value = 1
+}
+const pagedReDownloads = computed(() =>
+  sortItems(filteredReDownloads.value, reSort.value).slice(
+    (rePage.value - 1) * rePageSize.value,
+    rePage.value * rePageSize.value,
+  ),
+)
+/** 分页回调（与帖子浏览同签名）：翻页只切页码；改每页条数后回到第 1 页，避免停留在越界页 */
+function onFailPageChange(p: number) {
+  failPage.value = p
+}
+function onFailSizeChange(s: number) {
+  failPageSize.value = s
+  failPage.value = 1
+}
+function onRePageChange(p: number) {
+  rePage.value = p
+}
+function onReSizeChange(s: number) {
+  rePageSize.value = s
+  rePage.value = 1
+}
+watch(view, () => {
+  failPage.value = 1
+  rePage.value = 1
+})
 
 // ---- D8 提交区：多行粘贴自动拆解 URL ----
 const inputText = ref('') // 原始输入（每行一个 URL，兼容分号/逗号/空格分隔）
@@ -75,7 +260,8 @@ const filterOptions = computed(() => [
   { label: `进行中（${activeCount.value}）`, value: 'active' },
   { label: `已暂停（${pausedCount.value}）`, value: 'paused' },
   { label: `已完成（${doneCount.value}）`, value: 'done' },
-  { label: `失败（${failedCount.value}）`, value: 'failed' },
+  // 明确写「失败任务」：与「失败缺口（帖）」区分量纲，避免两个数字被当成同一个（见 view 注释）
+  { label: `失败任务（${failedCount.value}）`, value: 'failed' },
   { label: `已取消（${cancelledCount.value}）`, value: 'cancelled' },
 ])
 /** 状态展示优先级：正在下载 → 排队中 → 已暂停 → 失败 → 已取消 → 已完成。
@@ -655,6 +841,34 @@ async function retryItem(row: { url: string; status: string }) {
   }
 }
 
+// ---- 帖级清单（失败缺口 / 可重下）共用：逐条重下 ----
+/** 按链接新建任务重下（两个帖级清单共用这一份实现）。
+ *
+ *  与提交区 `submitUrls` 的差别（刻意，不是重复实现）：
+ *  这两类条目必然「本地无文件」——缺口是没下成过、可重下是文件已被清理——
+ *  故无需「文件仍在 / 已不在」的确认；真正要挡的只有**并发写同一文件**：
+ *  该链接正在下载中就直接跳过并提示。
+ *
+ *  刷新范围：任务列表（新建了任务）+ 两个帖级清单（重下成功后该条目应退出清单）。
+ */
+async function redownloadByUrl(url: string) {
+  try {
+    const dup = await api.checkDownloadDup([url])
+    if (dup.running.includes(url)) {
+      ElMessage.warning('该链接正在下载中，无需重复提交')
+      return
+    }
+    await api.submitDownload([url])
+    ElMessage.success('已创建下载任务，可在「下载任务」视图查看进度')
+    await loadTasks()
+    await loadFailures()
+    await loadReDownloads()
+  } catch (e) {
+    if (isAborted(e)) return
+    ElMessage.error(`重新下载失败: ${(e as Error).message}`)
+  }
+}
+
 /** 日志指纹：行数 + 末行内容，任一变化即视为有新输出 */
 const detailLogKey = computed(() => {
   const logs = detailTask.value?.logs ?? []
@@ -722,13 +936,35 @@ function itemText(status: string): string {
 }
 
 // ---- 任务更新通道：R2 SSE 实时推送为主，3s 轮询作为断线降级 ----
+/** 任务列表指纹：任一任务的状态 / 进度变化即视为「列表变了」 */
+function taskSignature(list: DownloadTaskSummary[]): string {
+  return list.map((t) => `${t.id}:${t.status}:${t.done}/${t.total}`).join('|')
+}
+let taskSig = ''
+
+/** 应用任务列表的唯一入口（SSE 与轮询共用）：只在内容真的变化时才做副作用，
+ *  否则 SSE 每 500ms 一帧会导致通知与缺口清单被反复重取。 */
+function applyTasks(list: DownloadTaskSummary[]) {
+  const sig = taskSignature(list)
+  const changed = sig !== taskSig
+  taskSig = sig
+  tasks.value = list
+  diffAndNotify(list)
+  if (detailVisible.value && detailId.value) void fetchDetail()
+  // 失败缺口由下载履历派生：任务推进 / 收尾会改变缺口，任务侧有变化就顺带刷新
+  // （接口 5s TTL 缓存 + 写接口已失效，这里不会造成风暴）
+  // 可重下清单同样由任务推进派生（重下成功后该帖应立刻退出清单），一并刷新
+  if (changed) {
+    void loadFailures()
+    void loadReDownloads()
+  }
+}
+
 async function loadTasks() {
   try {
     const r = await api.downloadTasks()
     error.value = ''
-    tasks.value = r.tasks
-    diffAndNotify(r.tasks)
-    if (detailVisible.value && detailId.value) void fetchDetail()
+    applyTasks(r.tasks)
   } catch (e) {
     if (isAborted(e)) return
     error.value = (e as Error).message
@@ -767,9 +1003,7 @@ function startSse() {
     error.value = ''
     stopPolling()
     const list = JSON.parse((e as MessageEvent).data) as DownloadTaskSummary[]
-    tasks.value = list
-    diffAndNotify(list)
-    if (detailVisible.value && detailId.value) void fetchDetail()
+    applyTasks(list)
   })
   es.onopen = () => {
     usingSse.value = true
@@ -784,6 +1018,9 @@ function startSse() {
 
 onMounted(() => {
   void loadTasks()
+  // 缺口清单与任务列表并行取：视图切换徽标上的数字需要它，且它是下钻落点的数据源
+  void loadFailures(true)
+  void loadReDownloads(true)
   startSse()
   startPolling() // SSE 首帧到达前的兜底（收到首帧后自动停止）
   document.addEventListener('visibilitychange', onVisibility)
@@ -801,6 +1038,24 @@ onBeforeUnmount(() => {
 
 <template>
   <div v-loading="loading">
+    <!-- 视图切换：下载任务（任务级）/ 失败缺口（帖级）/ 可重下（帖级 gone）。
+         三者量纲不同、互不覆盖，故分栏承载；资产卡下钻带 ?view=failures / ?view=re-downloads 直达 -->
+    <div class="view-switch">
+      <!-- 不用 v-model：view 是从 URL query 派生的只读 computed，写值统一走 setView 同步回 URL -->
+      <el-segmented :model-value="view" :options="viewOptions" @change="setView" />
+      <span class="view-hint text-muted">
+        <template v-if="view === 'failures'">
+          帖级口径：卡上「下载失败 N」= 此处 N 条
+        </template>
+        <template v-else-if="view === 're-downloads'">
+          帖级口径：卡上「可重下 N」= 此处 N 条（曾下载成功、目录已被资源管理清理）
+        </template>
+        <template v-else>任务级口径：下方「失败任务」按任务计数，与「失败缺口」的帖数不同</template>
+      </span>
+    </div>
+
+    <!-- ===== 下载任务视图 ===== -->
+    <template v-if="view === 'tasks'">
     <!-- 统计卡片 -->
     <div class="stat-grid">
       <div class="stat-card">
@@ -835,7 +1090,8 @@ onBeforeUnmount(() => {
           <el-icon><CircleClose /></el-icon>
         </div>
         <div>
-          <div class="stat-label">失败</div>
+          <!-- 明确「任务」二字：与「失败缺口」的帖数区分量纲（此前都叫「失败」，数字必然对不上） -->
+          <div class="stat-label">失败任务</div>
           <div class="stat-value">{{ failedCount }}</div>
         </div>
       </div>
@@ -1092,6 +1348,273 @@ onBeforeUnmount(() => {
 
       <el-empty v-if="!isMobile && tasks.length === 0 && !error" description="暂无下载任务，可在上方粘贴链接提交" />
     </div>
+    </template>
+
+    <!-- ===== 失败缺口视图（资产卡「下载失败」的下钻落点，与卡上数字同源同口径） ===== -->
+    <div v-else-if="view === 'failures'">
+      <div class="fail-head">
+        <span class="text-muted">
+          最近一次下载失败、此后未成功的帖：来自下载履历的持久记录，清空任务中心也不会消失。
+          这是帖 / 链接数（一个失败任务可含多条失败链接），与「失败任务」的任务数不是同一口径。
+        </span>
+      </div>
+
+      <!-- 筛选（与帖子浏览同款：带「关键词」标签的模糊搜索，跨 版块/标题/链接） -->
+      <div class="page-card filter-bar">
+        <div class="filter-row">
+          <div class="filter-item grow">
+            <span class="filter-label">关键词</span>
+            <el-input
+              v-model="failSearch"
+              placeholder="搜索版块 / 标题 / 链接（模糊匹配）"
+              clearable
+              @keyup.enter="onFailSearch"
+              @clear="onFailSearch"
+            >
+              <template #append>
+                <el-button :icon="Search" @click="onFailSearch" />
+              </template>
+            </el-input>
+          </div>
+        </div>
+      </div>
+
+      <!-- 列表：与「帖子浏览」同一套「表格 + 顶/底双分页条」样式 -->
+      <div class="page-card" style="margin-top: 16px">
+        <template v-if="!isMobile">
+          <!-- 顶部分页：与帖子浏览一致（长列表滚到顶也能翻页） -->
+          <div class="pager pager-top">
+            <el-pagination
+              background
+              layout="total, sizes, prev, pager, next, jumper"
+              :total="filteredFailures.length"
+              :current-page="failPage"
+              :page-size="failPageSize"
+              :page-sizes="[20, 50, 100, 200]"
+              @current-change="onFailPageChange"
+              @size-change="onFailSizeChange"
+            />
+          </div>
+
+          <el-table
+            class="post-table"
+            v-loading="failuresLoading"
+            :data="pagedFailures"
+            size="default"
+            empty-text="暂无数据"
+            style="width: 100%"
+            @sort-change="onFailSortChange"
+          >
+            <!-- 标题：版块标签已合并进本列（与「帖子浏览」同款 .title-cell：标签前置 + 标题省略，
+                 标题为空时回落显示链接路径）；表头按帖子浏览做法支持排序
+                 （sortable="custom" + @sort-change 三态，实际排序见 onFailSortChange / sortItems） -->
+            <el-table-column prop="title" label="标题" min-width="520" sortable="custom">
+              <template #default="{ row }">
+                <div class="title-cell">
+                  <span v-if="row.fid_name" class="fid-chip" :style="{ '--fid-color': colorForFid(row.fid) }" :title="row.fid_name">{{ row.fid_name }}</span>
+                  <a class="title-link" :href="postOpenUrl(row.url)" target="_blank" rel="noopener" :title="row.title || postPathOf(row.url) || row.url">{{ row.title || postPathOf(row.url) || row.url }}</a>
+                </div>
+              </template>
+            </el-table-column>
+            <el-table-column prop="fail_at" label="失败时间" min-width="120" show-overflow-tooltip sortable="custom">
+              <template #default="{ row }"><span class="text-muted">{{ row.fail_at || '-' }}</span></template>
+            </el-table-column>
+            <el-table-column label="操作" width="100" align="center" class-name="op-col">
+              <template #default="{ row }">
+                <div class="op-btns">
+                  <el-tooltip content="重新下载" placement="top">
+                    <el-button link type="success" :icon="Download" @click="redownloadByUrl(row.url)" />
+                  </el-tooltip>
+                </div>
+              </template>
+            </el-table-column>
+            <template #empty>
+              <span class="text-muted">{{ failSearch && filteredFailures.length === 0 && failures.length > 0 ? '没有匹配的帖子' : '没有失败缺口：下载过的帖子都已在本地有文件' }}</span>
+            </template>
+          </el-table>
+
+          <!-- 底部分页：与顶部同状态 -->
+          <div class="pager">
+            <el-pagination
+              background
+              layout="total, sizes, prev, pager, next, jumper"
+              :total="filteredFailures.length"
+              :current-page="failPage"
+              :page-size="failPageSize"
+              :page-sizes="[20, 50, 100, 200]"
+              @current-change="onFailPageChange"
+              @size-change="onFailSizeChange"
+            />
+          </div>
+        </template>
+
+        <!-- 窄屏卡片列表（isMobile）：主信息 + 副信息 + 操作，操作按钮全部可见、无横向滚动 -->
+        <div v-else class="fail-cards">
+          <div v-for="row in pagedFailures" :key="row.url" class="fail-card">
+            <div class="fc-row">
+              <span class="fc-k">标题</span>
+              <span class="fc-v">
+                <span v-if="row.fid_name" class="fid-chip" :style="{ '--fid-color': colorForFid(row.fid) }" :title="row.fid_name">{{ row.fid_name }}</span>
+                <a class="title-link" :href="postOpenUrl(row.url)" target="_blank" rel="noopener" :title="row.title || postPathOf(row.url) || row.url">{{ row.title || postPathOf(row.url) || row.url }}</a>
+              </span>
+            </div>
+            <div class="fc-row">
+              <span class="fc-k">失败时间</span>
+              <span class="fc-v text-muted">{{ row.fail_at || '-' }}</span>
+            </div>
+            <div class="fc-ops">
+              <el-button size="small" type="warning" link @click="redownloadByUrl(row.url)">重新下载</el-button>
+            </div>
+          </div>
+          <el-empty v-if="!filteredFailures.length" :description="failSearch && failures.length > 0 ? '没有匹配的帖子' : '没有失败缺口：下载过的帖子都已在本地有文件'" />
+          <div v-else class="pager">
+            <el-pagination
+              background
+              layout="total, sizes, prev, pager, next, jumper"
+              :total="filteredFailures.length"
+              :current-page="failPage"
+              :page-size="failPageSize"
+              :page-sizes="[20, 50, 100, 200]"
+              @current-change="onFailPageChange"
+              @size-change="onFailSizeChange"
+            />
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 可重下视图（资产卡「可重下」的下钻落点，与卡上数字同源同口径） =====
+         刻意复用缺口清单的行结构（.fail-*）：两者都是「帖级一行 + 右侧重下按钮」，
+         另起一套样式只会带来两处漂移（对齐、窄屏折行、配色都得改两遍） -->
+    <div v-else>
+      <div class="fail-head">
+        <span class="text-muted">
+          曾下载成功、此后目录被资源管理清理的帖：重新下载即可补回本地。
+          与「失败缺口」互不重叠（那是下过但没下成），条数等于资产卡「可重下 N」。
+        </span>
+      </div>
+
+      <!-- 筛选（与帖子浏览同款：带「关键词」标签的模糊搜索，跨 版块/标题/链接） -->
+      <div class="page-card filter-bar">
+        <div class="filter-row">
+          <div class="filter-item grow">
+            <span class="filter-label">关键词</span>
+            <el-input
+              v-model="reSearch"
+              placeholder="搜索版块 / 标题 / 链接（模糊匹配）"
+              clearable
+              @keyup.enter="onReSearch"
+              @clear="onReSearch"
+            >
+              <template #append>
+                <el-button :icon="Search" @click="onReSearch" />
+              </template>
+            </el-input>
+          </div>
+        </div>
+      </div>
+
+      <!-- 列表：与「帖子浏览」「失败缺口」同一套「表格 + 顶/底双分页条」样式 -->
+      <div class="page-card" style="margin-top: 16px">
+        <template v-if="!isMobile">
+          <div class="pager pager-top">
+            <el-pagination
+              background
+              layout="total, sizes, prev, pager, next, jumper"
+              :total="filteredReDownloads.length"
+              :current-page="rePage"
+              :page-size="rePageSize"
+              :page-sizes="[20, 50, 100, 200]"
+              @current-change="onRePageChange"
+              @size-change="onReSizeChange"
+            />
+          </div>
+
+          <el-table
+            class="post-table"
+            v-loading="reDownloadsLoading"
+            :data="pagedReDownloads"
+            size="default"
+            empty-text="暂无数据"
+            style="width: 100%"
+            @sort-change="onReSortChange"
+          >
+            <!-- 标题：版块标签已合并进本列（与「帖子浏览」同款 .title-cell：标签前置 + 标题省略，
+                 标题为空时回落显示链接路径）；表头按帖子浏览做法支持排序
+                 （sortable="custom" + @sort-change 三态，实际排序见 onReSortChange / sortItems） -->
+            <el-table-column prop="title" label="标题" min-width="520" sortable="custom">
+              <template #default="{ row }">
+                <div class="title-cell">
+                  <span v-if="row.fid_name" class="fid-chip" :style="{ '--fid-color': colorForFid(row.fid) }" :title="row.fid_name">{{ row.fid_name }}</span>
+                  <a class="title-link" :href="postOpenUrl(row.url)" target="_blank" rel="noopener" :title="row.title || postPathOf(row.url) || row.url">{{ row.title || postPathOf(row.url) || row.url }}</a>
+                </div>
+              </template>
+            </el-table-column>
+            <el-table-column prop="first_at" label="首次下载时间" min-width="120" show-overflow-tooltip sortable="custom">
+              <template #default="{ row }"><span class="text-muted">{{ row.first_at || '-' }}</span></template>
+            </el-table-column>
+            <el-table-column label="操作" width="100" align="center" class-name="op-col">
+              <template #default="{ row }">
+                <div class="op-btns">
+                  <el-tooltip content="重新下载" placement="top">
+                    <el-button link type="success" :icon="Download" @click="redownloadByUrl(row.url)" />
+                  </el-tooltip>
+                </div>
+              </template>
+            </el-table-column>
+            <template #empty>
+              <span class="text-muted">{{ reSearch && filteredReDownloads.length === 0 && reDownloads.length > 0 ? '没有匹配的帖子' : '没有可重下的帖：下载过的帖子在本地都有文件' }}</span>
+            </template>
+          </el-table>
+
+          <div class="pager">
+            <el-pagination
+              background
+              layout="total, sizes, prev, pager, next, jumper"
+              :total="filteredReDownloads.length"
+              :current-page="rePage"
+              :page-size="rePageSize"
+              :page-sizes="[20, 50, 100, 200]"
+              @current-change="onRePageChange"
+              @size-change="onReSizeChange"
+            />
+          </div>
+        </template>
+
+        <!-- 窄屏卡片列表（isMobile） -->
+        <div v-else class="fail-cards">
+          <div v-for="row in pagedReDownloads" :key="row.url" class="fail-card">
+            <div class="fc-row">
+              <span class="fc-k">标题</span>
+              <span class="fc-v">
+                <span v-if="row.fid_name" class="fid-chip" :style="{ '--fid-color': colorForFid(row.fid) }" :title="row.fid_name">{{ row.fid_name }}</span>
+                <a class="title-link" :href="postOpenUrl(row.url)" target="_blank" rel="noopener" :title="row.title || postPathOf(row.url) || row.url">{{ row.title || postPathOf(row.url) || row.url }}</a>
+              </span>
+            </div>
+            <div class="fc-row">
+              <span class="fc-k">首次下载时间</span>
+              <span class="fc-v text-muted">{{ row.first_at || '-' }}</span>
+            </div>
+            <div class="fc-ops">
+              <el-button size="small" type="warning" link @click="redownloadByUrl(row.url)">重新下载</el-button>
+            </div>
+          </div>
+          <el-empty v-if="!filteredReDownloads.length" :description="reSearch && reDownloads.length > 0 ? '没有匹配的帖子' : '没有可重下的帖：下载过的帖子在本地都有文件'" />
+          <div v-else class="pager">
+            <el-pagination
+              background
+              layout="total, sizes, prev, pager, next, jumper"
+              :total="filteredReDownloads.length"
+              :current-page="rePage"
+              :page-size="rePageSize"
+              :page-sizes="[20, 50, 100, 200]"
+              @current-change="onRePageChange"
+              @size-change="onReSizeChange"
+            />
+          </div>
+        </div>
+      </div>
+    </div>
 
     <!-- 任务详情抽屉（R1：明细按需加载） -->
     <el-drawer
@@ -1270,6 +1793,128 @@ onBeforeUnmount(() => {
   }
 }
 
+/* 视图切换（下载任务 / 失败缺口）+ 当前视图的口径提示：窄屏换行显示，不裁剪选项 */
+.view-switch {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.view-hint {
+  font-size: 12px;
+}
+
+/* ===== 失败缺口 / 可重下 两清单的筛选栏（与帖子浏览同款：带「关键词」标签的模糊搜索） ===== */
+.filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+}
+
+.filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+}
+
+.filter-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.filter-item.grow {
+  flex: 1;
+  min-width: 220px;
+}
+
+.filter-label {
+  color: #606266;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+/* 标题链接（.title-link）、版块标签（.fid-chip）等清单表格单元样式，
+   与「帖子浏览」共用全局 style.css 的「帖子浏览系清单表格共用单元样式」段，
+   本文件不再重复定义，避免两处漂移。 */
+
+/* 窄屏（isMobile，<768px）：失败缺口 / 可重下清单改为单列卡片
+   （与任务列表 .task-cards 同一模式），操作按钮全部可见、不产生横向滚动条 */
+.fail-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.fail-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--el-border-color-lighter, #ebeef5);
+  border-radius: 8px;
+}
+
+.fail-card .fc-row {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.fail-card .fc-k {
+  flex: 0 0 56px;
+  color: #909399;
+  font-size: 12px;
+}
+
+.fail-card .fc-v {
+  flex: 1 1 auto;
+  min-width: 0;
+  word-break: break-all;
+}
+
+.fail-card .fc-ops {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 2px;
+}
+
+/* 标题为空时回落显示链接路径：已随标题统一走全局 .title-link 配色，
+   不再单独定义 .fail-name-url。 */
+
+/* ===== 失败缺口 / 可重下 清单：与「帖子浏览」同一套「表格 + 顶/底双分页条」样式 ===== */
+.fail-head {
+  margin-bottom: 12px;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+/* 分页条：与帖子浏览一致——组件撑满卡片宽度，total 靠左、翻页控件靠右。
+   顶部分页紧贴筛选/表格上方，底部分页对称置于表格下方 */
+.pager {
+  margin-top: 14px;
+  display: flex;
+}
+
+.pager :deep(.el-pagination) {
+  width: 100%;
+}
+
+.pager :deep(.el-pagination__total) {
+  margin-right: auto;
+}
+
+.pager-top {
+  margin-top: 12px;
+  margin-bottom: 0;
+}
+
 .submit-box {
   border: 1px dashed var(--app-border, #dcdfe6);
   border-radius: 8px;
@@ -1305,10 +1950,8 @@ onBeforeUnmount(() => {
   flex-wrap: wrap;
 }
 
-/* 状态筛选项较多（6 个），窄屏放不下时由该层横向滑动（见移动端媒体查询） */
-.filter-scroll {
-  min-width: 0;
-}
+/* 状态筛选项较多（6 个），窄屏放不下时由 .filter-scroll 横向滑动；
+   该类已抽到全局 style.css（资源管理页同用），此处不再重复定义。 */
 
 /* 右侧操作组：勾选提示 + 主操作按钮（开始下载 / 全部暂停）+ 清空已完成 */
 .toolbar-right {
@@ -1503,16 +2146,6 @@ onBeforeUnmount(() => {
   /* 手机屏高度紧张，日志窗略矮 */
   .detail-log-scroll {
     height: 200px;
-  }
-
-  /* 6 个状态筛选项在窄屏放不下：外层横向滑动，避免选项被裁掉（点击仍可用） */
-  .filter-scroll {
-    width: 100%;
-    overflow-x: auto;
-  }
-
-  .filter-scroll :deep(.el-segmented__group) {
-    flex-wrap: nowrap;
   }
 
   /* 操作组独占一行：主操作按钮在手机上更好点，不被筛选项挤到折行之外 */

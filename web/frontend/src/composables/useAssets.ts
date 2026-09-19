@@ -90,7 +90,11 @@ export function useAssets() {
         num: s.failed,
         color: '#f56c6c',
         cls: s.failed ? 'is-bad' : '',
-        title: '最近一次下载失败、此后未成功的帖数（持久记录，清空任务中心不会丢）',
+        clickable: true,
+        title:
+          '最近一次下载失败、此后未成功的帖数（持久记录，清空任务中心不会丢）。'
+          + '注意这是「帖 / 链接数」：下载中心按任务统计的「失败任务」是另一个量纲'
+          + '（一个任务可含多条失败链接），两者数字天然不同。点击查看失败缺口清单',
       },
       {
         key: 're_download',
@@ -98,7 +102,10 @@ export function useAssets() {
         num: s.re_download,
         color: '#e6a23c',
         cls: '',
-        title: '曾下载成功、但文件已被资源管理清理的帖数',
+        clickable: true,
+        title:
+          '曾下载成功、但文件已被资源管理清理的帖数（与「失败」互补：那是没下成，这是下成过又没了）。'
+          + '点击查看可重下清单，可在清单里直接重新下载补回本地',
       },
       {
         key: 'empty_dirs',
@@ -120,9 +127,13 @@ export function useAssets() {
     ]
   })
 
-  /** 状态项点击：缺口项下钻到帖子页（与「未下载」筛选同口径；其余项无动作） */
+  /** 状态项点击：可下钻的两项各落到与卡上数字**同源同口径**的清单
+ *  （失败 → 下载中心「失败缺口」；可重下 → 下载中心「可重下」）；其余走缺口筛选 */
   function onStateClick(r: AssetStateRow) {
-    if (r.clickable) goPendingPosts()
+    if (!r.clickable) return
+    if (r.key === 'failed') goDownloadFailures()
+    else if (r.key === 're_download') goDownloadReDownloads()
+    else goPendingPosts()
   }
 
   /** 对账提示：磁盘目录 = 已认领 + 未认领 + 空壳（三者互斥，不重复计数） */
@@ -188,6 +199,16 @@ export function useAssets() {
     })
   }
 
+  /** 失败下钻：下载中心「失败缺口」视图（与卡上 failed 同源同口径，条数严格相等） */
+  function goDownloadFailures() {
+    router.push({ path: '/downloads', query: { view: 'failures' } })
+  }
+
+  /** 可重下下钻：下载中心「可重下」视图（与卡上 re_download 同源同口径，条数严格相等） */
+  function goDownloadReDownloads() {
+    router.push({ path: '/downloads', query: { view: 're-downloads' } })
+  }
+
   return {
     assets,
     loadAssets,
@@ -208,5 +229,7 @@ export function useAssets() {
     goPostsDownloaded,
     goResourcesType,
     goPendingPosts,
+    goDownloadFailures,
+    goDownloadReDownloads,
   }
 }

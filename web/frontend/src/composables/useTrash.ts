@@ -26,6 +26,10 @@ export function useTrash(options: UseTrashOptions = {}) {
 
   const totalSize = computed(() => items.value.reduce((s, i) => s + (i.size || 0), 0))
   const expiredCount = computed(() => items.value.filter((i) => i.expired).length)
+  /** 已过期条目的占用合计（「清理过期项」确认框用，与过期条目严格同源） */
+  const expiredSize = computed(() =>
+    items.value.reduce((s, i) => s + (i.expired ? i.size || 0 : 0), 0),
+  )
 
   async function load() {
     loading.value = true
@@ -79,14 +83,7 @@ export function useTrash(options: UseTrashOptions = {}) {
     } catch {
       return // 用户取消
     }
-    try {
-      await api.purgeResource(item.id)
-      ElMessage.success('已彻底删除')
-      await refresh()
-    } catch (e) {
-      if (isAborted(e)) return
-      ElMessage.error(`删除失败: ${(e as Error).message}`)
-    }
+    await submitPurge([item.id], false)
   }
 
   async function purgeAll() {
@@ -101,13 +98,45 @@ export function useTrash(options: UseTrashOptions = {}) {
     } catch {
       return // 用户取消
     }
+    await submitPurge([], true)
+  }
+
+  /** 一键清理已过期条目：ID 取列表里 `expired` 的那些（该标志由后端判定，前端只做筛选） */
+  async function purgeExpired() {
+    const targets = items.value.filter((i) => i.expired)
+    if (!targets.length) return
     try {
-      const r = await api.purgeResource('')
-      ElMessage.success(`已彻底删除 ${r.count} 项`)
+      await ElMessageBox.confirm(
+        `彻底删除 ${targets.length} 项已过期条目（${formatSize(expiredSize.value)}）？\n` +
+          '该操作不可恢复；未过期的条目不受影响。',
+        '清理过期项确认',
+        { type: 'error', confirmButtonText: '彻底删除', cancelButtonText: '取消' },
+      )
+    } catch {
+      return // 用户取消
+    }
+    await submitPurge(
+      targets.map((i) => i.id),
+      false,
+    )
+  }
+
+  /**
+   * 彻底删除的统一提交（单条 / 清理过期 / 清空 三种入口共用）：
+   * 提示文案与刷新范围只此一处，避免三个入口各自漂移。
+   */
+  async function submitPurge(ids: string[], allItems: boolean) {
+    try {
+      const r = allItems ? await api.purgeAllTrash() : await api.purgeResource(ids)
+      // 如实反馈：可能有条目因目录被占用没删掉（留在回收站可重试），或已被其它入口清掉
+      const extra: string[] = []
+      if (r.failed) extra.push(`${r.failed} 项目录被占用未删除`)
+      if (r.missing) extra.push(`${r.missing} 项已不存在`)
+      ElMessage.success(`已彻底删除 ${r.count} 项${extra.length ? `（${extra.join('、')}）` : ''}`)
       await refresh()
     } catch (e) {
       if (isAborted(e)) return
-      ElMessage.error(`清空失败: ${(e as Error).message}`)
+      ElMessage.error(`删除失败: ${(e as Error).message}`)
     }
   }
 
@@ -118,9 +147,11 @@ export function useTrash(options: UseTrashOptions = {}) {
     error,
     totalSize,
     expiredCount,
+    expiredSize,
     load,
     restoreItem,
     purgeItem,
     purgeAll,
+    purgeExpired,
   }
 }

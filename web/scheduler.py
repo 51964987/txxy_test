@@ -66,6 +66,11 @@ class ScrapeScheduler:
     def _use_proxy(self) -> bool:
         return settings.get_bool("scrape_schedule_use_proxy", config.SCRAPE_SCHEDULE_USE_PROXY)
 
+    def _miss_tolerance(self) -> int:
+        """错过容差（秒）：页内可调（参数设置·定时抓取组），tick 判定与状态接口每次读生效值。
+        与 _restart/_use_proxy 同构——设置文件覆盖值 > 环境变量/代码默认。"""
+        return settings.get_int("scrape_schedule_miss_tolerance", config.SCRAPE_SCHEDULE_MISS_TOLERANCE)
+
     # ---------------- 状态持久化 ----------------
 
     def _load_state(self) -> dict[str, Any]:
@@ -150,7 +155,7 @@ class ScrapeScheduler:
 
         # ② 错过：晚于计划时刻超过容差（默认 10 分钟）视为「当时服务未运行」。
         #    按用户确认的 skip 策略记一次「未执行」即结束，不补跑（与 cron 一致）。
-        if late > config.SCRAPE_SCHEDULE_MISS_TOLERANCE:
+        if late > self._miss_tolerance():
             reason = f"已过计划时刻 {int(late // 60)} 分钟（当时服务未运行），按「不补跑」跳过"
             self._mark_locked(date, at, "missed", reason)
             print(f"[调度] {at} 未执行：{reason}")
@@ -233,7 +238,7 @@ class ScrapeScheduler:
             # - **超出容差的历史时刻不算**——它们接下来只会被判为「未执行」记录到
             #   今日已处理/上次结果里，把它显示成「下次执行」会让人看到「下次执行 00:00」
             #   这种已经过去的时刻（真机上就踩到了）。
-            tolerance_min = config.SCRAPE_SCHEDULE_MISS_TOLERANCE // 60
+            tolerance_min = self._miss_tolerance() // 60
             now_min = now.hour * 60 + now.minute
             for t in times:
                 if t in done_today:
@@ -252,7 +257,7 @@ class ScrapeScheduler:
             "last": last,
             "last_tick": last_tick,
             "running": running,
-            "miss_tolerance_minutes": config.SCRAPE_SCHEDULE_MISS_TOLERANCE // 60,
+            "miss_tolerance_minutes": self._miss_tolerance() // 60,
             "tick_seconds": _TICK_SECONDS,
         }
 

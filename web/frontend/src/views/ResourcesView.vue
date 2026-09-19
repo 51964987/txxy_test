@@ -19,7 +19,8 @@ import {
 import { useAppStore } from '../stores/app'
 import { useTrash } from '../composables/useTrash'
 import { useAssets } from '../composables/useAssets'
-import { formatMinuteTime } from '../utils/time'
+import { formatDate, formatDateTime, formatMinuteTime } from '../utils/time'
+import { downloadCsv } from '../utils/csv'
 import { legacyCopy, copyText } from '../utils/clipboard'
 import { postOpenUrl } from '../utils/postUrl'
 import { categoryMeta, categoryColors, categoryOptions, categoryLabel, CATEGORY_ORDER, buildTypeSegments, type CategoryKey } from '../utils/category'
@@ -53,11 +54,42 @@ const {
 const loading = ref(false)
 const loadError = ref('') // 加载失败信息（非空时展示重试界面）
 const active = ref('') // 当前展开的文件夹
+// 概览详情（内容资产 + 容量洞察）是否展开：默认收起，把首屏让给资源列表（见模板 .overview-bar）
+const overviewOpen = ref(false)
 
 const totalSizeText = computed(() => formatSize(data.value?.total_size ?? 0))
 
 // 类型元数据（标签/颜色/筛选选项）统一从 utils/category 引入，避免第二份硬编码
 const typeFilter = ref<CategoryKey | 'all'>('all') // P0-2 类型筛选
+
+// B12 更多筛选：体积下限（MB，0 = 不限）与修改时间窗口。
+// 二者都是**文件级**阈值（目录是聚合体，无法用文件级阈值筛选），故一旦设置即并入
+// globalMode 进入全局结果模式 —— 与类型筛选同一处理方式，不引入第二套列表形态。
+const minSizeMb = ref(0)
+const mtimeRange = ref<'all' | '7' | '30' | '90'>('all')
+/** 生效中的「更多筛选」条数（按钮角标用） */
+const moreFilterCount = computed(
+  () => (minSizeMb.value > 0 ? 1 : 0) + (mtimeRange.value !== 'all' ? 1 : 0),
+)
+/** 更多筛选重置（popover 内「重置」按钮） */
+function resetMoreFilters() {
+  minSizeMb.value = 0
+  mtimeRange.value = 'all'
+}
+/** 当前生效的筛选条件描述：显示在全局结果摘要行，避免用户面对变少的结果不知所因 */
+const activeFilterText = computed(() => {
+  const parts: string[] = []
+  const kw = keyword.value.trim()
+  if (kw) parts.push(`关键词「${kw}」`)
+  if (typeFilter.value !== 'all') parts.push(`类型 ${categoryLabel(typeFilter.value)}`)
+  if (minSizeMb.value > 0) {
+    parts.push(
+      `体积 ≥ ${minSizeMb.value >= 1024 ? `${minSizeMb.value / 1024} GB` : `${minSizeMb.value} MB`}`,
+    )
+  }
+  if (mtimeRange.value !== 'all') parts.push(`近 ${mtimeRange.value} 天改动`)
+  return parts.join(' · ')
+})
 
 // P0-3 排序：el-table-v2 原生列排序状态（目录模式与全局结果模式共用）
 const sortState = ref<{ key: string; order: 'asc' | 'desc' | null }>({ key: '', order: null })
@@ -181,8 +213,10 @@ const activeFiles = computed<ResourceFile[]>(() => activeFolder.value?.files ?? 
 const keyword = ref('')
 
 // ---- B2 全局搜索 / 筛选模式 ----
-// 有搜索词或选择了类型时进入全局结果模式：跨全部目录列出命中文件 + 命中目录
-const globalMode = computed(() => keyword.value.trim() !== '' || typeFilter.value !== 'all')
+// 有搜索词 / 选了类型 / 设置了更多筛选时进入全局结果模式：跨全部目录列出命中文件 + 命中目录
+const globalMode = computed(
+  () => keyword.value.trim() !== '' || typeFilter.value !== 'all' || moreFilterCount.value > 0,
+)
 
 // 全部文件平铺（B2 全局搜索 / B6 容量洞察共用）
 const allFiles = computed<ResourceFile[]>(() => (data.value?.items ?? []).flatMap((i) => i.files))
@@ -205,6 +239,16 @@ const globalFiles = computed<ResourceFile[]>(() => {
   let list = allFiles.value
   if (typeFilter.value !== 'all') list = list.filter((f) => f.category === typeFilter.value)
   if (kw) list = list.filter((f) => f.name.toLowerCase().includes(kw) || f.rel_path.toLowerCase().includes(kw))
+  // 体积下限：清理场景最常问「超过 500MB 的是哪些」
+  if (minSizeMb.value > 0) {
+    const minBytes = minSizeMb.value * 1024 * 1024
+    list = list.filter((f) => Number(f.size) >= minBytes)
+  }
+  // 修改时间窗口：mtime 为 0 表示 stat 失败（时间未知），无法判定新旧，一律排除
+  if (mtimeRange.value !== 'all') {
+    const since = Math.floor(Date.now() / 1000) - Number(mtimeRange.value) * 86400
+    list = list.filter((f) => Number(f.mtime ?? 0) >= since)
+  }
   return sortFiles(list)
 })
 
@@ -243,6 +287,16 @@ function isMedialess(item: ResourceItem): boolean {
     (f) => f.category === 'text' || f.category === 'magnet' || f.category === 'cloud',
   )
 }
+
+// B9 空壳目录集合（「一键清理」的对象）：0 文件的空目录 + 仅剩清单（磁力/云盘/文本）的
+// 「未下载到媒体」目录。两类互斥（先判空目录：isMedialess 的 every 对空数组恒真），
+// 与列表标记同一口径，避免「标记显示 3 个、清理却动 5 个」。
+const emptyDirs = computed(() => sortedFolders.value.filter((i) => i.file_count === 0))
+const medialessDirs = computed(
+  () => sortedFolders.value.filter((i) => i.file_count > 0 && isMedialess(i)),
+)
+/** 全库口径（不受当前筛选影响）：清理是全库动作，按钮上的数字与将删除的条目严格一致 */
+const shellFolders = computed<ResourceItem[]>(() => [...emptyDirs.value, ...medialessDirs.value])
 
 // 目录模式（P0-1/2/3 原逻辑，作用于当前展开文件夹）过滤 + 排序后的文件列表
 const filteredFiles = computed<ResourceFile[]>(() => {
@@ -1146,11 +1200,21 @@ async function batchRemove() {
   )
   if (action === 'close') return
   const permanent = action === 'confirm'
-  // 混合并拍平为提交项，按块切片串行提交
+  // 混合并拍平为提交项，交给批量删除的唯一提交实现
   const all = [
     ...files.map((f) => ({ path: f.rel_path, is_dir: false })),
     ...dirs.map((i) => ({ path: i.name, is_dir: true })),
   ]
+  await submitDelete(all, permanent)
+}
+
+/** 批量删除的唯一提交实现（「删除所选」与「清理空壳」两个入口共用 —— 禁止复制第二份）：
+ *  按块串行提交（每块一次请求，逐块推进进度条），单项失败不影响整批，最终汇总成功数与失败明细。 */
+async function submitDelete(
+  all: { path: string; is_dir: boolean }[],
+  permanent: boolean,
+): Promise<void> {
+  if (!all.length) return
   deleting.value = true
   deleteDone.value = 0
   deleteTotal.value = all.length
@@ -1184,6 +1248,63 @@ async function batchRemove() {
   }
 }
 
+/** B9 一键清理空壳目录（空目录 + 未下载到媒体）：复用批量删除的提交实现（软删除进回收站可恢复）。
+ *  不走「自动勾选 + 调 batchRemove」：那会把清理范围与勾选态耦合，用户手一动勾选数字就对不上。 */
+async function cleanupShellFolders() {
+  const dirs = shellFolders.value
+  if (!dirs.length) {
+    ElMessage.success('没有需要清理的空壳目录')
+    return
+  }
+  const action = await askDeleteAction(
+    '清理空壳目录确认',
+    `将清理全库 ${dirs.length} 个空壳目录（空目录 ${emptyDirs.value.length} 个 + 未下载到媒体 ${medialessDirs.value.length} 个，均不含媒体文件）——「直接删除」不可恢复；「移入回收站」可保留 ${trashKeepDays.value} 天。`,
+  )
+  if (action === 'close') return
+  const permanent = action === 'confirm'
+  await submitDelete(
+    dirs.map((i) => ({ path: i.name, is_dir: true })),
+    permanent,
+  )
+  // 清理掉的往往是当前展开的目录，复位折叠态，避免展开指向已被删除的目录
+  if (dirs.some((i) => i.name === active.value)) active.value = ''
+}
+
+/** B8 导出当前清单为 CSV：跟随当前视图与筛选 —— 全局结果模式导命中文件，目录模式导全部目录。
+ *  页面所见即所得，故在前端生成（理由见 utils/csv.ts 顶部注释）。 */
+function exportCsv() {
+  const stamp = formatDate(new Date())
+  if (globalMode.value) {
+    const rows = globalFiles.value.map((f) => [
+      f.rel_path,
+      f.name,
+      categoryLabel(f.category),
+      Number(f.size),
+      f.mtime ? formatDateTime(new Date(Number(f.mtime) * 1000)) : '',
+    ])
+    downloadCsv(
+      `资源清单_命中文件${rows.length}条_${stamp}.csv`,
+      ['相对路径', '文件名', '类型', '大小(字节)', '修改时间'],
+      rows,
+    )
+    ElMessage.success(`已导出 ${rows.length} 个命中文件清单`)
+    return
+  }
+  const rows = sortedFolders.value.map((i) => [
+    i.name,
+    i.file_count,
+    i.total_size,
+    i.mtime ? formatDateTime(new Date(Number(i.mtime) * 1000)) : '',
+    isMedialess(i) ? '未下载到媒体' : '',
+  ])
+  downloadCsv(
+    `资源清单_目录${rows.length}条_${stamp}.csv`,
+    ['目录', '文件数', '占用(字节)', '修改时间', '状态'],
+    rows,
+  )
+  ElMessage.success(`已导出 ${rows.length} 个目录清单`)
+}
+
 // ===== 回收站 =====
 const trashVisible = ref(false)
 // 回收站的数据与操作统一由 useTrash 提供（与 TrashView 表格版共用同一份实现）：
@@ -1193,10 +1314,12 @@ const {
   items: trashItems,
   keepDays: trashKeepDays,
   totalSize: trashTotalSize,
+  expiredCount: trashExpiredCount,
   load: loadTrash,
   restoreItem,
   purgeItem,
   purgeAll,
+  purgeExpired,
 } = useTrash({ onChanged: load })
 
 async function openTrash() {
@@ -1205,9 +1328,12 @@ async function openTrash() {
 }
 
 // B2 全局结果中点击命中目录：清空筛选并回到目录模式展开该目录
+// （所有筛选维度都要复位，否则残留的「更多筛选」会让 globalMode 仍为真、回不到目录模式）
 async function clearFiltersAndExpand(name: string) {
   keyword.value = ''
   typeFilter.value = 'all'
+  minSizeMb.value = 0
+  mtimeRange.value = 'all'
   active.value = name
   await scrollToFolder(name)
 }
@@ -1249,6 +1375,15 @@ const topFolders = computed<ResourceItem[]>(() =>
 const topFiles = computed<ResourceFile[]>(() =>
   [...allFiles.value].sort((a, b) => Number(b.size) - Number(a.size)).slice(0, 10),
 )
+
+// ---- 来源占用 Top（版块 / 作者）—— 容量洞察卡的第四块 ----
+// 维度切换：版块 / 作者，各自一份 Top10（体积按目录归属，一个目录只计一次）。
+const sourceDim = ref<'fid' | 'author'>('fid')
+const sourceUsageRows = computed(() => {
+  const su = assets.value?.source_usage
+  if (!su) return []
+  return (sourceDim.value === 'fid' ? su.fid : su.author).items
+})
 
 // ---- 列定义 ----
 // 目录模式：文件名 / 类型 / 大小 / 操作。
@@ -1408,11 +1543,55 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <!-- R4 内容资产（KPI 优先，从数据总览合并而来）：头条=沉淀完成度 KPI（当前% / 目标 + 缺口），
+    <!-- 概览摘要行（H1 首屏收敛）：把「内容资产 + 容量洞察」两张大卡收敛为一行常驻 KPI，
+         详情默认收起（见两张卡上的 v-show="overviewOpen"）—— 实测两卡合计约 660px 高，
+         会把「资源列表」挤出首屏：1600x900 列表起点 y=858、1366x768 为 y=880（完全不可见）、
+         移动端 390x844 需先滚 2.1 屏。摘要只承载统计卡尚未给出的数字
+         （沉淀完成度 / 磁盘可用 / 近 N 日沉淀），库存三数一律不复述
+         （同一事实一处表达，见 CODEBUDDY.md 第 20 条）。 -->
+    <div v-if="data" class="page-card overview-bar">
+      <div class="ob-left">
+        <template v-if="assets && !assetsEmpty">
+          <span class="ob-label">沉淀完成度</span>
+          <span class="ob-now" :title="goalTip">{{ assets.goal.current_rate }}%</span>
+          <span class="ob-target">目标 {{ assets.goal.target_rate }}%</span>
+          <span v-if="assets.goal.reached" class="ob-done">已达成</span>
+          <span v-else class="ob-remain" :title="goalTip">还差 {{ assets.goal.remain.toLocaleString() }} 帖</span>
+          <!-- 进度条宽度与口径文案复用 useAssets 的 goalBarWidth / goalAria（与资产卡同源） -->
+          <div
+            class="ag-bar"
+            role="progressbar"
+            :aria-label="goalAria"
+            :aria-valuenow="assets.goal.current_rate"
+            aria-valuemin="0"
+            aria-valuemax="100"
+          >
+            <div class="ob-fill" :class="{ 'is-reached': assets.goal.reached }" :style="{ width: goalBarWidth }"></div>
+            <span class="ob-mark" :style="{ left: assets.goal.target_rate + '%' }"></span>
+          </div>
+        </template>
+        <span v-else-if="assetsEmpty" class="ob-note">尚未下载任何内容</span>
+        <span v-else class="ob-note">概览数据加载中</span>
+      </div>
+      <div class="ob-right">
+        <span v-if="assets && assets.disk_total" class="ob-meta">
+          磁盘可用 <b>{{ formatSize(assets.disk_free) }}</b>
+        </span>
+        <span v-if="assets" class="ob-meta">
+          近 {{ assets.state.gap_days }} 日沉淀 <b>+{{ assets.state.recent_posts }}</b> 帖
+        </span>
+        <el-button link type="primary" class="ob-toggle" @click="overviewOpen = !overviewOpen">
+          {{ overviewOpen ? '收起概览' : '展开概览' }}
+        </el-button>
+      </div>
+    </div>
+
+    <!-- R4 内容资产（KPI 优先，从数据总览合并而来）：默认收起（v-show），
+         点摘要行「展开概览」查看。头条=沉淀完成度 KPI（当前% / 目标 + 缺口），
          下方为下钻明细：漏斗（收录→已沉淀→本地文件）/ 五态行 / 分层沉淀率 / 对账 / 存储行 + 增长。
          类型分布已在上方 B6 容量洞察展示，此处不再重复（合并方案：去重）。
          口径与依据见 docs/内容资产沉淀进度调研与建议.md -->
-    <div v-if="data" class="page-card asset-card">
+    <div v-if="data" v-show="overviewOpen" class="page-card asset-card">
       <div class="chart-head">
         <div class="chart-head-left">
           <span class="chart-title">内容资产</span>
@@ -1544,8 +1723,8 @@ onBeforeUnmount(() => {
       <el-skeleton v-else animated :rows="1" />
     </div>
 
-    <!-- B6 容量洞察：类型分布 / 最大目录 / Top10 大文件 -->
-    <div v-if="data && data.total_files > 0" class="page-card insight-card">
+    <!-- B6 容量洞察：类型分布 / 最大目录 / Top10 大文件（默认收起，同资产卡） -->
+    <div v-if="data && data.total_files > 0" v-show="overviewOpen" class="page-card insight-card">
       <div class="insight-block">
         <div class="insight-title">类型分布（按大小）</div>
         <div class="insight-bar">
@@ -1660,6 +1839,31 @@ onBeforeUnmount(() => {
           </span>
         </div>
       </div>
+      <div class="insight-block insight-source">
+        <div class="insight-title">
+          来源占用 Top10
+          <el-segmented
+            v-model="sourceDim"
+            size="small"
+            :options="[
+              { label: '版块', value: 'fid' },
+              { label: '作者', value: 'author' },
+            ]"
+          />
+        </div>
+        <div class="src-list">
+          <div v-for="row in sourceUsageRows" :key="row.key" class="src-row">
+            <span class="src-name" :title="row.name">{{ row.name }}</span>
+            <span class="src-bar"><i :style="{ width: row.share + '%' }" /></span>
+            <span class="src-meta text-muted">
+              {{ row.posts }} 帖 · {{ formatSize(row.size) }} · {{ row.share }}%
+            </span>
+          </div>
+          <div v-if="!sourceUsageRows.length" class="text-muted src-empty">
+            暂无已沉淀来源（下载过的帖子均已被清理）
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- 资源列表 -->
@@ -1688,7 +1892,55 @@ onBeforeUnmount(() => {
             clearable
             :prefix-icon="'Search'"
           />
-          <el-segmented v-model="typeFilter" :options="categoryOptions" />
+          <!-- B12 更多筛选：体积下限 + 修改时间窗口（文件级阈值，设置后自动进入全局结果模式）。
+               属低频改动，收进 popover 不占常驻位（工具栏在 1600 宽下已接近换行临界）。 -->
+          <el-popover placement="bottom-start" :width="264" trigger="click">
+            <template #reference>
+              <el-button class="toolbar-more-filter" :class="{ 'is-active': moreFilterCount > 0 }">
+                <el-icon><Filter /></el-icon>
+                <span>筛选<template v-if="moreFilterCount">（{{ moreFilterCount }}）</template></span>
+              </el-button>
+            </template>
+            <div class="mf-panel">
+              <div class="mf-row">
+                <span class="mf-label">体积不小于</span>
+                <el-select v-model="minSizeMb" size="small" class="mf-input">
+                  <el-option label="不限" :value="0" />
+                  <el-option label="100 MB" :value="100" />
+                  <el-option label="500 MB" :value="500" />
+                  <el-option label="1 GB" :value="1024" />
+                  <el-option label="5 GB" :value="5120" />
+                </el-select>
+              </div>
+              <div class="mf-row">
+                <span class="mf-label">修改时间</span>
+                <el-select v-model="mtimeRange" size="small" class="mf-input">
+                  <el-option label="不限" value="all" />
+                  <el-option label="近 7 天" value="7" />
+                  <el-option label="近 30 天" value="30" />
+                  <el-option label="近 90 天" value="90" />
+                </el-select>
+              </div>
+              <div class="mf-foot">
+                <span class="mf-hint text-muted">按文件级阈值筛选，命中结果在下方平铺</span>
+                <el-button
+                  link
+                  type="primary"
+                  size="small"
+                  :disabled="!moreFilterCount"
+                  @click="resetMoreFilters"
+                >
+                  重置
+                </el-button>
+              </div>
+            </div>
+          </el-popover>
+          <!-- 类型筛选 8 档：桌面一次铺开，窄屏由 .filter-scroll 横向滑动
+               （全局唯一样式，见 style.css；实测不包该层时窄屏会被 .el-main 的
+               overflow-x:hidden 裁掉「云盘清单 / 文本 / 其他」三档且不可滚动） -->
+          <div class="filter-scroll">
+            <el-segmented v-model="typeFilter" :options="categoryOptions" />
+          </div>
           <el-select
             v-if="!globalMode"
             v-model="folderSort"
@@ -1740,6 +1992,21 @@ onBeforeUnmount(() => {
             <el-button type="warning" plain @click="openTrash">
               回收站<template v-if="trashItems.length">（{{ trashItems.length }}）</template>
             </el-button>
+            <!-- 低频批量动作收进「更多」菜单：工具栏宽度已接近换行临界，不再新增常驻按钮 -->
+            <el-dropdown trigger="click">
+              <el-button>
+                更多<el-icon class="el-icon--right"><ArrowDown /></el-icon>
+              </el-button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <!-- B9 空壳清理：只读数字与将删除条目严格同源（shellFolders），不在菜单里重算一遍 -->
+                  <el-dropdown-item :disabled="!shellFolders.length" @click="cleanupShellFolders">
+                    清理空壳目录（{{ shellFolders.length }}）
+                  </el-dropdown-item>
+                  <el-dropdown-item divided @click="exportCsv">导出清单 CSV</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
             <el-button :icon="'Refresh'" :loading="loading" @click="load">刷新</el-button>
           </div>
         </div>
@@ -1749,7 +2016,7 @@ onBeforeUnmount(() => {
           <div class="global-summary text-muted">
             命中 <b>{{ globalFiles.length }}</b> 个文件<template v-if="matchedFolders.length">
               ，<b>{{ matchedFolders.length }}</b> 个同名目录</template
-            >
+            ><span v-if="activeFilterText" class="gs-filters">· {{ activeFilterText }}</span>
           </div>
           <div v-if="matchedFolders.length" class="matched-folders">
             <el-tag
@@ -2068,7 +2335,11 @@ onBeforeUnmount(() => {
         </div>
         <!-- 类型筛选 + 名称过滤 + 排序：资源过多时先收敛范围再浏览 -->
         <div class="browser-toolbar">
-          <el-segmented v-model="browserTypeFilter" :options="categoryOptions" size="small" />
+          <!-- 同上：抽屉内同款 8 档筛选，窄屏同样由 .filter-scroll 横向滑动
+               （并入前实测「其他」右缘 414 > 视口 390，会撑出抽屉横向滚动） -->
+          <div class="filter-scroll">
+            <el-segmented v-model="browserTypeFilter" :options="categoryOptions" size="small" />
+          </div>
           <el-input
             v-model="browserKeyword"
             class="browser-search"
@@ -2361,15 +2632,26 @@ onBeforeUnmount(() => {
           共 {{ trashItems.length }} 项 · {{ formatSize(trashTotalSize) }} · 保留
           {{ trashKeepDays }} 天
         </span>
-        <el-button
-          type="danger"
-          plain
-          size="small"
-          :disabled="!trashItems.length"
-          @click="purgeAll"
-        >
-          清空回收站
-        </el-button>
+        <div class="trash-head-ops">
+          <el-button
+            type="warning"
+            plain
+            size="small"
+            :disabled="!trashExpiredCount"
+            @click="purgeExpired"
+          >
+            清理过期项{{ trashExpiredCount ? ` (${trashExpiredCount})` : '' }}
+          </el-button>
+          <el-button
+            type="danger"
+            plain
+            size="small"
+            :disabled="!trashItems.length"
+            @click="purgeAll"
+          >
+            清空回收站
+          </el-button>
+        </div>
       </div>
       <el-empty v-if="!trashItems.length" description="回收站为空" />
       <div v-else class="trash-list">
@@ -2442,6 +2724,44 @@ onBeforeUnmount(() => {
 
 .folder-sort {
   width: 170px;
+}
+
+/* B12 更多筛选：生效中时按钮以主色描边，避免用户忘了自己设过阈值却找不到结果 */
+.toolbar-more-filter.is-active {
+  color: var(--el-color-primary);
+  border-color: var(--el-color-primary);
+}
+
+/* B12 更多筛选面板（popover 内）：两行阈值 + 一行说明与重置 */
+.mf-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.mf-label {
+  font-size: 13px;
+  color: #606266;
+}
+
+.mf-input {
+  width: 130px;
+}
+
+.mf-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--el-border-color-lighter);
+}
+
+.mf-hint {
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 /* 动作组统一靠右（复制全部 / 回收站 / 刷新），窄屏随 toolbar 的 wrap 整体换行 */
@@ -2718,6 +3038,66 @@ onBeforeUnmount(() => {
   grid-column: 1 / -1;
 }
 
+/* 来源占用 Top10：与「类型分布」同属「全局构成」级的分析，独占整行铺开
+   （版块 / 作者切换在标题行内；每行 = 名称 + 占比条 + 元信息） */
+.insight-source {
+  grid-column: 1 / -1;
+}
+
+.src-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.src-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+/* 名称占满剩余空间并省略，避免把占比条挤没了 */
+.src-name {
+  flex: 0 1 220px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  color: #1f2d3d;
+}
+
+/* 占比条：宽度跟随 share%，颜色复用版块色系主色 */
+.src-bar {
+  flex: 1 1 auto;
+  height: 8px;
+  background: var(--app-border, #ebeef5);
+  border-radius: 4px;
+  overflow: hidden;
+  min-width: 80px;
+}
+
+.src-bar > i {
+  display: block;
+  height: 100%;
+  background: #2f6fed;
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+
+.src-meta {
+  flex: 0 0 auto;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.src-empty {
+  font-size: 13px;
+  padding: 4px 0;
+}
+
 .insight-block {
   min-width: 0;
 }
@@ -2839,6 +3219,11 @@ onBeforeUnmount(() => {
 .global-summary {
   font-size: 13px;
   margin-bottom: 8px;
+}
+
+/* 生效中的筛选条件（跟在命中数后）：弱化显示，不抢主数字 */
+.gs-filters {
+  margin-left: 4px;
 }
 
 .matched-folders {
@@ -3055,6 +3440,13 @@ onBeforeUnmount(() => {
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 12px;
+}
+
+.trash-head-ops {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .trash-list {
@@ -3461,6 +3853,95 @@ onBeforeUnmount(() => {
   height: 14px;
   background: #f59e0b;
   border-radius: 1px;
+}
+
+/* ================= 概览摘要行（首屏收敛）：常驻一行 KPI =================
+   内容资产 + 容量洞察两张大卡移入默认收起的展开态（v-show="overviewOpen"），
+   常驻位只留本行。数字口径与资产卡同源（goalBarWidth / goalTip / goalAria），
+   进度条本体也复用 .ag-bar / .ag-fill / .ag-mark，只在此处改宽度约束，不另写一套。 */
+.overview-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 20px;
+  flex-wrap: wrap;
+  padding: 10px 16px;
+  margin-bottom: 12px;
+}
+.ob-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  flex: 1 1 340px;
+  min-width: 0;
+}
+.ob-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #1f2d3d;
+}
+/* 主值：沿用资产卡的层次「值大 / 目标小 / 缺口次要」，此处再降一档尺寸 */
+.ob-now {
+  font-size: 16px;
+  font-weight: 700;
+  color: #1f2d3d;
+  font-variant-numeric: tabular-nums;
+  cursor: help;
+}
+.ob-target {
+  font-size: 12px;
+  color: #909399;
+}
+.ob-done {
+  font-size: 12px;
+  font-weight: 600;
+  color: #10b981;
+}
+.ob-remain {
+  font-size: 12px;
+  color: #606266;
+  cursor: help;
+}
+.ob-note {
+  font-size: 12px;
+  color: #909399;
+}
+.ob-right {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-left: auto;
+}
+.ob-meta {
+  font-size: 12px;
+  color: #909399;
+}
+.ob-meta b {
+  color: #1f2d3d;
+  font-variant-numeric: tabular-nums;
+}
+.ob-toggle {
+  font-size: 12px;
+}
+/* 常驻位的进度条：占满摘要行剩余宽度（桌面最长 320px） */
+.overview-bar .ag-bar {
+  flex: 1 1 120px;
+  max-width: 320px;
+}
+
+@media (max-width: 767px) {
+  /* 窄屏首屏预算紧张：磁盘 / 增长两个数字收进展开态，常驻位只留完成度与开关 */
+  .overview-bar {
+    padding: 10px 12px;
+  }
+  .overview-bar .ob-meta {
+    display: none;
+  }
+  .overview-bar .ag-bar {
+    max-width: none;
+  }
 }
 
 /* 状态行：在途 / 失败 / 可重下 / 空壳 / 缺口（缺口可下钻）+ 右侧对账悬浮 */
