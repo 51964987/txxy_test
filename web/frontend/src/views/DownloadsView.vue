@@ -34,6 +34,61 @@ function currentLinkText(cl?: Record<string, { total: number; done: number; fail
     .join(' · ')
 }
 
+/** 进度口径依赖的任务字段子集：只声明读到的字段，避免绑定具体行类型（表格行与详情对象都能传）。 */
+type TaskProgressLike = {
+  total?: number
+  done?: number
+  items_summary?: Record<string, number>
+  current_link?: Record<string, { total: number; done: number; fail: number }>
+}
+
+/** 在途链接的内部完成度（0~1）：跨类型合并 Σdone/Σtotal。
+ *  单位说明：current_link 的计数单位是「文件」，与任务级的「链接」不同源，因此它只用于给进度条做
+ *  连续性插值，不参与任何计数展示。无在途数据（未开始、链接之间解析中）时为 0。 */
+function currentLinkFraction(cl?: Record<string, { total: number; done: number; fail: number }>): number {
+  if (!cl) return 0
+  let done = 0
+  let total = 0
+  for (const c of Object.values(cl)) {
+    total += c.total || 0
+    done += c.done || 0
+  }
+  return total > 0 ? Math.min(1, done / total) : 0
+}
+
+/** 任务已完结链接数 = ok + skip + fail。
+ *  不能用后端 task.done：它只在 ok/skip 时 +1（download_tasks.py:1164），失败链接不计，
+ *  会让「3 条全失败」的任务永远停在 0/3 · 0%，与状态「失败」自相矛盾。
+ *  items_summary 缺失时回落 task.done 兜底（老数据兼容）。 */
+function taskFinishedLinks(t: TaskProgressLike): number {
+  const s = t.items_summary
+  if (s) return (s.ok || 0) + (s.skip || 0) + (s.fail || 0)
+  return t.done || 0
+}
+
+/** 任务进度百分比（0-100 整数）：口径统一在此，条形填充与右侧文案共用，不会两处不一致。
+ *  公式：(已完结链接数 + 在途链接内部完成度) / 总链接数，钳位到 [0,100]。
+ *  - 叠加内部完成度：纯链接计数会让单链接任务长期停在 0% 再瞬间跳 100%，与同格展示的
+ *    「当前链接：图片 5/9」自相矛盾——这是本次修复的核心；
+ *  - 分子含失败链接：终态任务才能走到 100%，失败量交给状态标签与下方「失败：…」行表达；
+ *  - 单调不回退：在途链接必属于剩余链接且每段 ≤1，故分子 ≤ 分母，链接切换时数值连续。 */
+function taskPercent(t: TaskProgressLike): number {
+  const total = t.total || 0
+  if (!total) return 0
+  const v = ((taskFinishedLinks(t) + currentLinkFraction(t.current_link)) / total) * 100
+  return Math.max(0, Math.min(100, Math.round(v)))
+}
+
+/** 数值区悬浮说明：讲清「链接维度」与「文件维度」两层口径，
+ *  避免看到「0/1 · 56%」时无从判断；并补一句失败数，解释终态已到 100% 却状态为「失败」。 */
+function progressTitle(t: TaskProgressLike): string {
+  const fail = t.items_summary?.fail || 0
+  const head = `已处理链接 ${taskFinishedLinks(t)}/${t.total || 0}`
+  const base = fail ? `${head}（其中失败 ${fail} 个）` : head
+  const parts = Object.entries(t.current_link || {}).map(([tp, c]) => `${tp}「${c.done}/${c.total}」`)
+  return parts.length ? `${base}；当前链接：${parts.join(' · ')}` : base
+}
+
 /** 全任务累计失败文案：失败 图片 8 · 种子 1（仅列 fail>0 的类型） */
 function failedTotalText(ft?: Record<string, number>): string {
   if (!ft) return ''
@@ -548,7 +603,9 @@ function diffAndNotify(list: DownloadTaskSummary[]) {
           message: '任务执行中断，可在列表中点击「下载」重跑未成功链接',
         })
       } else if (t.status === 'cancelled') {
-        ElNotification.info({ title: '下载任务已取消', message: `已完成 ${t.done}/${t.total}` })
+        // 用 taskFinishedLinks 而非 t.done：与列表口径统一为「已处理」，
+        // 避免失败链接不计导致的「已取消：已完成 0/3」这种看着像没跑过的文案
+        ElNotification.info({ title: '下载任务已取消', message: `已处理 ${taskFinishedLinks(t)}/${t.total}` })
       }
     }
     knownStatus.set(t.id, t.status)
@@ -1286,45 +1343,76 @@ onBeforeUnmount(() => {
             <span v-else class="text-muted">-</span>
           </template>
         </el-table-column>
-        <el-table-column label="状态" width="88">
+        <!-- 状态 + 类型合并为单列：状态彩色标签保留语义（done=success / failed=danger …），
+             类型（auto/manual 仅两态、信息密度低）降级为次级小灰字，不再独立占 80px。
+             类型筛选由工具栏 filterKind 分段控件承担，合并不影响筛选。
+             宽 120px（原 88+80=168，合并释放约 48px 固定宽度）：100px 会被单元格内边距挤到
+             「已完成 + 自动」换行，故提到 120 让状态彩标与类型小字并排单行。 -->
+        <el-table-column label="状态" width="120">
           <template #default="{ row }">
             <el-tag size="small" :type="statusTagType(row.status)">{{ statusText(row.status) }}</el-tag>
+            <span class="kind-sub">{{ row.kind === 'auto' ? '自动' : '手动' }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="类型" width="80">
+        <!-- 进度：min-width 300（原 170）。done/total 由「条内」改为「条右侧外置」（业界做法，
+             详见 .progress-row 处注释），8px 细条不再挤字，计数恒定完整可见；
+             分类型明细改为允许换行（不再 nowrap 截断），任意列宽下信息完整可见且不产生横向滚动；
+             超长时由外层 el-tooltip 悬浮给出未断行的完整串（防极端超长）。
+             300 为「隐藏创建时间列」后的推荐值：单行可放下约 3 个类型明细且不抬高横滚下限。 -->
+        <el-table-column label="进度" min-width="300">
           <template #default="{ row }">
-            <el-tag v-if="row.kind === 'auto'" size="small" type="warning">自动</el-tag>
-            <el-tag v-else size="small">手动</el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="进度" min-width="170">
-          <template #default="{ row }">
-            <el-progress
-              :percentage="row.total ? Math.round((row.done / row.total) * 100) : 0"
-              :stroke-width="8"
-            >
-              <span class="progress-text">{{ row.done }}/{{ row.total }}</span>
-            </el-progress>
-            <div v-if="row.current_link && Object.keys(row.current_link).length" class="task-types text-muted">
-              当前链接：{{ currentLinkText(row.current_link) }}
+            <!-- 业界做法：细条（8px）不塞字，计数外置到进度条右侧。
+                 原因：text-inside 会把 12px 文字塞进 8px 高的条内导致上下被裁切，且文字位置依附
+                 「已填充部分的右端」——占比低时几乎没有空间会被吃掉，46/47 这类靠右的值同样被压。
+                 外置后：右对齐 + tabular-nums + 固定最小宽，各行计数等宽、进度条右端始终是齐的。 -->
+            <div class="progress-row">
+              <el-progress
+                class="progress-bar"
+                :percentage="taskPercent(row)"
+                :stroke-width="8"
+                :show-text="false"
+              />
+              <div class="progress-nums" :title="progressTitle(row)">
+                <span class="progress-count">{{ taskFinishedLinks(row) }}/{{ row.total }}</span>
+                <span class="progress-pct text-muted">· {{ taskPercent(row) }}%</span>
+              </div>
             </div>
+            <el-tooltip
+              v-if="row.current_link && Object.keys(row.current_link).length"
+              :content="`当前链接：${currentLinkText(row.current_link)}`"
+              placement="top"
+            >
+              <div class="task-types text-muted">
+                当前链接：{{ currentLinkText(row.current_link) }}
+              </div>
+            </el-tooltip>
             <div
               v-else-if="row.status === 'running' || row.status === 'pending'"
               class="task-types text-muted"
             >
               当前链接：解析中…
             </div>
-            <div v-if="row.failed_total && Object.keys(row.failed_total).length" class="task-fail text-muted">
-              失败：{{ failedTotalText(row.failed_total) }}
-            </div>
+            <el-tooltip
+              v-if="row.failed_total && Object.keys(row.failed_total).length"
+              :content="`失败：${failedTotalText(row.failed_total)}`"
+              placement="top"
+            >
+              <div class="task-fail text-muted">
+                失败：{{ failedTotalText(row.failed_total) }}
+              </div>
+            </el-tooltip>
             <div v-if="row.speed != null" class="task-rate text-muted">
               <span>{{ row.speed }} 个/分</span>
               <span v-if="row.eta_sec">· 剩余 {{ formatDuration(row.eta_sec) }}</span>
             </div>
           </template>
         </el-table-column>
-        <!-- show-overflow-tooltip：单行省略号 + 悬浮显示完整时间，杜绝换行 -->
-        <el-table-column prop="created_at" label="创建时间" width="150" show-overflow-tooltip />
+        <!-- 「创建时间」列已移除：主清单不提供表头排序，用户平时不关注，独立成列收益低。
+             信息不丢失——「详情」抽屉的 el-descriptions 已含「创建时间」，且列表默认排序在
+             终态分支内部仍按 created_at 倒序（与是否渲染该列无关）。
+             移除释放 100px 固定宽度，据此把进度列 min-width 提到 300：
+             横滚下限由 962 降至 902，仍低于原 970：按内容区=视口−侧栏(展开212/折叠64)−页卡边距
+             (~40) 估算，视口约 ≥1006（侧栏折叠）/ ≥1154（侧栏展开）即可完整铺开不横滚。 -->
         <el-table-column label="操作" width="200" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" @click="showDetail(row)">详情</el-button>
@@ -1386,6 +1474,7 @@ onBeforeUnmount(() => {
               @change="toggleSelect(row.id)"
             />
             <el-tag size="small" :type="statusTagType(row.status)">{{ statusText(row.status) }}</el-tag>
+            <span class="kind-sub">{{ row.kind === 'auto' ? '自动' : '手动' }}</span>
             <span class="tc-id" :title="row.id">{{ row.id.slice(0, 10) }}</span>
             <el-tag v-if="row.priority" size="small" type="success">置顶</el-tag>
           </div>
@@ -1397,9 +1486,11 @@ onBeforeUnmount(() => {
             style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600;"
           >{{ row.titles[0] }}<span v-if="row.titles.length > 1" class="text-muted"> 等 {{ row.titles.length }} 个</span></div>
           <div v-else class="tc-title text-muted" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">-</div>
+          <!-- 移动端卡片与桌面表格口径一致：列表均不展示「创建时间」；
+               两个入口的信息都不丢失——共用同一个「详情」抽屉，其中保留该字段。
+               （.tc-meta 为 flex + gap，去掉首个子项不会留下多余分隔符） -->
           <div class="tc-meta text-muted">
-            <span>{{ row.created_at }}</span>
-            <span>进度 {{ row.done }}/{{ row.total }}</span>
+            <span>进度 {{ taskFinishedLinks(row) }}/{{ row.total }}</span>
             <span v-if="row.speed != null">{{ row.speed }} 个/分</span>
             <span v-if="row.eta_sec">剩余 {{ formatDuration(row.eta_sec) }}</span>
           </div>
@@ -1413,7 +1504,7 @@ onBeforeUnmount(() => {
             失败：{{ failedTotalText(row.failed_total) }}
           </div>
           <el-progress
-            :percentage="row.total ? Math.round((row.done / row.total) * 100) : 0"
+            :percentage="taskPercent(row)"
             :stroke-width="6"
             class="tc-progress"
           />
@@ -1755,7 +1846,7 @@ onBeforeUnmount(() => {
                 {{ statusText(detailTask.status) }}
               </el-tag>
             </el-descriptions-item>
-            <el-descriptions-item label="进度">{{ detailTask.done }}/{{ detailTask.total }}</el-descriptions-item>
+            <el-descriptions-item label="进度">{{ taskFinishedLinks(detailTask) }}/{{ detailTask.total }}</el-descriptions-item>
             <el-descriptions-item label="创建时间">{{ detailTask.created_at }}</el-descriptions-item>
             <el-descriptions-item label="开始时间">{{ detailTask.started_at || '-' }}</el-descriptions-item>
             <el-descriptions-item label="结束时间">{{ detailTask.finished_at || '-' }}</el-descriptions-item>
@@ -2178,9 +2269,42 @@ onBeforeUnmount(() => {
   margin-left: 4px;
 }
 
-.progress-text {
+/* 进度条 + 数值分离：条占满剩余宽度，数值成组固定宽度右对齐（业界做法，见单元格处注释）。
+   tabular-nums 让 0-9 等宽，避免实时刷新时数字跳动，并保证多行之间条形右端对齐。 */
+.progress-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.progress-bar {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* 数值区整体固定：计数 64 + 间隔 4 + 百分比 42，恒定 110px，
+   无论数字是 9/47 还是 1500/2000，各行条形右端都对得齐。 */
+.progress-nums {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
   font-size: 12px;
+  white-space: nowrap;
+}
+
+.progress-count {
+  min-width: 64px;
+  text-align: right;
   color: #606266;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 百分比为次级信息：颜色弱化（复用全局 .text-muted），视觉层级低于计数 */
+.progress-pct {
+  min-width: 42px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 
 /* 下载进度提示：小字号 + 强制单行不换行，避免「个/分 · 剩余」被拆成两行 */
@@ -2192,12 +2316,21 @@ onBeforeUnmount(() => {
   white-space: nowrap;
 }
 
-/* 当前链接实时类型行 / 全任务累计失败行：与 task-rate 同款小字号、单行不换行 */
+/* 当前链接实时类型行 / 全任务累计失败行：允许换行（不再 nowrap 截断），
+   保证任意列宽下信息完整可见、且不产生横向滚动；超长时由外层 el-tooltip 悬浮补齐完整串。 */
 .task-types,
 .task-fail {
   font-size: 12px;
-  white-space: nowrap;
+  white-space: normal;
+  word-break: break-word;
   margin-top: 2px;
+}
+
+/* 合并列「状态」内的次级类型标识（自动 / 手动）：小灰字，不抢状态彩标视觉 */
+.kind-sub {
+  margin-left: 6px;
+  font-size: 12px;
+  color: #909399;
 }
 
 .detail-summary {
