@@ -760,6 +760,8 @@ export interface DownloadItem {
   url: string
   status: DownloadItemStatus
   stats: Record<string, number>
+  /** 实时进度计数器（后端逐文件累加，含 total/done/fail）；未执行/旧任务为 {} */
+  live?: Record<string, { total: number; done: number; fail: number }>
   error: string | null
   saved_dir: string | null
   /** 单链接耗时（秒，1 位小数；未执行为 null） */
@@ -797,6 +799,12 @@ export interface DownloadTaskSummary {
   /** 日志序号：SSE 靠它感知「日志在增长」（下载过程中任务级字段不变，靠它触发推送）。
    *  前端 applyTasks 据此判断整行是否需要重建，下载中每行每帧该值变化即就地 patch。 */
   log_seq?: number
+  /** 当前在途链接的实时进度聚合（多链接并发时合并所有在途链接）：仅含 total>0 的类型。
+   *  用于进度列「当前链接：图片 3/10 · 视频 1/4 …」；空对象表示尚无在途或解析中。 */
+  current_link?: Record<string, { total: number; done: number; fail: number }>
+  /** 全任务累计失败（含已完成链接），按类型：仅含 fail>0 的类型。
+   *  用于进度列「失败：图片 8 · 种子 1」。 */
+  failed_total?: Record<string, number>
 }
 
 /** 任务详情（GET /downloads/{tid}：概要字段 + 逐 URL 明细与日志） */
@@ -912,8 +920,15 @@ export const api = {
   fidDist: () => get<FidDistItem[]>('/stats/fid_dist'),
   health: () => get<Health>('/stats/health'),
   compare: () => get<Compare>('/stats/compare'),
-  pendingDownloads: (limit = 10, days = 30) =>
-    get<PendingDownloads>('/stats/pending_downloads', { limit, days }),
+  // includeReDownload 默认 true（包含「可重下」）；看板「只看全新」开关传 false，
+  // 此时后端不把 re_download 计入 limit 名额（从候选池补足 fresh）。
+  // 注意：get 的 query 参数类型不含 boolean，需转成字符串（与后端 bool Query 解析一致）。
+  pendingDownloads: (limit = 10, days = 30, includeReDownload = true) =>
+    get<PendingDownloads>('/stats/pending_downloads', {
+      limit,
+      days,
+      include_re_download: includeReDownload ? 'true' : 'false',
+    }),
   assets: () => get<Assets>('/stats/assets'),
   recent: (limit = 10) => get<Post[]>('/stats/recent', { limit }),
   fidMeta: () => get<FidMeta[]>('/posts/fid'),

@@ -12,6 +12,7 @@ import {
   isAborted,
   sseUrl,
   type DownloadFailureItem,
+  type DownloadItem,
   type DownloadTaskDetail,
   type DownloadTaskSummary,
   type ReDownloadItem,
@@ -21,6 +22,40 @@ import { useAppStore } from '../stores/app'
 import { briefList } from '../utils/text'
 import { postOpenUrl, postPathOf } from '../utils/postUrl'
 import { colorForFid } from '../utils/fidColor'
+
+// 实时进度类型展示顺序（与后端 download_files.PROGRESS_TYPES 同序；仅展示有数据的类型）
+const PROGRESS_TYPES = ['图片', '视频', '种子', '磁力', '云盘', '其它'] as const
+
+/** 当前在途链接进度文案：图片 3/10 · 视频 1/4 …（仅列 total>0 的类型） */
+function currentLinkText(cl?: Record<string, { total: number; done: number; fail: number }>): string {
+  if (!cl) return ''
+  return PROGRESS_TYPES.filter((t) => cl[t] && cl[t].total > 0)
+    .map((t) => `${t}「${cl[t].done}/${cl[t].total}」`)
+    .join(' · ')
+}
+
+/** 全任务累计失败文案：失败 图片 8 · 种子 1（仅列 fail>0 的类型） */
+function failedTotalText(ft?: Record<string, number>): string {
+  if (!ft) return ''
+  return PROGRESS_TYPES.filter((t) => (ft[t] ?? 0) > 0)
+    .map((t) => `${t} ${ft[t]}`)
+    .join(' · ')
+}
+
+/** 明细「结果」列文案：优先用 live（含 total/done/fail），回落到旧 stats */
+function itemResultText(row: DownloadItem): string {
+  const live = row.live
+  if (live) {
+    const parts = PROGRESS_TYPES.filter((t) => live[t] && (live[t].total > 0 || live[t].fail > 0)).map((t) => {
+      const c = live[t]
+      return c.fail > 0 ? `${t} ${c.done}/${c.total}(失败${c.fail})` : `${t} ${c.done}/${c.total}`
+    })
+    if (parts.length) return parts.join(' · ')
+  }
+  const stats = row.stats || {}
+  const entries = Object.entries(stats)
+  return entries.length ? entries.map(([k, v]) => `${k} ${v}`).join(', ') : ''
+}
 
 const app = useAppStore()
 const route = useRoute()
@@ -971,6 +1006,8 @@ function rowSig(t: DownloadTaskSummary): string {
     ca: t.created_at,
     ti: t.titles,
     ls: t.log_seq,
+    cl: t.current_link,
+    ft: t.failed_total,
   })
 }
 
@@ -1268,6 +1305,18 @@ onBeforeUnmount(() => {
             >
               <span class="progress-text">{{ row.done }}/{{ row.total }}</span>
             </el-progress>
+            <div v-if="row.current_link && Object.keys(row.current_link).length" class="task-types text-muted">
+              当前链接：{{ currentLinkText(row.current_link) }}
+            </div>
+            <div
+              v-else-if="row.status === 'running' || row.status === 'pending'"
+              class="task-types text-muted"
+            >
+              当前链接：解析中…
+            </div>
+            <div v-if="row.failed_total && Object.keys(row.failed_total).length" class="task-fail text-muted">
+              失败：{{ failedTotalText(row.failed_total) }}
+            </div>
             <div v-if="row.speed != null" class="task-rate text-muted">
               <span>{{ row.speed }} 个/分</span>
               <span v-if="row.eta_sec">· 剩余 {{ formatDuration(row.eta_sec) }}</span>
@@ -1353,6 +1402,15 @@ onBeforeUnmount(() => {
             <span>进度 {{ row.done }}/{{ row.total }}</span>
             <span v-if="row.speed != null">{{ row.speed }} 个/分</span>
             <span v-if="row.eta_sec">剩余 {{ formatDuration(row.eta_sec) }}</span>
+          </div>
+          <div v-if="row.current_link && Object.keys(row.current_link).length" class="tc-meta text-muted">
+            当前链接：{{ currentLinkText(row.current_link) }}
+          </div>
+          <div v-else-if="row.status === 'running' || row.status === 'pending'" class="tc-meta text-muted">
+            当前链接：解析中…
+          </div>
+          <div v-if="row.failed_total && Object.keys(row.failed_total).length" class="tc-meta text-muted">
+            失败：{{ failedTotalText(row.failed_total) }}
           </div>
           <el-progress
             :percentage="row.total ? Math.round((row.done / row.total) * 100) : 0"
@@ -1792,9 +1850,7 @@ onBeforeUnmount(() => {
           <el-table-column label="结果" min-width="130" show-overflow-tooltip>
             <template #default="{ row }">
               <span v-if="row.error" class="error-text">{{ row.error }}</span>
-              <span v-else-if="Object.keys(row.stats || {}).length">
-                {{ Object.entries(row.stats).map(([k, v]) => `${k} ${v}`).join(', ') }}
-              </span>
+              <span v-else-if="itemResultText(row)">{{ itemResultText(row) }}</span>
               <span v-else>-</span>
             </template>
           </el-table-column>
@@ -2134,6 +2190,14 @@ onBeforeUnmount(() => {
   flex-wrap: nowrap;
   font-size: 12px;
   white-space: nowrap;
+}
+
+/* 当前链接实时类型行 / 全任务累计失败行：与 task-rate 同款小字号、单行不换行 */
+.task-types,
+.task-fail {
+  font-size: 12px;
+  white-space: nowrap;
+  margin-top: 2px;
 }
 
 .detail-summary {

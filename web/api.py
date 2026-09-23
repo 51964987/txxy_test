@@ -1779,6 +1779,7 @@ def _count_by_fid(paths: set[str]) -> dict[str, int]:
 def stats_pending_downloads(
     limit: Annotated[int, Query(ge=1, le=30)] = 10,
     days: Annotated[int, Query(ge=1, le=365)] = 30,
+    include_re_download: Annotated[bool, Query()] = True,
 ) -> PendingDownloadsResp:
     """待下载队列（FD1）：时间窗内互动量最高、且**尚未下载到本地**的帖子。
 
@@ -1788,6 +1789,11 @@ def stats_pending_downloads(
     「已下载」= 下载记录 ok/skip 且保存目录仍在磁盘（与提交前判重同一判据）——
     只看历史状态会把「用户已清理掉文件」的帖子也算成已完成，从此不再推荐。
     排序用互动量（点赞 + 回复，与榜单「综合」口径一致），使「凭什么排在这」可解释。
+
+    include_re_download（默认 True）= 是否把「曾下载但文件已被清理」的帖子
+    （state=re_download，标「可重下」）也纳入推荐。置 False 时该类不进入推荐位、
+    且不占用 limit 名额——后端从候选池补足 fresh 到 limit 条，避免前端过滤导致
+    「显示不满 10 条」的口径错位（看板卡头「只看全新」开关即传 False）。
     """
     start = (date_cls.today() - timedelta(days=days - 1)).isoformat()
 
@@ -1807,10 +1813,15 @@ def stats_pending_downloads(
                 continue
             if path in active:
                 continue  # 正在下载中：既不推荐重复提交，也不占用队列名额
+            is_re_download = path in gone
+            # 关闭「包含可重下」时，曾下载但文件已清理的帖子不进推荐位、也不占名额；
+            # 继续向后取样，确保 limit 条名额留给 fresh（避免前端过滤后显示不满）。
+            if is_re_download and not include_re_download:
+                continue
             if len(items) >= limit:
                 break
             # 曾下载但文件已被资源管理清空 → 标「可重下」；其余为全新待下载
-            state = "re_download" if path in gone else "fresh"
+            state = "re_download" if is_re_download else "fresh"
             items.append(
                 {
                     "fid": r["fid"],
@@ -1826,7 +1837,9 @@ def stats_pending_downloads(
             )
         return {"days": days, "items": items, "scanned": len(rows), "downloaded": downloaded}
 
-    return db.cached(f"pending_downloads_v1:{days}:{limit}", _calc)
+    # 缓存键含 include_re_download：开关切换即不同快照；v1→v2 避免旧 TTL 串扰。
+    # 写失效前缀 pending_downloads_ 仍命中（startswith 匹配），无需改 _invalidate_download_stats。
+    return db.cached(f"pending_downloads_v2:{days}:{limit}:{include_re_download}", _calc)
 
 
 @router.get("/stats/assets")

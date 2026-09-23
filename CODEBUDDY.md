@@ -289,6 +289,33 @@ alwaysApply: true
     - **环境变量名的坑（本次实踩）**：路径类变量**没有** `TXXY_` 前缀（`POSTS_DB` / `DOWNLOADS_DIR`），写成 `TXXY_POSTS_DB` 会静默连回真实库（还会把测试下载落到真实 `downloads/`）。起测试实例后先用一个只读断言确认连的是临时库，再跑用例。
     - **本项目实例**：自动下载文案改动配了 7 个用例（当天无数据 / 有数据未命中 / 命中并提交 / 命中但已下过 / 磁盘不足 / 未启用 / 定时与手动文案同源）+ 1 个在途去重用例，全走真实 HTTP 接口、全隔离 fixture，全部断言通过后才交付。
 
+48. **本地服务启动/重启/端口检查与高频运维脚本必须固化，禁止每次从零重写 + 重试（2026-09-23 确立，源于本次实测反复重试）**：
+    - **触发场景**：改动后端/前端后要做「端口检查 / 重启服务 / 起隔离测试实例 / 跑接口回归 / 前端 build·lint」这类运维操作。最容易每次临时拼命令、反复踩同一批环境坑——本次实测为跑一次接口验证就重试约 5 次。
+    - **先复用既有工具与条款，不要重造**（第 1 条）：① 重启**用户真实服务**用现成 `start_web.bat [--rebuild] [--no-lan]`（已封装端口检测 + `taskkill` 旧进程 + 防火墙 + 分享服务 + 1024 镜像），不要自己拼 `python` 命令；且重启必须确认旧进程真正退出（规则 41：先 `Get-NetTCPConnection -LocalPort 8088 -State Listen` 拿 PID → `Stop-Process` → `Get-CimInstance Win32_Process -Filter "CommandLine like '%start_web.py%'"` 确无残留，否则旧内存代码继续跑、新进程成僵尸）。② kill 占用端口用现成 `kill_port.bat <端口>`（已修正 `usebackq`+`^|` 语法坑）。③ 隔离测试实例 + 全量回归按规则 23/47（独立端口 + 临时持久化 + 环境变量隔离，路径类变量**无** `TXXY_` 前缀见规则 47）。
+    - **PowerShell `$` 陷阱（本次新坑，此前任何规则都没收过）**：在 `execute_command` 里命令层会**吃掉 `$`**——`$env:TXXY_WEB_PORT='8089'`、`$p = Start-Process ...`、`$_`、`.Count` 这类带 `$` 的写法，变量被剥成空、报 `=... is not recognized` 之类静默失败。**强制动作**：① 端口检查用**无 `$` 的单行**（已验证可用）：`powershell -Command "if (Get-NetTCPConnection -LocalPort 8089 -State Listen -ErrorAction SilentlyContinue) { 'BUSY' } else { 'FREE' }"`；② 凡是需要「设环境变量 / 存 PID / 循环 / 多步」的逻辑，**改用纯 Python 脚本**（subprocess 启动 + `env=` 覆盖 + 轮询 + `terminate`）或 `.ps1` 文件，绝不在命令行里用 `$`。
+    - **web 启动正确命令（本次新坑）**：独立测试实例要起**仅主服务**时用 `python web/app.py`（不是 `python -m web.app`）——本项目 `blacklist` 在 `web/` 下，`-m` 的 `sys.path[0]` 是 cwd 而非 `web/`，会 `ModuleNotFoundError: No module named 'blacklist'`；真实服务走 `start_web.bat`（`python -X utf8 start_web.py`）。
+    - **已验证的「独立端口测试实例」纯 Python 模板（直接抄，绕过以上所有坑）**：
+      ```python
+      import json, os, subprocess, sys, time, urllib.request
+      from collections import Counter
+      env = os.environ.copy(); env["TXXY_WEB_PORT"] = "8089"
+      proc = subprocess.Popen([sys.executable, "web/app.py"], env=env)  # 仅主服务，轻量
+      try:
+          time.sleep(12)  # 首启 + 资产快照可能慢，留足；请求侧另有重试兜底
+          BASE = "http://127.0.0.1:8089/api"  # 必须带 /api（规则 15）
+          d = json.load(urllib.request.urlopen(
+              f"{BASE}/stats/pending_downloads?days=30&limit=10&include_re_download=false", timeout=5))
+          print("states=", dict(Counter(i["state"] for i in d["items"])), "n=", len(d["items"]))
+      finally:
+          proc.terminate()
+          try: proc.wait(timeout=5)
+          except Exception: proc.kill()
+      ```
+      （写操作类验证还需按规则 23/47 配临时持久化文件 + 跑完删临时脚本；本例只读统计接口未写盘，故未配。）
+    - **举一反三：其它高频运维脚本一并固化**（形态标在括号里）：① **接口回归验证**——规则 15 已写做法（枚举 `@router.get(`、BASE 带 `/api`、断言读响应体），补一个**纯 Python 回归骨架**（绕过 `$`）下次直接套；② **前端 build / lint**——固定命令 `cd web/frontend && npx vue-tsc --noEmit` 与 `npm run build`（本次 0 错，固化）；③ **写后缓存失效验证**（规则 21 `_invalidate_download_stats`）——写接口后重取断言新值，可固化脚本模板；④ **端口检查 / 服务健康**——`/api/health`（规则 26）；⑤ **重启 / kill**——见上 `start_web.bat` / `kill_port.bat`。
+    - **强制动作一句话**：任何运维操作先查本规则与规则 1/23/41/47 有没有现成脚本或模板，**有就直接抄，禁止从零重写**；命令行含 `$` 一律绕开。
+    - **本项目实例（2026-09-23）**：待下载推荐加「只看全新」开关，实测连踩 PowerShell `$` 展开（`$env:` 被剥、`.Count` 漏 `$_`）、`python -m web.app` 找不到 `web/blacklist` 三坑，重试约 5 次；改用上述纯 Python 模板后一次通过，8089 实例验证 `include_re_download=true → 全 re_download`、`false → 补足 10 条 fresh`，强力证明后端过滤（而非前端过滤）的必要性。
+
 ## 技术栈
 - 后端：Python3 + **FastAPI**；SQLite 只读（`db/posts.db`，WAL，`PRAGMA query_only=ON`）；统计接口经 `db.cached(key)` 做 **5s TTL** 内存缓存。
 - 数据写入由项目根目录独立 `scraper.py` 负责，**Web 进程严禁写库**（下载中心 `download_tasks.py` 仅做文件系统下载）。

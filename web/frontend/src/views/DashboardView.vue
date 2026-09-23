@@ -112,6 +112,15 @@ const health = ref<Health | null>(null)
 const compare = ref<Compare | null>(null)
 const pending = ref<PendingDownloads | null>(null)
 const loadingPending = ref(false)
+// 待下载推荐「只看全新」开关（记忆到 localStorage）：默认 false = 包含可重下（与历史行为一致）。
+// 置 true 时向后端传 include_re_download=false，re_download 不进推荐位也不占 limit 名额。
+const PENDING_ONLY_FRESH_KEY = 'txxy_dashboard_pending_only_fresh'
+const pendingOnlyFresh = ref<boolean>(false)
+try {
+  pendingOnlyFresh.value = localStorage.getItem(PENDING_ONLY_FRESH_KEY) === '1'
+} catch {
+  // 隐私模式 / 存储被禁用时退化为内存态，不影响功能
+}
 // B1：定时抓取状态（GET /api/schedule，与设置页同源）。健康条报告抓取的「结果」，
 // 这里补齐「计划」——自动抓取是否活着、下次几点跑、今天跑了几轮，一眼可见
 const sched = ref<ScheduleStatus | null>(null)
@@ -507,8 +516,9 @@ async function loadPending() {
   if (loadingPending.value) return
   loadingPending.value = true
   try {
-    // 取 10 条：与「本月最热」同为 10 条，列表超出 360px 即滚动（.board-list 同款）
-    pending.value = await api.pendingDownloads(10, 30)
+    // 取 10 条：与「本月最热」同为 10 条，列表超出 360px 即滚动（.board-list 同款）。
+    // 第三参 !pendingOnlyFresh：开「只看全新」→ 后端 exclude re_download 并补足 fresh 到 10 条。
+    pending.value = await api.pendingDownloads(10, 30, !pendingOnlyFresh.value)
     // 本卡与「每日互动量趋势」同行等高：清单行数决定整行高度，左侧图表区（flex 自适应）
     // 的可用高度随之变化。ECharts 不会自己监听容器尺寸，容器变高后画布停在旧高度会露白，
     // 故每次拿到新清单后主动让它重新量一次尺寸。
@@ -521,6 +531,21 @@ async function loadPending() {
   } finally {
     loadingPending.value = false
   }
+}
+
+/**
+ * 待下载推荐「只看全新」开关切换：写回 localStorage 并重新拉取（过滤在后端，必须重取）。
+ * el-switch 的 @change 在 v-model 更新后触发，此处读取最新值即可。
+ */
+function onPendingOnlyFreshChange(v: boolean | string | number) {
+  const val = v === true || v === 'true'
+  pendingOnlyFresh.value = val
+  try {
+    localStorage.setItem(PENDING_ONLY_FRESH_KEY, val ? '1' : '0')
+  } catch {
+    // 存储不可用时仅保留内存态，不影响本次筛选
+  }
+  void loadPending()
 }
 
 /**
@@ -2851,6 +2876,13 @@ function renderFidTrendChart() {
           </el-tooltip>
         </div>
         <div class="chart-head-right">
+          <span
+            class="pending-filter"
+            title="关闭时同时显示「可重下」（曾下载但文件已清理）的帖子；开启后只显示从未下载过的帖子"
+          >
+            <span class="filter-label">只看全新</span>
+            <el-switch :model-value="pendingOnlyFresh" size="small" @change="onPendingOnlyFreshChange" />
+          </span>
           <el-link type="primary" :underline="false" class="more-link" @click="goPendingPosts">查看全部 ›</el-link>
         </div>
       </div>
@@ -3538,6 +3570,19 @@ function renderFidTrendChart() {
 
 .more-link {
   font-size: 12px;
+}
+
+/* 待下载推荐卡头「只看全新」开关：紧凑横向排列，半宽卡空间足够 */
+.pending-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: 10px;
+}
+
+.pending-filter .filter-label {
+  font-size: 12px;
+  color: #909399;
 }
 
 /* 内容资产 KPI 卡下钻入口：与「今日发布」的「下钻 ›」统一视觉（弱化灰字，hover 变蓝暗示可点）。

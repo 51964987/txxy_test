@@ -59,6 +59,23 @@ from extract_torrents import (
 from extract_magnets import extract_magnet_links, save_magnets_txt
 from extract_clouds import extract_cloud_links, save_clouds_txt
 
+# ============ 实时进度类型（路线 B：逐文件计数）============
+# 显示顺序即前端展示顺序；「其它」为兜底（非上述 5 类的任何计数，当前恒为 0，仅 >0 才显）。
+# 同一份类型清单只在此定义，download_tasks 与前端均引用，禁止第二处复制字面量。
+PROGRESS_TYPES: tuple[str, ...] = ("图片", "视频", "种子", "磁力", "云盘", "其它")
+
+
+def new_progress() -> dict[str, dict[str, int]]:
+    """初始化实时进度计数器：每类型含 total(待处理) / done(已完成，含已存在跳过) / fail(失败)。"""
+    return {tp: {"total": 0, "done": 0, "fail": 0} for tp in PROGRESS_TYPES}
+
+
+def _bump(progress: dict[str, dict[str, int]] | None, tp: str, key: str, n: int = 1) -> None:
+    """实时计数器安全累加：progress 为 None（非 Web 场景，如 CLI）时直接跳过，不污染旧调用方。"""
+    if progress is not None:
+        progress[tp][key] += n
+
+
 # ============ 配置区域 ============
 # 图片保存根目录（页面标题作为其下子目录名）。
 # 固定为脚本所在目录（项目根）下的 downloads/，并可用环境变量 DOWNLOADS_DIR 覆盖
@@ -175,7 +192,9 @@ def extract_title(html: str, url: str) -> str:
 # ============ 页面下载主流程 ============
 
 
-def _process_page_impl(url: str, output_root: str | None = None) -> tuple[dict[str, int], str | None]:
+def _process_page_impl(
+    url: str, output_root: str | None = None, progress: dict[str, dict[str, int]] | None = None
+) -> tuple[dict[str, int], str | None]:
     """process_page 实现：额外返回保存目录（相对输出根的路径，页面获取失败时为 None），供下载中心回填 saved_dir。
 
     output_root 为 None 时用全局 DOWNLOAD_ROOT（下载中心默认行为，自动下载即走此路）；
@@ -209,6 +228,14 @@ def _process_page_impl(url: str, output_root: str | None = None) -> tuple[dict[s
         # 页面解析不出任何资源：入参可能是媒体文件直链（无扩展名或图床重定向页），
         # 尝试把当前 URL 直接当单个媒体文件下载；内容校验失败会安全清理，不影响流程
         direct_status = download_media_direct(url, save_dir)
+        # 实时计数：直链按图片/视频归类（兜底类型不会走这里）
+        _dm_type = "图片" if is_image_url(url) else "视频"
+        if progress is not None:
+            progress[_dm_type]["total"] = 1
+            if direct_status == "fail":
+                progress[_dm_type]["fail"] = 1
+            else:
+                progress[_dm_type]["done"] = 1
         if direct_status != "fail":
             stats = {"媒体": 1}
             if direct_status == "skip":
@@ -236,6 +263,9 @@ def _process_page_impl(url: str, output_root: str | None = None) -> tuple[dict[s
             os.makedirs(gif_dir, exist_ok=True)
             os.makedirs(jpg_dir, exist_ok=True)
         print(f"共提取到 {len(image_urls)} 张图片，开始下载...\n")
+        # 实时计数：分母（待处理总数）在解析完即定
+        if progress is not None:
+            progress["图片"]["total"] = len(image_urls)
         try:
             gif_idx = 0
             jpg_idx = 0
@@ -253,8 +283,10 @@ def _process_page_impl(url: str, output_root: str | None = None) -> tuple[dict[s
                         ok_jpg += 1
                     if existed:
                         skip_count += 1
+                    _bump(progress, "图片", "done")
                 else:
                     fail_count += 1
+                    _bump(progress, "图片", "fail")
                 if i < len(image_urls):
                     time.sleep(DOWNLOAD_INTERVAL)
         except KeyboardInterrupt:
@@ -283,6 +315,8 @@ def _process_page_impl(url: str, output_root: str | None = None) -> tuple[dict[s
         video_dir = os.path.join(save_dir, VIDEO_SUBDIR)
         os.makedirs(video_dir, exist_ok=True)
         print(f"\n共提取到 {len(video_urls)} 个视频，开始下载...\n")
+        if progress is not None:
+            progress["视频"]["total"] = len(video_urls)
         try:
             for i, v_url in enumerate(video_urls, start=1):
                 # 命名规则位于 extract_videos.video_save_path
@@ -292,8 +326,10 @@ def _process_page_impl(url: str, output_root: str | None = None) -> tuple[dict[s
                     ok_video += 1
                     if existed:
                         skip_video += 1
+                    _bump(progress, "视频", "done")
                 else:
                     fail_video += 1
+                    _bump(progress, "视频", "fail")
                 if i < len(video_urls):
                     time.sleep(DOWNLOAD_INTERVAL)
         except KeyboardInterrupt:
@@ -316,10 +352,15 @@ def _process_page_impl(url: str, output_root: str | None = None) -> tuple[dict[s
     ok_other = 0
     if other_urls:
         print(f"\n共提取到 {len(other_urls)} 个其他类型资源，开始下载...\n")
+        if progress is not None:
+            progress["种子"]["total"] = len(other_urls)
         try:
             for i, o_url in enumerate(other_urls, start=1):
                 if download_torrent(o_url, root, dir_name=sanitize_title(title)):
                     ok_other += 1
+                    _bump(progress, "种子", "done")
+                else:
+                    _bump(progress, "种子", "fail")
                 if i < len(other_urls):
                     time.sleep(DOWNLOAD_INTERVAL)
         except KeyboardInterrupt:
@@ -340,6 +381,10 @@ def _process_page_impl(url: str, output_root: str | None = None) -> tuple[dict[s
     # 输出到页面标题目录下：downloads/<页面标题>/magnets.txt
     if magnet_links:
         txt_path = save_magnets_txt(magnet_links, save_dir)
+        # 磁力/云盘 是整文件导出，分子只能 0→满（不逐条 tick）；这里一次定 total 与 done
+        if progress is not None:
+            progress["磁力"]["total"] = len(magnet_links)
+            progress["磁力"]["done"] = len(magnet_links)
         # 汇总信息：raw 模式不加时间戳
         with file_logger.raw():
             print(f"\n[汇总] 磁力链接 {len(magnet_links)} 条 → {txt_path}")
@@ -352,6 +397,9 @@ def _process_page_impl(url: str, output_root: str | None = None) -> tuple[dict[s
     # 输出到页面标题目录下：downloads/<页面标题>/clouds.txt
     if cloud_links:
         txt_path = save_clouds_txt(cloud_links, save_dir)
+        if progress is not None:
+            progress["云盘"]["total"] = len(cloud_links)
+            progress["云盘"]["done"] = len(cloud_links)
         # 汇总信息：raw 模式不加时间戳
         with file_logger.raw():
             print(f"\n[汇总] 云盘链接 {len(cloud_links)} 条 → {txt_path}")
@@ -462,28 +510,45 @@ def _first_media_dir(first: str) -> tuple[str | None, bool]:
     return os.path.join(DOWNLOAD_ROOT, os.path.splitext(_media_filename(first))[0]), _is_url(first)
 
 
-def _process_one_impl(url: str, output_root: str | None = None) -> tuple[dict[str, int], str | None]:
+def _process_one_impl(
+    url: str, output_root: str | None = None, progress: dict[str, dict[str, int]] | None = None
+) -> tuple[dict[str, int], str | None]:
     """process_one 实现：额外返回保存目录（相对输出根的路径，无法确定时为 None）。
 
     种子分支的目录由 download_torrent 内部决定（种子标题或日期），不回传；
     页面分支目录 = <输出根>/<页面标题>/，媒体直链分支 = <输出根>/<文件名不含扩展名>/。
     output_root 为 None 时用全局 DOWNLOAD_ROOT（下载中心默认行为）。
+    progress 为实时计数器（Web 下载中心传入 item.live；CLI 为 None 跳过）。
     """
     url = url.strip().rstrip(".,;:!?)]}。，；：！？、")
     root = output_root or DOWNLOAD_ROOT
     if RMDOWN_LINK_RE.search(url) or TORRENT_LINK_RE.fullmatch(url):
         ok = bool(download_torrent(url, root))
+        if progress is not None:
+            progress["种子"]["total"] = 1
+            if ok:
+                progress["种子"]["done"] = 1
+            else:
+                progress["种子"]["fail"] = 1
         return ({"种子": 1} if ok else {}), None
     if is_media_direct_url(url):
         media_dir = os.path.join(root, os.path.splitext(_media_filename(url))[0])
         status = download_media_direct(url, media_dir)
+        # 直链按图片/视频归类
+        _dm_type = "图片" if is_image_url(url) else "视频"
+        if progress is not None:
+            progress[_dm_type]["total"] = 1
+            if status == "fail":
+                progress[_dm_type]["fail"] = 1
+            else:
+                progress[_dm_type]["done"] = 1
         saved_dir = os.path.relpath(media_dir, root).replace("\\", "/")
         if status == "ok":
             return {"媒体": 1}, saved_dir
         if status == "skip":
             return {"媒体": 1, "跳过": 1}, saved_dir
         return {}, None
-    return _process_page_impl(url, output_root)
+    return _process_page_impl(url, output_root, progress)
 
 
 def process_one(url: str) -> dict[str, int]:
@@ -500,14 +565,18 @@ def process_one(url: str) -> dict[str, int]:
     return stats
 
 
-def process_one_detail(url: str, output_root: str | None = None) -> tuple[dict[str, int], str | None]:
+def process_one_detail(
+    url: str, output_root: str | None = None, progress: dict[str, dict[str, int]] | None = None
+) -> tuple[dict[str, int], str | None]:
     """process_one 扩展版（仅 Web 下载中心使用）：额外返回保存目录（相对输出根的路径），
     供下载任务回填 item.saved_dir，资源管理页据此关联「目录 → 下载任务」。
 
+    progress 为实时计数器：下载中心把 item.live 传进来，循环里逐文件累加，
+    前端即可经 SSE 看到「当前链接：图片 3/10」这类实时进度（路线 B）。
     output_root 为 None 时用全局 DOWNLOAD_ROOT（下载中心默认行为，自动下载即走此路）；
     传非 None 的 output_root 可把输出改到任意指定目录（如二次归档、导出到指定盘），仅改变输出位置。
     """
-    return _process_one_impl(url, output_root)
+    return _process_one_impl(url, output_root, progress)
 
 
 def main() -> None:

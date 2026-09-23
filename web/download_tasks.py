@@ -55,6 +55,7 @@ if str(config.BASE_DIR) not in sys.path:
     sys.path.insert(0, str(config.BASE_DIR))
 
 import download_files  # noqa: E402
+from download_files import PROGRESS_TYPES, new_progress  # noqa: E402
 
 # 终态：进程重启后原样保留；非终态（中断的 running/pending）在恢复时统一置为 failed
 _TERMINAL = {"done", "failed", "cancelled"}
@@ -243,19 +244,22 @@ class _TaskLogSink:
             _log(self._task, self._prefix + line)
 
 
-def _run_one(url: str, sink: _TaskLogSink) -> tuple[dict[str, int], str | None, str | None, float]:
+def _run_one(
+    url: str, sink: _TaskLogSink, progress: dict[str, dict[str, int]] | None = None
+) -> tuple[dict[str, int], str | None, str | None, float]:
     """执行单个 URL 下载，返回 (stats, saved_dir, error, elapsed)。
 
     saved_dir 为下载保存目录（相对 downloads/ 的路径，无法确定时为 None），
     elapsed 为单链接耗时秒数；单 URL 的异常兜底为失败记录，不中断整个任务。
     下载过程日志（正在请求 / 标题 / 保存目录 / [完成] xxx.jpg（字节数,链接）等）
     不再通过返回值攒批，而是由 sink 实时写入任务日志。
+    progress 为实时计数器（item.live）：循环里逐文件累加，供 SSE 推送「当前链接」进度。
     """
     start = time.monotonic()
     cap = _install_capture()
     cap.attach(sink)
     try:
-        stats, saved_dir = download_files.process_one_detail(url)
+        stats, saved_dir = download_files.process_one_detail(url, progress=progress)
         return stats, saved_dir, None, time.monotonic() - start
     except Exception as exc:  # 任务级兜底：单个 URL 失败不影响其余 URL
         return {}, None, str(exc), time.monotonic() - start
@@ -360,7 +364,7 @@ class DownloadTaskManager:
             "total": len(urls),
             "done": 0,
             "items": [
-                {"url": u, "status": "pending", "stats": {}, "error": None, "saved_dir": None, "elapsed": None}
+                {"url": u, "status": "pending", "stats": {}, "live": new_progress(), "error": None, "saved_dir": None, "elapsed": None}
                 for u in urls
             ],
             "logs": [f"任务已创建（共 {len(urls)} 个链接）"],
@@ -412,10 +416,15 @@ class DownloadTaskManager:
             "ok": 0, "skip": 0, "fail": 0, "running": 0, "pending": 0, "cancelled": 0
         }
         saved_dirs: list[str] = []
+        # 实时进度聚合：current_link = 在途链接（_inflight）各类型 total/done/fail 求和；
+        # failed_total = 全任务累计失败（含已完成链接，用户要的「失败：图片 8 · 种子 1」）
+        inflight: set[int] = set(t.get("_inflight", []) or [])
+        cur: dict[str, dict[str, int]] = {tp: {"total": 0, "done": 0, "fail": 0} for tp in PROGRESS_TYPES}
+        failed_total: dict[str, int] = {}
         # 已结束链接的耗时累计（用于推算速度/ETA）：仅统计真正执行过的链接
         finished_elapsed: float = 0.0
         finished_cnt: int = 0
-        for it in t["items"]:
+        for idx, it in enumerate(t["items"]):
             s = it.get("status", "pending")
             counts[s] = counts.get(s, 0) + 1
             sd = it.get("saved_dir")
@@ -426,6 +435,17 @@ class DownloadTaskManager:
                 if isinstance(el, (int, float)):
                     finished_elapsed += float(el)
                     finished_cnt += 1
+            # 各链接的实时计数器（live）：旧任务/未执行链接为 {}，统一兜底
+            live = it.get("live") or {}
+            for tp in PROGRESS_TYPES:
+                cell = live.get(tp) or {}
+                f = cell.get("fail", 0)
+                if f:
+                    failed_total[tp] = failed_total.get(tp, 0) + f
+                if idx in inflight and cell.get("total"):
+                    cur[tp]["total"] += cell["total"]
+                    cur[tp]["done"] += cell.get("done", 0)
+                    cur[tp]["fail"] += cell.get("fail", 0)
         base = self._public(t)
         base.pop("items", None)
         # 保留 urls：本模块只管任务队列、不碰 posts.db，标题反查交给 api 层（只读库）
@@ -448,6 +468,9 @@ class DownloadTaskManager:
         else:
             base["speed"] = None
             base["eta_sec"] = None
+        # 实时进度（路线 B）：仅保留有数据的类型——「获取到该类型才显示」由前端按此过滤
+        base["current_link"] = {tp: cur[tp] for tp in PROGRESS_TYPES if cur[tp]["total"] > 0}
+        base["failed_total"] = {tp: n for tp, n in failed_total.items() if n > 0}
         return base
 
     def get(self, tid: str) -> dict[str, Any] | None:
@@ -996,7 +1019,24 @@ class DownloadTaskManager:
             ),
         )
         next_pos = 0
+        task["_inflight"] = []
         futures: "dict[cf.Future[tuple[dict[str, int], str | None, str | None, float]], int]" = {}
+
+        # 提交单个链接：确保 live 计数器存在并登记为在途，供 summary 聚合「当前链接」实时进度
+        def submit_one(i: int) -> None:
+            it = items[i]
+            it.setdefault("live", new_progress())
+            task["_inflight"].append(i)
+            futures[
+                pool.submit(
+                    _run_one,
+                    it["url"],
+                    # sink 携带 [i/N] 归属前缀（i 为 items 下标，稳定且并发安全）
+                    _TaskLogSink(task, i + 1, total),
+                    it["live"],
+                )
+            ] = i
+
         with cf.ThreadPoolExecutor(
             max_workers=concurrency, thread_name_prefix="download-url"
         ) as pool:
@@ -1007,16 +1047,8 @@ class DownloadTaskManager:
                 and not task["pause_requested"]
                 and len(futures) < concurrency
             ):
-                i = pending_idx[next_pos]
+                submit_one(pending_idx[next_pos])
                 next_pos += 1
-                futures[
-                    pool.submit(
-                        _run_one,
-                        items[i]["url"],
-                        # sink 携带 [i/N] 归属前缀（i 为 items 下标，稳定且并发安全）
-                        _TaskLogSink(task, i + 1, total),
-                    )
-                ] = i
             while futures:
                 done, _ = cf.wait(futures, return_when=cf.FIRST_COMPLETED)
                 for fut in done:
@@ -1030,16 +1062,8 @@ class DownloadTaskManager:
                     and not task["pause_requested"]
                     and len(futures) < concurrency
                 ):
-                    i = pending_idx[next_pos]
+                    submit_one(pending_idx[next_pos])
                     next_pos += 1
-                    futures[
-                    pool.submit(
-                        _run_one,
-                        items[i]["url"],
-                        # sink 携带 [i/N] 归属前缀（i 为 items 下标，稳定且并发安全）
-                        _TaskLogSink(task, i + 1, total),
-                    )
-                ] = i
         fail_count = sum(1 for it in items if it["status"] == "fail")
         ok_count = sum(1 for it in items if it["status"] in ("ok", "skip"))
         cancelled_count = sum(1 for it in items if it["status"] == "cancelled")
@@ -1125,6 +1149,10 @@ class DownloadTaskManager:
         item["elapsed"] = round(elapsed, 1)
         if error:
             item["error"] = error
+        # 该链接收尾：从在途集合移除（summary 据此不再把它计入「当前链接」）
+        inflight = task.get("_inflight")
+        if isinstance(inflight, list) and idx in inflight:
+            inflight.remove(idx)
         ok_items = sum(v for k, v in stats.items() if k not in ("跳过", "失败"))
         if ok_items > 0:
             item["status"] = "ok"
@@ -1303,6 +1331,9 @@ class DownloadTaskManager:
             # 「执行中」标记是进程内状态：磁盘里可能是崩溃瞬间的 True，必须复位，
             # 否则该任务永远无法再被调度（_execute 的守卫会一直挡住）
             t["_executing"] = False
+            # 在途集合是进程内瞬态：磁盘里可能是崩溃瞬间的残留，必须复位，
+            # 否则恢复后的任务会把旧链接的 live 误算进「当前链接」
+            t["_inflight"] = []
             if t.get("status") == "paused":
                 # 暂停是用户主动留下的状态，重启后必须保持暂停（可恢复），不能按「中断」
                 # 处理成 failed —— 那会把用户特意攒着待续跑的任务变成失败。
