@@ -978,17 +978,17 @@ const SCHEDULE_ACTION_TEXT: Record<ScheduleAction, string> = {
 const schedLabel = computed(() => {
   const s = sched.value
   if (!s) return ''
-  if (!s.enabled || !s.times.length) return '定时抓取未启用'
-  return `定时 ${s.times.join('/')} · 下次 ${shortNextRun(s.next_run_at)} · 今日 ${s.today_done.length}/${s.times.length}`
+  if (!s.scrape.enabled || !s.scrape.times.length) return '定时抓取未启用'
+  return `定时 ${s.scrape.times.join('/')} · 下次 ${shortNextRun(s.scrape.next_run_at)} · 今日 ${s.scrape.today_done.length}/${s.scrape.times.length}`
 })
 
 const schedTip = computed(() => {
   const s = sched.value
   if (!s) return ''
-  if (!s.enabled || !s.times.length)
+  if (!s.scrape.enabled || !s.scrape.times.length)
     return '定时抓取未启用：大屏数据只随手动抓取更新。点击前往设置页启用。'
-  const last = s.last
-    ? `上次判定 ${s.last.at.slice(5, 16)}：${SCHEDULE_ACTION_TEXT[s.last.action]}${s.last.reason ? `（${s.last.reason}）` : ''}`
+  const last = s.scrape.last
+    ? `上次判定 ${s.scrape.last.at.slice(5, 16)}：${SCHEDULE_ACTION_TEXT[s.scrape.last.action]}${s.scrape.last.reason ? `（${s.scrape.last.reason}）` : ''}`
     : '服务启动后还没有产生过调度判定'
   return `定时抓取只在 Web 服务存活时执行，错过不补跑。「今日 n/N」为已处理的计划时刻数（含跳过/错过）。${last}。点击前往设置页调整计划时刻。`
 })
@@ -2371,7 +2371,7 @@ function renderFidTrendChart() {
         <el-tooltip v-if="sched" :content="schedTip" placement="top" :teleported="!app.fullscreen">
           <span
             class="health-sched"
-            :class="{ 'sched-off': !sched.enabled || !sched.times.length }"
+            :class="{ 'sched-off': !sched.scrape.enabled || !sched.scrape.times.length }"
             role="link"
             tabindex="0"
             @click.stop="goSettings"

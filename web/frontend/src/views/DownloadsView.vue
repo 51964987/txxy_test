@@ -246,6 +246,12 @@ const STARTABLE = ['failed', 'cancelled', 'paused']
 /** 可「暂停」的状态：排队中 / 下载中（在跑的链接收尾后不再提交新链接） */
 const PAUSABLE = ['running', 'pending']
 const filterStatus = ref<'all' | 'active' | 'paused' | 'done' | 'failed' | 'cancelled'>('all')
+const filterKind = ref<'all' | 'manual' | 'auto'>('all')
+const kindOptions = [
+  { label: '全部类型', value: 'all' },
+  { label: '手动', value: 'manual' },
+  { label: '自动', value: 'auto' },
+]
 const activeCount = computed(
   () => tasks.value.filter((t) => t.status === 'running' || t.status === 'pending').length,
 )
@@ -290,6 +296,10 @@ const filteredTasks = computed<DownloadTaskSummary[]>(() => {
   else if (filterStatus.value === 'active')
     list = tasks.value.filter((t) => t.status === 'running' || t.status === 'pending')
   else list = tasks.value.filter((t) => t.status === filterStatus.value)
+  // 类型筛选：按任务 kind（manual/auto）二次过滤，与状态筛选叠加
+  if (filterKind.value !== 'all') {
+    list = list.filter((t) => (t.kind ?? 'manual') === filterKind.value)
+  }
   // 复制后排序（不原地改 tasks，避免影响其它引用）
   return [...list].sort((a, b) => {
     const ra = statusRank(a.status)
@@ -941,14 +951,47 @@ function taskSignature(list: DownloadTaskSummary[]): string {
   return list.map((t) => `${t.id}:${t.status}:${t.done}/${t.total}`).join('|')
 }
 let taskSig = ''
+/** 任务 id -> 上一帧的任务对象：用于复用未变化任务的旧引用，避免 el-table 整表重建 */
+const taskObjById = new Map<string, DownloadTaskSummary>()
+
+/** 单任务行的渲染相关字段签名：这些字段不变则整行无需重建（就地 patch 即可）。 */
+function rowSig(t: DownloadTaskSummary): string {
+  return JSON.stringify({
+    s: t.status,
+    d: t.done,
+    tot: t.total,
+    sp: t.speed,
+    eta: t.eta_sec,
+    is: t.items_summary,
+    pr: t.priority,
+    k: t.kind,
+    cr: t.cancel_requested,
+    prr: t.pause_requested,
+    tk: t.ticket,
+    ca: t.created_at,
+    ti: t.titles,
+    ls: t.log_seq,
+  })
+}
 
 /** 应用任务列表的唯一入口（SSE 与轮询共用）：只在内容真的变化时才做副作用，
- *  否则 SSE 每 500ms 一帧会导致通知与缺口清单被反复重取。 */
+ *  否则 SSE 每 500ms 一帧会导致通知与缺口清单被反复重取。
+ *  同时复用未变化任务的旧对象引用（row-key=id 配合），让 el-table 对不变行就地 patch，
+ *  消除下载中每 500ms 整表重渲染带来的操作列闪烁与滚动跳动。 */
 function applyTasks(list: DownloadTaskSummary[]) {
   const sig = taskSignature(list)
   const changed = sig !== taskSig
   taskSig = sig
-  tasks.value = list
+  const next: DownloadTaskSummary[] = list.map((t) => {
+    const prev = taskObjById.get(t.id)
+    if (prev && rowSig(prev) === rowSig(t)) return prev
+    taskObjById.set(t.id, t)
+    return t
+  })
+  // 清理已删除任务的旧引用，避免缓存无限增长
+  const ids = new Set(list.map((t) => t.id))
+  for (const id of taskObjById.keys()) if (!ids.has(id)) taskObjById.delete(id)
+  tasks.value = next
   diffAndNotify(list)
   if (detailVisible.value && detailId.value) void fetchDetail()
   // 失败缺口由下载履历派生：任务推进 / 收尾会改变缺口，任务侧有变化就顺带刷新
@@ -1147,6 +1190,7 @@ onBeforeUnmount(() => {
         <!-- 筛选项较多（6 个），窄屏放不下：外层可横向滑动，避免选项被裁掉 -->
         <div class="filter-scroll">
           <el-segmented v-model="filterStatus" :options="filterOptions" />
+          <el-segmented v-model="filterKind" :options="kindOptions" />
         </div>
         <span v-if="usingSse" class="sse-badge" title="服务端推送，进度亚秒级更新">实时推送</span>
         <div class="toolbar-right">
@@ -1177,7 +1221,9 @@ onBeforeUnmount(() => {
         轮询失败：{{ error }}（每 {{ REFRESH_INTERVAL / 1000 }} 秒自动重试）
       </div>
 
-      <el-table v-if="!isMobile" :data="pagedTasks" size="default" style="width: 100%">
+      <!-- row-key=id：配合 applyTasks 复用未变化任务的旧对象引用，el-table 对不变行做
+           就地 patch 而非整表重建，消除下载中每 500ms 的整表重渲染（操作列闪烁/滚动跳动） -->
+      <el-table v-if="!isMobile" :data="pagedTasks" row-key="id" size="default" style="width: 100%">
         <!-- 勾选列（自持选中集合，与移动端卡片同源）：表头复选框作用域 = 当前页 -->
         <el-table-column width="42" align="center">
           <template #header>
@@ -1191,10 +1237,16 @@ onBeforeUnmount(() => {
             <el-checkbox :model-value="isSelected(row.id)" @change="toggleSelect(row.id)" />
           </template>
         </el-table-column>
-        <el-table-column label="任务 ID" width="130">
+        <!-- 标题列：titles 为 URL 反查得到的去重标题集合，列表只展示「主标题 + 等 N 个」。
+             原「任务 ID」列已隐藏（ID 在详情页可见），为不丢信息，置顶标记并入本列。
+             隐藏任务ID列后固定宽总量下降，配合 fit 可避免桌面宽度下的横向滚动条。 -->
+        <el-table-column label="标题" min-width="240" show-overflow-tooltip>
           <template #default="{ row }">
-            <span class="task-id" :title="row.id">{{ row.id.slice(0, 10) }}</span>
             <el-tag v-if="row.priority" size="small" type="success" class="prio-tag">置顶</el-tag>
+            <span v-if="row.titles && row.titles.length">
+              {{ row.titles[0] }}<span v-if="row.titles.length > 1" class="text-muted"> 等 {{ row.titles.length }} 个</span>
+            </span>
+            <span v-else class="text-muted">-</span>
           </template>
         </el-table-column>
         <el-table-column label="状态" width="88">
@@ -1202,7 +1254,13 @@ onBeforeUnmount(() => {
             <el-tag size="small" :type="statusTagType(row.status)">{{ statusText(row.status) }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="进度" min-width="150">
+        <el-table-column label="类型" width="80">
+          <template #default="{ row }">
+            <el-tag v-if="row.kind === 'auto'" size="small" type="warning">自动</el-tag>
+            <el-tag v-else size="small">手动</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="进度" min-width="170">
           <template #default="{ row }">
             <el-progress
               :percentage="row.total ? Math.round((row.done / row.total) * 100) : 0"
@@ -1282,6 +1340,14 @@ onBeforeUnmount(() => {
             <span class="tc-id" :title="row.id">{{ row.id.slice(0, 10) }}</span>
             <el-tag v-if="row.priority" size="small" type="success">置顶</el-tag>
           </div>
+          <!-- 移动端标题：与桌面标题列同源（titles 第一个 + 等 N 个），悬浮显示全部标题 -->
+          <div
+            v-if="row.titles && row.titles.length"
+            class="tc-title"
+            :title="row.titles.join(' / ')"
+            style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600;"
+          >{{ row.titles[0] }}<span v-if="row.titles.length > 1" class="text-muted"> 等 {{ row.titles.length }} 个</span></div>
+          <div v-else class="tc-title text-muted" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">-</div>
           <div class="tc-meta text-muted">
             <span>{{ row.created_at }}</span>
             <span>进度 {{ row.done }}/{{ row.total }}</span>
@@ -1709,8 +1775,14 @@ onBeforeUnmount(() => {
         </div>
         <el-table :data="pagedItems" size="small" border height="300">
           <el-table-column type="index" label="#" width="46" :index="itemIndex" />
-          <el-table-column label="URL" min-width="240" show-overflow-tooltip>
-            <template #default="{ row }">{{ row.url }}</template>
+          <el-table-column label="标题" min-width="240">
+            <template #default="{ row }">
+              <!-- 标题优先；查不到标题（纯直链/帖子未入库）回退显示完整 URL，避免空白；
+                   悬浮显示完整 URL，保留排查入口（详情无「打开原帖」入口） -->
+              <el-tooltip :content="row.url" placement="top" :disabled="!row.url">
+                <span style="display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ row.title || row.url || '-' }}</span>
+              </el-tooltip>
+            </template>
           </el-table-column>
           <el-table-column label="状态" width="82">
             <template #default="{ row }">
@@ -2053,6 +2125,15 @@ onBeforeUnmount(() => {
 .progress-text {
   font-size: 12px;
   color: #606266;
+}
+
+/* 下载进度提示：小字号 + 强制单行不换行，避免「个/分 · 剩余」被拆成两行 */
+.task-rate {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  font-size: 12px;
+  white-space: nowrap;
 }
 
 .detail-summary {

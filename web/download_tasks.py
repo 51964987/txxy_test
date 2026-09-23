@@ -289,6 +289,12 @@ class DownloadTaskManager:
         self._queue: "queue.Queue[tuple[int, int, str | None]]" = queue.PriorityQueue()
         self._seq: int = 0
         self._workers: list[threading.Thread] = []
+        # 资产快照 memo：_asset_snapshot 会对每个 URL 做一次磁盘 stat（is_dir+iterdir），
+        # 此前在持锁状态下进行、并被 failures/re-downloads/看板多个接口各自重算。
+        # 这里集中 memo 一次（TTL 与 db.cached 的 5s 口径一致），写后由 invalidate_asset_snapshot 失效。
+        self._snap_cache: dict[str, Any] | None = None
+        self._snap_cache_ts: float = 0.0
+        self._SNAP_TTL: float = 5.0
         self._load()
 
     # ---------------- 生命周期 ----------------
@@ -340,8 +346,11 @@ class DownloadTaskManager:
 
     # ---------------- 外部接口 ----------------
 
-    def submit(self, urls: list[str], priority: bool = False) -> str:
-        """提交下载任务，返回任务 ID（立即返回，后台排队执行）。"""
+    def submit(self, urls: list[str], priority: bool = False, kind: str = "manual") -> str:
+        """提交下载任务，返回任务 ID（立即返回，后台排队执行）。
+
+        kind：任务类型，manual=手动下载，auto=自动下载（沉淀合流后由自动下载管线提交），
+        供下载中心筛选与展示区分；默认 manual。"""
         self.start()
         now = self._now()
         task: dict[str, Any] = {
@@ -364,6 +373,7 @@ class DownloadTaskManager:
             # （在收尾期间它代表「仍有已提交的链接在跑」，batch_start 据此拒绝提前续跑）
             "pause_requested": False,
             "priority": bool(priority),
+            "kind": kind,  # 任务类型：manual(手动) / auto(自动下载)；供下载中心筛选与展示
             "_queued": True,
             "_ticket": 0,
             # 内部字段（下划线开头，不进 API / 展示）：_executing = 有 worker 正在执行本任务
@@ -375,6 +385,11 @@ class DownloadTaskManager:
             self._tasks[task["id"]] = task
             self._queue.put((0 if priority else 1, self._seq, task["id"]))
             self._persist_locked()
+        # 写后即失效资产快照 memo（规则 21 / 43③）：新任务的 pending 链接必须**立刻**出现在
+        # active 集合里，否则 TTL 未过期前读到的仍是旧快照 —— 紧接着的第二次提交（自动下载
+        # 手动连点、定时与手动重叠）会把同一批 URL 再提交一遍，两个 worker 并发写同一文件。
+        # 失效必须内聚在 submit 内：自动下载直连 manager.submit，不经过 api 层那套失效。
+        self.invalidate_asset_snapshot()
         return task["id"]
 
     def list(self) -> list[dict[str, Any]]:
@@ -413,7 +428,9 @@ class DownloadTaskManager:
                     finished_cnt += 1
         base = self._public(t)
         base.pop("items", None)
-        base.pop("urls", None)
+        # 保留 urls：本模块只管任务队列、不碰 posts.db，标题反查交给 api 层（只读库）
+        # 由 api._attach_task_titles 反查后在推送/列表响应里剔除，避免重复搬运；
+        # 详情接口走 get/ _public，自带 urls，不受影响。
         base.pop("logs", None)
         base["items_summary"] = counts
         base["saved_dirs"] = saved_dirs
@@ -454,8 +471,12 @@ class DownloadTaskManager:
         except OSError:
             return False
 
-    def _classify_urls_locked(self) -> tuple[set[str], set[str], set[str]]:
-        """把任务项与下载履历的 URL 归为三类（**须在持锁状态下调用**）。
+    def _classify_urls(
+        self,
+        task_items: list[list[dict[str, Any]]],
+        history_items: list[tuple[str, dict[str, Any]]],
+    ) -> tuple[set[str], set[str], set[str]]:
+        """把任务项与下载履历的 URL 归为三类（**锁外调用**：调用方先拷贝好内存数据再传入）。
 
         - alive：历史曾成功（ok/skip，任务项或下载履历）且保存目录仍在磁盘（有内容）；
         - gone：历史曾成功但保存目录已不在磁盘；
@@ -467,12 +488,39 @@ class DownloadTaskManager:
         「是否已下载」的判据必须额外校验磁盘：跳过与否由 download_files 依据磁盘决定，
         历史状态只能作参考。此判据被 dup_check（提交前提示）与 asset_snapshot
         （大屏待下载队列 / 资产漏斗 / 对账）共用，避免两处各写一套导致口径漂移。
+
+        改为锁外执行：磁盘 stat（is_dir+iterdir）耗时长，若持锁进行会阻塞 summary()/SSE/
+        提交/取消；调用方在持锁区仅浅拷贝 items 与 history 的引用，释放锁后再逐 URL stat。
+        进一步按「目录名」去重（见下方 dir_exists 缓存）：多个 URL 共用同一下载子目录时，
+        每个目录只 stat 一次，避免对约 132 个实际目录重复扫描数十次（活跃下载时 Defender
+        扫描落盘文件会让 iterdir 枚举膨胀到秒级，去重直接把扫描总量级砍到约 1/20）。
         """
         alive: set[str] = set()
         gone: set[str] = set()
         active: set[str] = set()
-        for t in self._tasks.values():
-            for it in t["items"]:
+        # 目录存在性按「目录名」去重缓存：一个下载子目录会被多个 URL 共用（同一帖子多个链接 /
+        # 同目录多帖），原始写法对每个 URL 都做一次 is_dir+iterdir，3230 个 URL 会对约 132 个
+        # 实际目录重复 stat 数十次；活跃下载时 Windows Defender 实时扫描每个落盘文件会让
+        # iterdir 枚举膨胀到秒级，于是扫描总量级飙到十几秒。这里先收集所有待查目录、每个只
+        # stat 一次，再回填到 URL——stat 次数从「URL 数」降到「去重目录数」（≈下载子目录数）。
+        dir_exists: dict[str, bool] = {}
+
+        def exists(rel: str | None) -> bool:
+            if not rel:
+                return False
+            cached = dir_exists.get(rel)
+            if cached is None:
+                # 仅查目录是否存在（纯元数据，不枚举内容）：活跃下载时 Windows Defender
+                # 对「落盘文件内容」做实时扫描，any(iterdir()) 枚举大目录会被拖到百毫秒级；
+                # 而已下载 URL 的 saved_dir 在下载成功时必然已写入文件（非空），空目录只可能
+                # 来自失败/取消的残目录、不会以 ok/skip 进入任务项或履历，故「存在即算 alive」
+                # 与「存在且有内容」在当前数据上完全等价（实测去重目录中空目录数 = 0）。
+                cached = (config.DOWNLOADS_DIR / rel).is_dir()
+                dir_exists[rel] = cached
+            return cached
+
+        for items in task_items:
+            for it in items:
                 url = it.get("url")
                 if not url:
                     continue
@@ -480,16 +528,16 @@ class DownloadTaskManager:
                 if st in ("pending", "running"):
                     active.add(url)
                 elif st in ("ok", "skip"):
-                    if self._saved_dir_exists(it.get("saved_dir")):
+                    if exists(it.get("saved_dir")):
                         alive.add(url)
                     else:
                         gone.add(url)
         # 下载履历：与任务项同一判据（目录仍在才算 alive；目录已删归入 gone，
         # dup_check 据此提示「会重新下载」，待下载推荐也据此重新纳入）
-        for url, ent in self._history.items():
+        for url, ent in history_items:
             if url in alive or url in active:
                 continue
-            if self._saved_dir_exists(str(ent.get("dir") or "")):
+            if exists(str(ent.get("dir") or "")):
                 alive.add(url)
             else:
                 gone.add(url)
@@ -507,8 +555,11 @@ class DownloadTaskManager:
         判重依据与实际行为保持一致：是否跳过由 download_files 依据磁盘决定，
         历史记录只能用于提示，故此处额外校验保存目录是否真的还在。
         """
+        # 拷贝内存数据后立即释放锁，磁盘 stat 在锁外进行（不阻塞提交主流程）
         with self._lock:
-            alive, gone, active = self._classify_urls_locked()
+            task_items = [list(t["items"]) for t in self._tasks.values()]
+            history_items = list(self._history.items())
+        alive, gone, active = self._classify_urls(task_items, history_items)
         return {
             "still_exists": [u for u in urls if u in alive],
             "gone": [u for u in urls if u in gone],
@@ -532,35 +583,45 @@ class DownloadTaskManager:
 
         集中在一次调用里算完的原因：资产卡需要同时用到五类信息，逐个 getter 会反复持锁并重复
         全量校验目录存在性（履历条数 × N 次 stat）；且口径分散在多处必然漂移——本项目的
-        「已下载」判定只允许有这一条路径（内部仍复用 _classify_urls_locked，不另写判据）。
+        「已下载」判定只允许有这一条路径（内部仍复用 _classify_urls，不另写判据）。
+        本方法对结果做 TTL memo（见 __init__ 的 _snap_cache）：failures/re-downloads/看板多个
+        接口共享一次计算，且磁盘 stat 已移到持锁区之外，避免阻塞主表/SSE/提交。
         """
+        # 先查 memo：命中且未过期直接返回，避免多个接口各自重算同一份全量扫描。
         with self._lock:
-            alive, gone, active = self._classify_urls_locked()
-            claimed_dirs: set[str] = set()
-            first_at: dict[str, str] = {}
-            dir_of: dict[str, str] = {}
-            failures: list[dict[str, str]] = []
-            for url, ent in self._history.items():
-                d = str(ent.get("dir") or "")
-                # dir_of / first_at 覆盖所有曾成功的条目（alive + gone）：
-                # gone 的旧目录名即「原目录」、首次时间用于可重下清单排序，清理目录后不该丢失。
-                if d:
-                    dir_of[url] = d
-                fa = ent.get("first_at")
-                if fa:
-                    first_at[url] = str(fa)
-                if url in alive and d:
-                    claimed_dirs.add(d)
-                elif ent.get("fail_at"):
-                    failures.append(
-                        {
-                            "url": url,
-                            "dir": d,
-                            "fail_at": str(ent.get("fail_at") or ""),
-                            "error": str(ent.get("fail_error") or ""),
-                        }
-                    )
-        return {
+            if self._snap_cache is not None and (time.monotonic() - self._snap_cache_ts) < self._SNAP_TTL:
+                return self._snap_cache
+            # 仅浅拷贝内存引用，立即释放锁——后续数千次磁盘 stat 在锁外进行，
+            # 不再阻塞 summary()/SSE/提交/取消（活跃下载时 Windows Defender 扫描每个落盘文件
+            # 会让扫描膨胀到秒级，此前会把主任务表一并卡住）。
+            task_items = [list(t["items"]) for t in self._tasks.values()]
+            history_items = list(self._history.items())
+        alive, gone, active = self._classify_urls(task_items, history_items)
+        claimed_dirs: set[str] = set()
+        first_at: dict[str, str] = {}
+        dir_of: dict[str, str] = {}
+        failures: list[dict[str, str]] = []
+        for url, ent in history_items:
+            d = str(ent.get("dir") or "")
+            # dir_of / first_at 覆盖所有曾成功的条目（alive + gone）：
+            # gone 的旧目录名即「原目录」、首次时间用于可重下清单排序，清理目录后不该丢失。
+            if d:
+                dir_of[url] = d
+            fa = ent.get("first_at")
+            if fa:
+                first_at[url] = str(fa)
+            if url in alive and d:
+                claimed_dirs.add(d)
+            elif ent.get("fail_at"):
+                failures.append(
+                    {
+                        "url": url,
+                        "dir": d,
+                        "fail_at": str(ent.get("fail_at") or ""),
+                        "error": str(ent.get("fail_error") or ""),
+                    }
+                )
+        result = {
             "alive": alive,
             "gone": gone,
             "active": active,
@@ -569,6 +630,20 @@ class DownloadTaskManager:
             "dir_of": dir_of,
             "failures": failures,
         }
+        # 锁内落 memo（result 此后不可变，返回它是安全的；调用方只读不写）
+        with self._lock:
+            self._snap_cache = result
+            self._snap_cache_ts = time.monotonic()
+        return result
+
+    def invalidate_asset_snapshot(self) -> None:
+        """失效资产快照 memo（写操作后调用，与 api._invalidate_download_stats 同源）。
+
+        快照依赖三类易变事实：① 内存中的任务项状态 / 下载履历（提交 / 重跑 / 删除文件时变）；
+        ② downloads/ 下目录是否仍在磁盘（资源删除 / 落盘时变）。两者都通过本方法在写后立刻失效，
+        避免「点了删除 / 提交，缺口清单还在旧快照」的假象（与规则 21 写后即失效一致）。
+        """
+        self._snap_cache = None
 
     def cancel(self, tid: str) -> bool:
         """取消未完成任务（pending/running）。
@@ -864,6 +939,7 @@ class DownloadTaskManager:
         队列令牌以 ticket 名义单独暴露：前端任务列表「排队中」按它升序展示，
         才能与实际执行顺序（PriorityQueue 按 (priority, seq) 出队）保持一致。"""
         out = {k: v for k, v in t.items() if not k.startswith("_")}
+        out.setdefault("kind", "manual")  # 旧任务无 kind 字段时一律按手动处理，保持兼容
         if "_ticket" in t:
             out["ticket"] = t["_ticket"]
         return out
@@ -1324,6 +1400,8 @@ class DownloadTaskManager:
 
         if seeded or recovered:
             self._persist_history_locked()
+        # 启动恢复改了 _tasks/_history：清掉旧快照 memo，下次读取重新计算
+        self._snap_cache = None
 
     @staticmethod
     def _finalize_status(task: dict[str, Any]) -> str:

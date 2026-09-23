@@ -175,9 +175,14 @@ def extract_title(html: str, url: str) -> str:
 # ============ 页面下载主流程 ============
 
 
-def _process_page_impl(url: str) -> tuple[dict[str, int], str | None]:
-    """process_page 实现：额外返回保存目录（相对 downloads/ 的路径，页面获取失败时为 None），供下载中心回填 saved_dir"""
+def _process_page_impl(url: str, output_root: str | None = None) -> tuple[dict[str, int], str | None]:
+    """process_page 实现：额外返回保存目录（相对输出根的路径，页面获取失败时为 None），供下载中心回填 saved_dir。
+
+    output_root 为 None 时用全局 DOWNLOAD_ROOT（下载中心默认行为，自动下载即走此路）；
+    传非 None 的 output_root 可把输出改到任意指定目录（如二次归档、导出到指定盘），复用同一原语。
+    """
     stats: dict[str, int] = {}
+    root = output_root or DOWNLOAD_ROOT
     #print(f"目标页面: {url}\n")
 
     # --- 获取 HTML ---
@@ -188,8 +193,8 @@ def _process_page_impl(url: str) -> tuple[dict[str, int], str | None]:
 
     # --- 标题 → 目录 ---
     title = extract_title(html, url)
-    save_dir = os.path.join(DOWNLOAD_ROOT, sanitize_title(title))
-    save_dir_rel = os.path.relpath(save_dir, DOWNLOAD_ROOT).replace("\\", "/")
+    save_dir = os.path.join(root, sanitize_title(title))
+    save_dir_rel = os.path.relpath(save_dir, root).replace("\\", "/")
     os.makedirs(save_dir, exist_ok=True)
     print(f"标题: {title}")
     print(f"保存目录: {save_dir}\n")
@@ -313,7 +318,7 @@ def _process_page_impl(url: str) -> tuple[dict[str, int], str | None]:
         print(f"\n共提取到 {len(other_urls)} 个其他类型资源，开始下载...\n")
         try:
             for i, o_url in enumerate(other_urls, start=1):
-                if download_torrent(o_url, DOWNLOAD_ROOT, dir_name=sanitize_title(title)):
+                if download_torrent(o_url, root, dir_name=sanitize_title(title)):
                     ok_other += 1
                 if i < len(other_urls):
                     time.sleep(DOWNLOAD_INTERVAL)
@@ -457,26 +462,28 @@ def _first_media_dir(first: str) -> tuple[str | None, bool]:
     return os.path.join(DOWNLOAD_ROOT, os.path.splitext(_media_filename(first))[0]), _is_url(first)
 
 
-def _process_one_impl(url: str) -> tuple[dict[str, int], str | None]:
-    """process_one 实现：额外返回保存目录（相对 downloads/ 的路径，无法确定时为 None）。
+def _process_one_impl(url: str, output_root: str | None = None) -> tuple[dict[str, int], str | None]:
+    """process_one 实现：额外返回保存目录（相对输出根的路径，无法确定时为 None）。
 
     种子分支的目录由 download_torrent 内部决定（种子标题或日期），不回传；
-    页面分支目录 = downloads/<页面标题>/，媒体直链分支 = downloads/<文件名不含扩展名>/。
+    页面分支目录 = <输出根>/<页面标题>/，媒体直链分支 = <输出根>/<文件名不含扩展名>/。
+    output_root 为 None 时用全局 DOWNLOAD_ROOT（下载中心默认行为）。
     """
     url = url.strip().rstrip(".,;:!?)]}。，；：！？、")
+    root = output_root or DOWNLOAD_ROOT
     if RMDOWN_LINK_RE.search(url) or TORRENT_LINK_RE.fullmatch(url):
-        ok = bool(download_torrent(url, DOWNLOAD_ROOT))
+        ok = bool(download_torrent(url, root))
         return ({"种子": 1} if ok else {}), None
     if is_media_direct_url(url):
-        media_dir = os.path.join(DOWNLOAD_ROOT, os.path.splitext(_media_filename(url))[0])
+        media_dir = os.path.join(root, os.path.splitext(_media_filename(url))[0])
         status = download_media_direct(url, media_dir)
-        saved_dir = os.path.relpath(media_dir, DOWNLOAD_ROOT).replace("\\", "/")
+        saved_dir = os.path.relpath(media_dir, root).replace("\\", "/")
         if status == "ok":
             return {"媒体": 1}, saved_dir
         if status == "skip":
             return {"媒体": 1, "跳过": 1}, saved_dir
         return {}, None
-    return _process_page_impl(url)
+    return _process_page_impl(url, output_root)
 
 
 def process_one(url: str) -> dict[str, int]:
@@ -493,10 +500,14 @@ def process_one(url: str) -> dict[str, int]:
     return stats
 
 
-def process_one_detail(url: str) -> tuple[dict[str, int], str | None]:
-    """process_one 扩展版（仅 Web 下载中心使用）：额外返回保存目录（相对 downloads/ 的路径），
-    供下载任务回填 item.saved_dir，资源管理页据此关联「目录 → 下载任务」。"""
-    return _process_one_impl(url)
+def process_one_detail(url: str, output_root: str | None = None) -> tuple[dict[str, int], str | None]:
+    """process_one 扩展版（仅 Web 下载中心使用）：额外返回保存目录（相对输出根的路径），
+    供下载任务回填 item.saved_dir，资源管理页据此关联「目录 → 下载任务」。
+
+    output_root 为 None 时用全局 DOWNLOAD_ROOT（下载中心默认行为，自动下载即走此路）；
+    传非 None 的 output_root 可把输出改到任意指定目录（如二次归档、导出到指定盘），仅改变输出位置。
+    """
+    return _process_one_impl(url, output_root)
 
 
 def main() -> None:

@@ -12,7 +12,6 @@ import {
 } from '../api'
 import { useAppStore } from '../stores/app'
 import { useDashboardStore } from '../stores/dashboard'
-import { legacyCopy } from '../utils/clipboard'
 
 const app = useAppStore()
 // 自动刷新总开关的实际状态在 Dashboard store（Header 与数据总览共用同一份）
@@ -20,15 +19,23 @@ const dash = useDashboardStore()
 const isMobile = computed(() => app.isMobile)
 
 const loading = ref(false)
-const saving = ref(false)
 const loadError = ref('')
 const items = ref<SettingItem[]>([])
-// 表单草稿：key -> 值（保存前不写回 items，避免未保存就改了回显）
-const draft = ref<Record<string, number | boolean | string[] | string>>({})
+// 当前选中的左侧导航项：分组索引或 'blacklist'（macOS/Windows 设置风格：左分类、右面板）
+const activeNav = ref<number | 'blacklist'>(0)
+// 逐条自动保存：记录正在保存的键，仅用于行内「保存中…」提示；不再有全局草稿/未保存态
+const savingMap = ref<Record<string, boolean>>({})
+const lastSavedAt = ref<number | null>(null)
+const lastSavedText = computed(() => {
+  if (!lastSavedAt.value) return '改动将自动保存，无需点「保存」'
+  const d = new Date(lastSavedAt.value)
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `已自动保存 · ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
+})
 
 /** 分组：与后端白名单顺序一致，按业务域切分（业界设置页通行做法）。
  *  desc 可选：组内各项已有自述时不再重复加组级说明（「内容资产」组即如此，2026-09-13 文案收敛） */
-const GROUPS: { title: string; desc?: string; keys: string[]; extra?: 'schedule' }[] = [
+const GROUPS: { title: string; desc?: string; keys: string[]; extra?: 'schedule' | 'precipitate' }[] = [
   {
     title: '定时抓取',
     // 组级说明只讲一件用户必须知道的事：调度的唯一来源（避免与 OS 定时重复触发）
@@ -40,6 +47,20 @@ const GROUPS: { title: string; desc?: string; keys: string[]; extra?: 'schedule'
       'scrape_schedule_restart',
       'scrape_schedule_use_proxy',
       'scrape_schedule_miss_tolerance',
+    ],
+  },
+  {
+    title: '自动下载',
+    desc: '按下面的筛选条件，每天在设定时刻自动把当天发布的帖子（含媒体与链接清单）提交到下载中心（downloads/）自动下载；保存后立即生效。建议自动下载时刻排在抓取时刻之后，确保当天数据已入库。',
+    extra: 'precipitate',
+    keys: [
+      'precipitate_enabled',
+      'precipitate_times',
+      'precipitate_keywords',
+      'precipitate_min_likes',
+      'precipitate_min_replies',
+      'precipitate_fids',
+      'precipitate_min_free_gb',
     ],
   },
   {
@@ -102,20 +123,19 @@ function groupItems(keys: string[]): SettingItem[] {
   return keys.map((k) => byKey(k)).filter((i): i is SettingItem => !!i)
 }
 
-/** 草稿值（未改动时取当前生效值） */
+/** 当前生效值（自动保存模式下无草稿，直接读 items 的已保存值） */
 function valueOf(it: SettingItem): number | boolean | string[] | string {
-  const v = draft.value[it.key]
-  return v === undefined ? it.value : v
+  return it.value
 }
 
-/** 数组型设置项的当前草稿值（缺省回落到已生效值） */
+/** 数组型设置项的当前值 */
 function arrayValue(it: SettingItem): string[] {
-  const v = draft.value[it.key]
-  return Array.isArray(v) ? v : ((it.value as string[]) ?? [])
+  return Array.isArray(it.value) ? (it.value as string[]) : []
 }
 function isIncluded(it: SettingItem, key: string): boolean {
   return arrayValue(it).includes(key)
 }
+/** 勾选/取消某板块：算出新序列后立即单条保存（自动保存，无需点保存） */
 function toggleSection(it: SettingItem, key: string) {
   const cur = arrayValue(it)
   let next: string[]
@@ -126,7 +146,7 @@ function toggleSection(it: SettingItem, key: string) {
     const order = (it.options ?? []).map((o) => o.value)
     next = cur.concat(key).sort((a, b) => order.indexOf(a) - order.indexOf(b))
   }
-  draft.value[it.key] = next
+  void saveOne(it, next)
 }
 function moveSection(it: SettingItem, key: string, dir: -1 | 1) {
   const cur = arrayValue(it).slice()
@@ -136,7 +156,7 @@ function moveSection(it: SettingItem, key: string, dir: -1 | 1) {
   const tmp = cur[i]
   cur[i] = cur[j]
   cur[j] = tmp
-  draft.value[it.key] = cur
+  void saveOne(it, cur)
 }
 /** 板块序列默认值用标签展示，便于回显 */
 function arrayLabels(it: SettingItem, keys: string[]): string {
@@ -182,7 +202,7 @@ function onVisibility() {
 }
 
 /** 当前是否有批次在跑：有则禁用「立即运行一次」（与后端 start_run 的守卫同源） */
-const schedRunning = computed(() => sched.value?.running ?? null)
+const schedRunning = computed(() => sched.value?.scrape?.running ?? null)
 const runNowDisabled = computed(() => schedRunning.value !== null || runNowLoading.value)
 const runNowTip = computed(() =>
   schedRunning.value
@@ -217,23 +237,22 @@ async function loadSchedule() {
   }
 }
 
-/** 时刻列表（times 类型）：优先取草稿，未改动则取生效值 */
+/** 时刻列表（times 类型）：直接读已保存值 */
 function timeList(it: SettingItem): string[] {
-  const v = draft.value[it.key]
-  return Array.isArray(v) ? v : ((it.value as string[]) ?? [])
+  return Array.isArray(it.value) ? (it.value as string[]) : []
 }
 function setTimeAt(it: SettingItem, index: number, value: string) {
   const next = timeList(it).slice()
   if (!/^\d{2}:\d{2}$/.test(value)) return
   next[index] = value
-  draft.value[it.key] = next
+  void saveOne(it, next)
 }
 /** 添加时刻：取第一个尚未占用的整点（同一天两个相同时刻没有意义，避免用户先存出重复项） */
 function addTime(it: SettingItem) {
   const cur = timeList(it)
   const hours = Array.from({ length: 24 }, (_, h) => `${String(h).padStart(2, '0')}:00`)
   const pick = hours.find((t) => !cur.includes(t)) ?? '12:00'
-  draft.value[it.key] = [...new Set([...cur, pick])].sort()
+  void saveOne(it, [...new Set([...cur, pick])].sort())
 }
 function removeTime(it: SettingItem, index: number) {
   const next = timeList(it).filter((_, i) => i !== index)
@@ -242,7 +261,7 @@ function removeTime(it: SettingItem, index: number) {
     ElMessage.warning('至少保留一个抓取时刻；如要停止定时抓取，请关闭「启用定时抓取」')
     return
   }
-  draft.value[it.key] = next
+  void saveOne(it, next)
 }
 
 /** 立即运行一次：复用既有手动入口（/api/runs/start，同一防重），用于验证上面的参数 */
@@ -263,9 +282,65 @@ async function runNow() {
   }
 }
 
-const dirty = computed(() =>
-  items.value.some((it) => draft.value[it.key] !== undefined && draft.value[it.key] !== it.value),
+/** 立即自动下载一次：复用 /api/precipitate/run（同一筛选/磁盘守卫），用于即时验证参数 */
+const autoDownloadNowLoading = ref(false)
+const precipitateDiskLow = computed(
+  () => (sched.value?.precipitate?.last?.reason ?? '').includes('磁盘'),
 )
+async function autoDownloadNow() {
+  autoDownloadNowLoading.value = true
+  try {
+    const r = await api.precipitateRun()
+    if (!r.enabled) {
+      ElMessage.warning('自动下载未启用，先在上方开启开关')
+      return
+    }
+    // 文案一律取后端 reason（与定时「上次结果」同源）：零结果时后端已区分「当天无数据入库 /
+    // 有数据但没命中 / 命中但已下载过」，前端自拼会丢掉这层解释
+    if (r.disk_low) {
+      ElMessage.warning(r.reason)
+    } else {
+      ElMessage.success(r.reason)
+    }
+  } catch (e) {
+    if (isAborted(e)) return
+    ElMessage.error(`自动下载失败: ${(e as Error).message}`)
+  } finally {
+    autoDownloadNowLoading.value = false
+    await loadSchedule() // 立刻回填「上次结果 / 今日已处理」，不等下一次轮询
+  }
+}
+
+/** 逐条自动保存：改一项即立即写后端并生效（去掉了「保存设置」批提交）。
+ *  单人本机场景无需「未保存草稿」概念：任何改动立刻落盘 + 推进运行态（后端 update 内部 apply_runtime）。
+ *  单键保存与后端白名单单键口径一致；失败仅提示该行，不阻断其它项编辑。 */
+async function saveOne(it: SettingItem, value: number | boolean | string[] | string) {
+  savingMap.value = { ...savingMap.value, [it.key]: true }
+  try {
+    const r = await api.saveSettings({ [it.key]: value })
+    const updated = r.settings.find((s) => s.key === it.key)
+    if (updated) {
+      const idx = items.value.findIndex((x) => x.key === it.key)
+      if (idx >= 0) items.value[idx] = updated
+    }
+    // frontend 作用域：自动刷新开关需同步全局状态（轮播等前端参数随页面加载生效）
+    if (it.key === 'enable_auto_refresh') {
+      dash.setEnableAutoRefresh(Boolean(value))
+    }
+    // 抓取/沉淀相关参数改动会改变「下次执行」：重取调度状态，避免页面显示与实际调度口径不一致
+    if (it.key.startsWith('scrape_schedule_') || it.key.startsWith('precipitate_')) {
+      void loadSchedule()
+    }
+    lastSavedAt.value = Date.now()
+  } catch (e) {
+    if (isAborted(e)) return
+    ElMessage.error(`保存「${it.label}」失败: ${(e as Error).message}`)
+  } finally {
+    const next = { ...savingMap.value }
+    delete next[it.key]
+    savingMap.value = next
+  }
+}
 
 async function load() {
   loading.value = true
@@ -273,7 +348,6 @@ async function load() {
   try {
     const cfg = await api.config()
     items.value = cfg.settings ?? []
-    draft.value = {}
   } catch (e) {
     if (isAborted(e)) return
     loadError.value = (e as Error).message
@@ -285,38 +359,14 @@ async function load() {
 
 function setNumber(it: SettingItem, v: number | null) {
   if (v === null || Number.isNaN(v)) return
-  draft.value[it.key] = v
+  void saveOne(it, v)
 }
 
 function setBool(it: SettingItem, v: boolean | string | number) {
-  draft.value[it.key] = Boolean(v)
+  void saveOne(it, Boolean(v))
 }
 function setText(it: SettingItem, v: string) {
-  draft.value[it.key] = v
-}
-
-async function save() {
-  if (!dirty.value) {
-    ElMessage.info('没有改动')
-    return
-  }
-  saving.value = true
-  try {
-    const r = await api.saveSettings(draft.value)
-    items.value = r.settings
-    draft.value = {}
-    ElMessage.success('已保存，按各项标注的生效范围生效')
-    // 自动刷新属前端参数：保存后立即同步到全局状态，不必刷新页面
-    const auto = r.settings.find((s) => s.key === 'enable_auto_refresh')
-    if (auto) dash.setEnableAutoRefresh(Boolean(auto.value))
-    // 时刻/开关改动会改变「下次执行」：重取调度状态，避免页面显示与实际调度口径不一致
-    await loadSchedule()
-  } catch (e) {
-    if (isAborted(e)) return
-    ElMessage.error(`保存失败: ${(e as Error).message}`)
-  } finally {
-    saving.value = false
-  }
+  void saveOne(it, v)
 }
 
 async function resetOne(it: SettingItem) {
@@ -351,21 +401,14 @@ async function doReset(keys: string[]) {
   try {
     const r = await api.resetSettings(keys)
     items.value = r.settings
-    draft.value = {}
     const auto = r.settings.find((s) => s.key === 'enable_auto_refresh')
     if (auto) dash.setEnableAutoRefresh(Boolean(auto.value))
-    ElMessage.success('已恢复默认')
+    lastSavedAt.value = Date.now()
+    ElMessage.success(keys.length ? '已恢复默认' : '已恢复全部默认')
   } catch (e) {
     if (isAborted(e)) return
     ElMessage.error(`恢复失败: ${(e as Error).message}`)
   }
-}
-
-/** 保存前可复制当前草稿，便于反馈/备份（复用统一剪贴板实现） */
-function copyDraft() {
-  const text = JSON.stringify(draft.value, null, 2)
-  if (legacyCopy(text)) ElMessage.success('已复制改动内容')
-  else ElMessage.error('复制失败')
 }
 
 // ===== 链接黑名单（大屏卡片口径过滤）=====
@@ -471,294 +514,385 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div v-loading="loading">
-    <el-result v-if="loadError" icon="error" title="设置加载失败" :sub-title="loadError">
-      <template #extra>
-        <el-button type="primary" :loading="loading" @click="load">重试</el-button>
-      </template>
-    </el-result>
+  <div class="settings-layout">
+    <!-- 左侧分类导航（macOS/Windows 设置风格：左分类、右面板；窄屏自动转为顶部横向滚动） -->
+    <nav class="settings-nav">
+      <button
+        v-for="(g, i) in GROUPS"
+        :key="g.title"
+        type="button"
+        class="nav-item"
+        :class="{ active: activeNav === i }"
+        @click="activeNav = i"
+      >{{ g.title }}</button>
+      <button
+        type="button"
+        class="nav-item"
+        :class="{ active: activeNav === 'blacklist' }"
+        @click="activeNav = 'blacklist'"
+      >链接黑名单</button>
+    </nav>
 
-    <template v-else>
-      <!-- 说明条：明确配置层级与生效口径，避免用户误以为改完会重启服务 -->
-      <div class="page-card tip-card">
-        <div class="tip-title">设置说明</div>
-        <ul class="tip-list">
-          <li>配置层级：<b>页内设置</b> &gt; 环境变量 &gt; 代码默认值；仅下列参数支持页内调整。</li>
-          <li>
-            端口、数据目录、域名等<b>部署配置不在此处</b>（与环境/部署相关，修改需改
-            <code>.env</code> 并重启）。
-          </li>
-          <li>每项标注了生效范围；超出范围的值会自动收敛到允许区间。</li>
-        </ul>
-      </div>
+    <div class="settings-panel" v-loading="loading">
+      <el-result v-if="loadError" icon="error" title="设置加载失败" :sub-title="loadError">
+        <template #extra>
+          <el-button type="primary" :loading="loading" @click="load">重试</el-button>
+        </template>
+      </el-result>
 
-      <div v-for="g in GROUPS" :key="g.title" class="page-card">
-        <div class="group-title">{{ g.title }}</div>
-        <div v-if="g.desc" class="group-desc text-muted">{{ g.desc }}</div>
-        <!-- 定时抓取：状态区（只读，来自 /api/schedule，与真实触发判定同源）放在配置项之前，
-             用户先看到「下次什么时候跑、上次为什么没跑」，再决定怎么改参数 -->
-        <div v-if="g.extra === 'schedule'" class="sched-status">
-          <template v-if="sched">
-            <!-- 当前状态放第一行：点了「立即运行一次」或到点触发后，用户先要看的就是「现在在跑没有」 -->
-            <div class="ss-row">
-              <span class="ss-label">当前状态</span>
-              <span class="ss-value">
-                <template v-if="schedRunning">
-                  <el-tag size="small" type="primary">{{ schedRunningText }}</el-tag>
-                  <el-button link type="primary" size="small" @click="router.push('/runs')">
-                    查看进度
+      <template v-else>
+        <!-- 说明条：明确配置层级与生效口径，避免用户误以为改完会重启服务 -->
+        <div class="page-card tip-card">
+          <div class="tip-title">设置说明</div>
+          <ul class="tip-list">
+            <li>配置层级：<b>页内设置</b> &gt; 环境变量 &gt; 代码默认值；仅下列参数支持页内调整。</li>
+            <li>
+              端口、数据目录、域名等<b>部署配置不在此处</b>（与环境/部署相关，修改需改
+              <code>.env</code> 并重启）。
+            </li>
+            <li>每项标注了生效范围；超出范围的值会自动收敛到允许区间。</li>
+            <li><b>改动逐条自动保存</b>：改任意一项即刻写盘生效，无需点「保存设置」。</li>
+          </ul>
+        </div>
+
+        <div
+          v-for="(g, i) in GROUPS"
+          v-show="activeNav === i"
+          :key="g.title"
+          class="page-card"
+        >
+          <div class="group-title">{{ g.title }}</div>
+          <div v-if="g.desc" class="group-desc text-muted">{{ g.desc }}</div>
+          <!-- 定时抓取：状态区（只读，来自 /api/schedule，与真实触发判定同源）放在配置项之前，
+               用户先看到「下次什么时候跑、上次为什么没跑」，再决定怎么改参数 -->
+          <!-- 抓取调度状态（只读，来自 /api/schedule.scrape，与真实触发判定同源） -->
+          <div v-if="g.extra === 'schedule'" class="sched-status">
+            <template v-if="sched && sched.scrape">
+              <div class="ss-row">
+                <span class="ss-label">当前状态</span>
+                <span class="ss-value">
+                  <template v-if="schedRunning">
+                    <el-tag size="small" type="primary">{{ schedRunningText }}</el-tag>
+                    <el-button link type="primary" size="small" @click="router.push('/runs')">
+                      查看进度
+                    </el-button>
+                  </template>
+                  <span v-else class="text-muted">空闲（没有正在运行的抓取批次）</span>
+                </span>
+              </div>
+              <div class="ss-row">
+                <span class="ss-label">下次执行</span>
+                <span class="ss-value">{{ sched.scrape.next_run_at ?? '未启用（无计划时刻）' }}</span>
+              </div>
+              <div class="ss-row">
+                <span class="ss-label">今日已处理</span>
+                <span class="ss-value">{{ sched.scrape.today_done.length ? sched.scrape.today_done.join('、') : '—' }}</span>
+              </div>
+              <div class="ss-row">
+                <span class="ss-label">上次结果</span>
+                <span class="ss-value">
+                  <template v-if="sched.scrape.last">
+                    <el-tag size="small" :type="SCHED_ACTION[sched.scrape.last.action].type">
+                      {{ SCHED_ACTION[sched.scrape.last.action].text }}
+                    </el-tag>
+                    <span class="text-muted">{{ sched.scrape.last.at }} · {{ sched.scrape.last.reason }}</span>
+                  </template>
+                  <span v-else class="text-muted">暂无调度记录</span>
+                </span>
+              </div>
+              <div class="ss-row">
+                <span class="ss-label">调度线程</span>
+                <span class="ss-value text-muted">
+                  {{
+                    sched.scrape.last_tick
+                      ? `最近判定 ${sched.scrape.last_tick}（每 ${sched.scrape.tick_seconds} 秒一次）`
+                      : '尚未运行'
+                  }}
+                </span>
+              </div>
+            </template>
+            <div v-else class="text-muted">状态读取失败，稍后自动重试</div>
+            <div class="ss-actions">
+              <el-tooltip :content="runNowTip" placement="top">
+                <span class="tip-wrap">
+                  <el-button
+                    size="small"
+                    :loading="runNowLoading"
+                    :disabled="runNowDisabled"
+                    @click="runNow"
+                  >
+                    立即运行一次
                   </el-button>
-                </template>
-                <span v-else class="text-muted">空闲（没有正在运行的抓取批次）</span>
-              </span>
+                </span>
+              </el-tooltip>
+              <span class="ss-hint text-muted">与「运行记录」页的「启动抓取」同一入口，用于验证上面的参数</span>
             </div>
-            <div class="ss-row">
-              <span class="ss-label">下次执行</span>
-              <span class="ss-value">{{ sched.next_run_at ?? '未启用（无计划时刻）' }}</span>
-            </div>
-            <div class="ss-row">
-              <span class="ss-label">今日已处理</span>
-              <span class="ss-value">{{ sched.today_done.length ? sched.today_done.join('、') : '—' }}</span>
-            </div>
-            <div class="ss-row">
-              <span class="ss-label">上次结果</span>
-              <span class="ss-value">
-                <template v-if="sched.last">
-                  <el-tag size="small" :type="SCHED_ACTION[sched.last.action].type">
-                    {{ SCHED_ACTION[sched.last.action].text }}
+          </div>
+
+          <!-- 自动下载调度状态（只读，来自 /api/schedule.precipitate） -->
+          <div v-else-if="g.extra === 'precipitate'" class="sched-status">
+            <template v-if="sched && sched.precipitate">
+              <div class="ss-row">
+                <span class="ss-label">状态</span>
+                <span class="ss-value">
+                  <el-tag size="small" :type="sched.precipitate.enabled ? 'success' : 'info'">
+                    {{ sched.precipitate.enabled ? '已启用' : '未启用' }}
                   </el-tag>
-                  <span class="text-muted">{{ sched.last.at }} · {{ sched.last.reason }}</span>
-                </template>
-                <span v-else class="text-muted">暂无调度记录</span>
-              </span>
-            </div>
-            <div class="ss-row">
-              <span class="ss-label">调度线程</span>
-              <span class="ss-value text-muted">
-                {{
-                  sched.last_tick
-                    ? `最近判定 ${sched.last_tick}（每 ${sched.tick_seconds} 秒一次）`
-                    : '尚未运行'
-                }}
-              </span>
-            </div>
-          </template>
-          <div v-else class="text-muted">状态读取失败，稍后自动重试</div>
-          <div class="ss-actions">
-            <!-- 禁用态按钮上的 tooltip 需外包一层可命中元素（与下载中心同一约定）；
-                 按钮可用性与后端守卫同源：批次在跑时禁用，避免点了才报「已有批次」 -->
-            <el-tooltip :content="runNowTip" placement="top">
-              <span class="tip-wrap">
-                <el-button
-                  size="small"
-                  :loading="runNowLoading"
-                  :disabled="runNowDisabled"
-                  @click="runNow"
-                >
-                  立即运行一次
-                </el-button>
-              </span>
-            </el-tooltip>
-            <span class="ss-hint text-muted">与「运行记录」页的「启动抓取」同一入口，用于验证上面的参数</span>
-          </div>
-        </div>
-        <div class="setting-list">
-          <div
-            v-for="it in groupItems(g.keys)"
-            :key="it.key"
-            class="setting-row"
-            :class="{ 'row-wide': WIDE_TYPES.includes(it.type) }"
-          >
-            <div class="sr-main">
-              <div class="sr-label">
-                {{ it.label }}
-                <el-tag v-if="it.source === 'file'" size="small" type="warning">已自定义</el-tag>
-                <el-tag v-else size="small" type="info">默认</el-tag>
+                </span>
               </div>
-              <div class="sr-desc text-muted">{{ it.desc }}</div>
-              <div class="sr-scope">生效范围：{{ SCOPE_TEXT[it.scope] }}</div>
-            </div>
-            <div class="sr-ctrl">
-              <el-switch
-                v-if="it.type === 'bool'"
-                :model-value="Boolean(valueOf(it))"
-                active-text="开"
-                inactive-text="关"
-                @change="(v: boolean | string | number) => setBool(it, v)"
+              <div class="ss-row">
+                <span class="ss-label">下次执行</span>
+                <span class="ss-value">{{ sched.precipitate.next_run_at ?? '未启用（无计划时刻）' }}</span>
+              </div>
+              <div class="ss-row">
+                <span class="ss-label">今日已处理</span>
+                <span class="ss-value">{{ sched.precipitate.today_done.length ? sched.precipitate.today_done.join('、') : '—' }}</span>
+              </div>
+              <div class="ss-row">
+                <span class="ss-label">上次结果</span>
+                <span class="ss-value">
+                  <template v-if="sched.precipitate.last">
+                    <span
+                      :style="precipitateDiskLow ? { color: 'var(--el-color-danger)', fontWeight: '600' } : {}"
+                    >{{ sched.precipitate.last.at }} · {{ sched.precipitate.last.reason }}</span>
+                  </template>
+                  <span v-else class="text-muted">暂无自动下载记录</span>
+                </span>
+              </div>
+              <div class="ss-row">
+                <span class="ss-label">调度线程</span>
+                <span class="ss-value text-muted">
+                  {{ sched.precipitate.last_tick ? `最近判定 ${sched.precipitate.last_tick}` : '尚未运行' }}
+                </span>
+              </div>
+              <el-alert
+                v-if="precipitateDiskLow"
+                type="warning"
+                :closable="false"
+                show-icon
+                title="磁盘可用空间不足，已停止自动下载"
+                :description="sched.precipitate.last?.reason"
+                class="ss-alert"
               />
-              <div v-else-if="it.type === 'array'" class="sr-array">
-                <div v-for="opt in (it.options ?? [])" :key="opt.value" class="ar-row">
-                  <el-checkbox
-                    :model-value="isIncluded(it, opt.value)"
-                    @change="() => toggleSection(it, opt.value)"
-                  >{{ opt.label }}</el-checkbox>
-                  <span v-if="isIncluded(it, opt.value)" class="ar-move">
-                    <el-button
-                      link
-                      type="primary"
-                      size="small"
-                      :disabled="arrayValue(it)[0] === opt.value"
-                      @click="moveSection(it, opt.value, -1)"
-                    >上移</el-button>
-                    <el-button
-                      link
-                      type="primary"
-                      size="small"
-                      :disabled="arrayValue(it)[arrayValue(it).length - 1] === opt.value"
-                      @click="moveSection(it, opt.value, 1)"
-                    >下移</el-button>
-                  </span>
+            </template>
+            <div v-else class="text-muted">状态读取失败，稍后自动重试</div>
+            <div class="ss-actions">
+              <el-tooltip content="立即按当前筛选条件自动下载一次（不受定时时刻限制），用于验证参数" placement="top">
+                <span class="tip-wrap">
+                  <el-button
+                    size="small"
+                    :loading="autoDownloadNowLoading"
+                    @click="autoDownloadNow"
+                  >
+                    立即自动下载
+                  </el-button>
+                </span>
+              </el-tooltip>
+              <span class="ss-hint text-muted">与定时自动下载同一筛选与磁盘守卫；触发即提交到下载中心</span>
+            </div>
+          </div>
+          <div class="setting-list">
+            <div
+              v-for="it in groupItems(g.keys)"
+              :key="it.key"
+              class="setting-row"
+              :class="{ 'row-wide': WIDE_TYPES.includes(it.type) }"
+            >
+              <div class="sr-main">
+                <div class="sr-label">
+                  {{ it.label }}
+                  <el-tag v-if="it.source === 'file'" size="small" type="warning">已自定义</el-tag>
+                  <el-tag v-else size="small" type="info">默认</el-tag>
                 </div>
-                <div class="sr-default text-muted">默认：{{ arrayLabels(it, it.default as string[]) }}</div>
+                <div class="sr-desc text-muted">{{ it.desc }}</div>
+                <div class="sr-scope">生效范围：{{ SCOPE_TEXT[it.scope] }}</div>
               </div>
-              <template v-else-if="it.type === 'enum'">
-                <el-select
-                  :model-value="String(valueOf(it))"
-                  :size="isMobile ? 'small' : 'default'"
-                  class="sr-input"
-                  @change="(v: string) => setText(it, v)"
-                >
-                  <el-option
-                    v-for="opt in (it.options ?? [])"
-                    :key="opt.value"
-                    :label="opt.label"
-                    :value="opt.value"
-                  />
-                </el-select>
-                <div class="sr-default text-muted">默认：{{ optionLabel(it, String(it.default)) }}</div>
-              </template>
-              <div v-else-if="it.type === 'times'" class="sr-times">
-                <div v-for="(t, i) in timeList(it)" :key="`${it.key}-${i}`" class="st-row">
-                  <el-time-picker
-                    :model-value="t"
-                    format="HH:mm"
-                    value-format="HH:mm"
+              <div class="sr-ctrl">
+                <el-switch
+                  v-if="it.type === 'bool'"
+                  :model-value="Boolean(valueOf(it))"
+                  active-text="开"
+                  inactive-text="关"
+                  @change="(v: boolean | string | number) => setBool(it, v)"
+                />
+                <div v-else-if="it.type === 'array'" class="sr-array">
+                  <div v-for="opt in (it.options ?? [])" :key="opt.value" class="ar-row">
+                    <el-checkbox
+                      :model-value="isIncluded(it, opt.value)"
+                      @change="() => toggleSection(it, opt.value)"
+                    >{{ opt.label }}</el-checkbox>
+                    <span v-if="isIncluded(it, opt.value)" class="ar-move">
+                      <el-button
+                        link
+                        type="primary"
+                        size="small"
+                        :disabled="arrayValue(it)[0] === opt.value"
+                        @click="moveSection(it, opt.value, -1)"
+                      >上移</el-button>
+                      <el-button
+                        link
+                        type="primary"
+                        size="small"
+                        :disabled="arrayValue(it)[arrayValue(it).length - 1] === opt.value"
+                        @click="moveSection(it, opt.value, 1)"
+                      >下移</el-button>
+                    </span>
+                  </div>
+                  <div class="sr-default text-muted">默认：{{ arrayLabels(it, it.default as string[]) }}</div>
+                </div>
+                <template v-else-if="it.type === 'enum'">
+                  <el-select
+                    :model-value="String(valueOf(it))"
                     :size="isMobile ? 'small' : 'default'"
-                    placeholder="选择时刻"
-                    class="st-picker"
-                    @update:model-value="(v: string | number | Date | null) => setTimeAt(it, i, v == null ? t : String(v))"
+                    class="sr-input"
+                    @change="(v: string) => setText(it, v)"
+                  >
+                    <el-option
+                      v-for="opt in (it.options ?? [])"
+                      :key="opt.value"
+                      :label="opt.label"
+                      :value="opt.value"
+                    />
+                  </el-select>
+                  <div class="sr-default text-muted">默认：{{ optionLabel(it, String(it.default)) }}</div>
+                </template>
+                <div v-else-if="it.type === 'times'" class="sr-times">
+                  <div v-for="(t, i) in timeList(it)" :key="`${it.key}-${i}`" class="st-row">
+                    <el-time-picker
+                      :model-value="t"
+                      format="HH:mm"
+                      value-format="HH:mm"
+                      :size="isMobile ? 'small' : 'default'"
+                      placeholder="选择时刻"
+                      class="st-picker"
+                      @update:model-value="(v: string | number | Date | null) => setTimeAt(it, i, v == null ? t : String(v))"
+                    />
+                    <el-button link type="danger" size="small" @click="removeTime(it, i)">删除</el-button>
+                  </div>
+                  <div class="st-actions">
+                    <el-button link type="primary" size="small" @click="addTime(it)">添加时刻</el-button>
+                    <span class="sr-default">默认：{{ (it.default as string[]).join('、') }}</span>
+                  </div>
+                </div>
+                <template v-else-if="it.type === 'text'">
+                  <el-input
+                    :model-value="String(valueOf(it))"
+                    clearable
+                    placeholder="留空则自动取访问地址"
+                    class="sr-input"
+                    @input="(v: string) => (it.value = v)"
+                    @change="(v: string) => setText(it, v)"
                   />
-                  <el-button link type="danger" size="small" @click="removeTime(it, i)">删除</el-button>
-                </div>
-                <div class="st-actions">
-                  <el-button link type="primary" size="small" @click="addTime(it)">添加时刻</el-button>
-                  <span class="sr-default">默认：{{ (it.default as string[]).join('、') }}</span>
-                </div>
+                  <div class="sr-default text-muted">
+                    默认：{{ it.default ? String(it.default) : '自动（取访问地址）' }}
+                  </div>
+                </template>
+                <template v-else>
+                  <el-input-number
+                    :model-value="Number(valueOf(it))"
+                    :min="it.min ?? undefined"
+                    :max="it.max ?? undefined"
+                    :step="1"
+                    :size="isMobile ? 'small' : 'default'"
+                    controls-position="right"
+                    class="sr-input"
+                    @change="(v: number | null) => setNumber(it, v)"
+                  />
+                  <div class="sr-default text-muted">默认 {{ String(it.default) }}</div>
+                </template>
+                <span v-if="savingMap[it.key]" class="sr-saving text-muted">保存中…</span>
+                <el-button
+                  link
+                  type="primary"
+                  size="small"
+                  :disabled="savingMap[it.key]"
+                  @click="resetOne(it)"
+                >恢复默认</el-button>
               </div>
-              <template v-else-if="it.type === 'text'">
-                <el-input
-                  :model-value="String(valueOf(it))"
-                  clearable
-                  placeholder="留空则自动取访问地址"
-                  class="sr-input"
-                  @input="(v: string) => setText(it, v)"
-                />
-                <div class="sr-default text-muted">
-                  默认：{{ it.default ? String(it.default) : '自动（取访问地址）' }}
-                </div>
-              </template>
-              <template v-else>
-                <el-input-number
-                  :model-value="Number(valueOf(it))"
-                  :min="it.min ?? undefined"
-                  :max="it.max ?? undefined"
-                  :step="1"
-                  :size="isMobile ? 'small' : 'default'"
-                  controls-position="right"
-                  class="sr-input"
-                  @change="(v: number | null) => setNumber(it, v)"
-                />
-                <div class="sr-default text-muted">默认 {{ String(it.default) }}</div>
-              </template>
-              <el-button link type="primary" size="small" @click="resetOne(it)">恢复默认</el-button>
             </div>
           </div>
         </div>
-      </div>
 
-      <!-- 链接黑名单：作用于大屏各卡片口径（累计/近7日/近30日/榜单/推荐），不影响帖子页与下载 -->
-      <div class="page-card">
-        <div class="group-title">链接黑名单（大屏卡片口径过滤）</div>
-        <div class="group-desc text-muted">
-          加入后，对应链接 / 作者 / 版块的全部帖子将从数据总览所有卡片中剔除（含已收录统计、趋势、榜单、待下载推荐）。
-          仅影响大屏看板，帖子浏览页与下载中心不受影响，可随时移除恢复。
-        </div>
-        <div class="bl-add">
-          <el-select v-model="blType" size="small" class="bl-type" style="width: 120px">
-            <el-option label="链接" value="url" />
-            <el-option label="作者" value="author" />
-            <el-option label="版块" value="fid" />
-          </el-select>
-          <el-input
-            v-model="blValue"
-            size="small"
-            class="bl-value"
-            :placeholder="blType === 'url' ? '帖子链接（如 /htm_data/.../x.html）' : blType === 'author' ? '作者名' : '版块 fid（如 5）'"
-          />
-          <el-input v-model="blReason" size="small" class="bl-reason" placeholder="备注（可选）" />
-          <el-button type="primary" size="small" :loading="blLoading" @click="addBlacklistItem">
-            加入黑名单
-          </el-button>
-        </div>
-        <!-- 搜索 + 计数：条目一多，先缩小范围再翻页（业界管理列表的固定搭配） -->
-        <div class="bl-toolbar">
-          <el-input
-            v-model="blFilter"
-            size="small"
-            clearable
-            class="bl-search"
-            placeholder="搜索链接 / 作者 / 版块 / 备注"
-          />
-          <span class="text-muted bl-count">
-            共 {{ blItems.length }} 条<template v-if="blFilter">，筛选出 {{ blFiltered.length }} 条</template>
-          </span>
-        </div>
-        <div v-loading="blLoading" class="bl-list">
-          <div v-if="!blFiltered.length" class="text-muted bl-empty">
-            {{ blItems.length ? '没有匹配的黑名单条目' : '暂无黑名单' }}
+        <!-- 链接黑名单：作用于大屏各卡片口径（累计/近7日/近30日/榜单/推荐），不影响帖子页与下载 -->
+        <div v-show="activeNav === 'blacklist'" class="page-card">
+          <div class="group-title">链接黑名单（大屏卡片口径过滤）</div>
+          <div class="group-desc text-muted">
+            加入后，对应链接 / 作者 / 版块的全部帖子将从数据总览所有卡片中剔除（含已收录统计、趋势、榜单、待下载推荐）。
+            仅影响大屏看板，帖子浏览页与下载中心不受影响，可随时移除恢复。
           </div>
-          <div v-for="it in blPaged" :key="it.type + '|' + it.value" class="bl-row">
-            <el-tag
+          <div class="bl-add">
+            <el-select v-model="blType" size="small" class="bl-type" style="width: 120px">
+              <el-option label="链接" value="url" />
+              <el-option label="作者" value="author" />
+              <el-option label="版块" value="fid" />
+            </el-select>
+            <el-input
+              v-model="blValue"
               size="small"
-              :type="it.type === 'url' ? 'danger' : it.type === 'author' ? 'warning' : 'info'"
-            >
-              {{ BL_TYPE_LABEL[it.type] }}
-            </el-tag>
-            <span class="bl-value-text" :title="it.value">{{ it.value }}</span>
-            <span v-if="it.reason" class="bl-reason-text text-muted">{{ it.reason }}</span>
-            <el-button link type="danger" size="small" @click="removeBlacklistItem(it)">移除</el-button>
+              class="bl-value"
+              :placeholder="blType === 'url' ? '帖子链接（如 /htm_data/.../x.html）' : blType === 'author' ? '作者名' : '版块 fid（如 5）'"
+            />
+            <el-input v-model="blReason" size="small" class="bl-reason" placeholder="备注（可选）" />
+            <el-button type="primary" size="small" :loading="blLoading" @click="addBlacklistItem">
+              加入黑名单
+            </el-button>
+          </div>
+          <!-- 搜索 + 计数：条目一多，先缩小范围再翻页（业界管理列表的固定搭配） -->
+          <div class="bl-toolbar">
+            <el-input
+              v-model="blFilter"
+              size="small"
+              clearable
+              class="bl-search"
+              placeholder="搜索链接 / 作者 / 版块 / 备注"
+            />
+            <span class="text-muted bl-count">
+              共 {{ blItems.length }} 条<template v-if="blFilter">，筛选出 {{ blFiltered.length }} 条</template>
+            </span>
+          </div>
+          <div v-loading="blLoading" class="bl-list">
+            <div v-if="!blFiltered.length" class="text-muted bl-empty">
+              {{ blItems.length ? '没有匹配的黑名单条目' : '暂无黑名单' }}
+            </div>
+            <div v-for="it in blPaged" :key="it.type + '|' + it.value" class="bl-row">
+              <el-tag
+                size="small"
+                :type="it.type === 'url' ? 'danger' : it.type === 'author' ? 'warning' : 'info'"
+              >
+                {{ BL_TYPE_LABEL[it.type] }}
+              </el-tag>
+              <span class="bl-value-text" :title="it.value">{{ it.value }}</span>
+              <span v-if="it.reason" class="bl-reason-text text-muted">{{ it.reason }}</span>
+              <el-button link type="danger" size="small" @click="removeBlacklistItem(it)">移除</el-button>
+            </div>
+          </div>
+          <!-- 只有一页时不出分页器（避免"共 7 条 / 1 页"占位） -->
+          <div v-if="blPageCount > 1" class="bl-pager">
+            <el-pagination
+              :current-page="blPage"
+              :page-size="BL_PAGE_SIZE"
+              :total="blFiltered.length"
+              :layout="isMobile ? 'prev, pager, next' : 'total, prev, pager, next'"
+              :pager-count="isMobile ? 5 : 7"
+              small
+              background
+              @current-change="(p: number) => (blPage = p)"
+            />
           </div>
         </div>
-        <!-- 只有一页时不出分页器（避免"共 7 条 / 1 页"占位） -->
-        <div v-if="blPageCount > 1" class="bl-pager">
-          <el-pagination
-            :current-page="blPage"
-            :page-size="BL_PAGE_SIZE"
-            :total="blFiltered.length"
-            :layout="isMobile ? 'prev, pager, next' : 'total, prev, pager, next'"
-            :pager-count="isMobile ? 5 : 7"
-            small
-            background
-            @current-change="(p: number) => (blPage = p)"
-          />
-        </div>
-      </div>
 
-      <!-- 操作条：移动端铺满换行（与工具栏同一模式） -->
-      <div class="page-card actions">
-        <span class="text-muted">
-          <template v-if="dirty">有未保存的改动</template>
-          <template v-else>无改动</template>
-        </span>
-        <div class="actions-right">
-          <el-button v-if="dirty" @click="copyDraft">复制改动</el-button>
-          <el-button @click="resetAll">全部恢复默认</el-button>
-          <el-button type="primary" :loading="saving" :disabled="!dirty" @click="save">
-            保存设置
-          </el-button>
+        <!-- 操作条：改动逐条自动保存，无需「保存设置」；仅保留「全部恢复默认」 -->
+        <div class="page-card actions">
+          <span class="text-muted auto-saved">
+            <span class="as-dot" :class="{ on: lastSavedAt }"></span>
+            {{ lastSavedText }}
+          </span>
+          <div class="actions-right">
+            <el-button @click="resetAll">全部恢复默认</el-button>
+          </div>
         </div>
-      </div>
-    </template>
+      </template>
+    </div>
   </div>
 </template>
 
@@ -837,7 +971,7 @@ onBeforeUnmount(() => {
 }
 
 .sr-input {
-  width: 130px;
+  width: 260px;
 }
 
 .sr-array {
@@ -960,6 +1094,77 @@ onBeforeUnmount(() => {
   flex-wrap: wrap;
 }
 
+/* 左侧分类导航 + 右侧面板（macOS/Windows 设置风格） */
+.settings-layout {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.settings-nav {
+  position: sticky;
+  top: 16px;
+  flex: 0 0 168px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px;
+  border-radius: 8px;
+  background: var(--app-card-bg, #fff);
+  border: 1px solid var(--app-border, #ebeef5);
+}
+
+.nav-item {
+  text-align: left;
+  padding: 8px 12px;
+  border: none;
+  background: transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  color: #606266;
+  transition: background 0.15s, color 0.15s;
+}
+
+.nav-item:hover {
+  background: var(--el-fill-color-light);
+}
+
+.nav-item.active {
+  background: var(--el-color-primary-light-9);
+  color: var(--el-color-primary);
+  font-weight: 600;
+}
+
+.settings-panel {
+  flex: 1;
+  min-width: 0;
+}
+
+/* 行内「保存中…」提示 */
+.sr-saving {
+  font-size: 12px;
+}
+
+/* 自动保存状态指示 */
+.auto-saved {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.as-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #c0c4cc;
+}
+
+.as-dot.on {
+  background: var(--el-color-success);
+}
+
 .actions {
   display: flex;
   align-items: center;
@@ -1053,6 +1258,24 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 767px) {
+  /* 左侧导航在窄屏转为顶部横向滚动条（避免挤占面板宽度） */
+  .settings-layout {
+    flex-direction: column;
+  }
+
+  .settings-nav {
+    position: static;
+    flex: none;
+    width: 100%;
+    flex-direction: row;
+    overflow-x: auto;
+    gap: 6px;
+  }
+
+  .nav-item {
+    white-space: nowrap;
+  }
+
   .setting-row {
     flex-direction: column;
     align-items: stretch;
@@ -1062,6 +1285,11 @@ onBeforeUnmount(() => {
   .sr-ctrl {
     justify-content: flex-start;
     flex-wrap: wrap;
+  }
+
+  /* 设置项输入框：移动端占满整行，避免 260px 固定宽溢出 */
+  .sr-input {
+    width: 100%;
   }
 
   /* 黑名单：搜索框独占一行，计数紧随其后 */

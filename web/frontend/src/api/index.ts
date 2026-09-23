@@ -527,8 +527,8 @@ export interface ScheduleRunning {
   pid?: number
 }
 
-/** 定时抓取状态（GET /api/schedule）：与真实触发判定同源计算 */
-export interface ScheduleStatus {
+/** 定时抓取任务状态（GET /api/schedule.scrape）：与真实触发判定同源计算 */
+export interface ScrapeScheduleStatus {
   enabled: boolean
   /** 计划时刻（"HH:MM"，已规格化：去重、升序、限量） */
   times: string[]
@@ -544,6 +544,49 @@ export interface ScheduleStatus {
   /** 超过计划时刻多久算「错过」（分钟） */
   miss_tolerance_minutes: number
   tick_seconds: number
+}
+
+/** 沉淀任务「上次结果」（action 为 done/skipped/failed，与抓取动作枚举不同） */
+export interface PrecipitateLast {
+  at: string
+  date: string
+  action: string
+  reason: string
+  handled_at: string
+  pid?: number
+}
+
+/** 自动沉淀任务状态（GET /api/schedule.precipitate） */
+export interface PrecipitateScheduleStatus {
+  enabled: boolean
+  times: string[]
+  next_run_at: string | null
+  today_done: string[]
+  last: PrecipitateLast | null
+  last_tick: string | null
+}
+
+/** 手动触发自动下载的返回（POST /api/precipitate/run）：提交汇总 + 磁盘水位 */
+export interface PrecipitateRunResult {
+  enabled: boolean
+  date: string
+  /** 当天发布的入库帖总数（筛选分母）：零结果时据此区分「没数据」与「没命中」 */
+  today_posts: number
+  total: number
+  submitted: number
+  skipped_dup: number
+  disk_low: boolean
+  threshold_gb: number
+  disk_free_gb: number
+  task_id: string | null
+  /** 面向用户的一句话结论（与定时「上次结果」同源，前端不再自拼文案） */
+  reason: string
+}
+
+/** 调度状态（GET /api/schedule）：按任务类型分组 */
+export interface ScheduleStatus {
+  scrape: ScrapeScheduleStatus
+  precipitate: PrecipitateScheduleStatus
 }
 
 export interface PostsPage {
@@ -712,6 +755,8 @@ export type DownloadItemStatus = 'pending' | 'ok' | 'skip' | 'fail' | 'cancelled
 export type DownloadTaskStatus = 'pending' | 'running' | 'paused' | 'done' | 'failed' | 'cancelled'
 
 export interface DownloadItem {
+  /** 链接对应帖子标题（后端按 URL 反查 posts.db 注入；纯直链/未入库为空，前端回退显示 URL） */
+  title?: string
   url: string
   status: DownloadItemStatus
   stats: Record<string, number>
@@ -735,16 +780,23 @@ export interface DownloadTaskSummary {
    *  为 true 期间任务不能续跑、也不能单条重下（避免两个 worker 并发跑同一任务）。 */
   pause_requested?: boolean
   priority?: boolean
+  /** 任务类型：manual=手动下载，auto=自动下载（沉淀合流后由自动下载管线提交），供筛选与展示 */
+  kind?: 'manual' | 'auto'
   /** 队列入队令牌：排队中任务按它升序展示，与实际执行顺序（FIFO）一致 */
   ticket?: number
   /** 各状态链接计数（ok/skip/fail/running/pending/cancelled） */
   items_summary?: Record<string, number>
   /** 已产生的保存目录（供资源管理页 B7 关联） */
   saved_dirs?: string[]
+  /** 任务标题集合（URL → 帖子标题，多标题去重按出现顺序；列表展示「主标题 + 等 N 个」） */
+  titles?: string[]
   /** 处理速度（个/分钟，基于已结束链接吞吐推算；未开始/终态任务为 null） */
   speed?: number | null
   /** 预计剩余时间（秒，基于剩余待处理链接 × 单链接平均耗时；同上为 null） */
   eta_sec?: number | null
+  /** 日志序号：SSE 靠它感知「日志在增长」（下载过程中任务级字段不变，靠它触发推送）。
+   *  前端 applyTasks 据此判断整行是否需要重建，下载中每行每帧该值变化即就地 patch。 */
+  log_seq?: number
 }
 
 /** 任务详情（GET /downloads/{tid}：概要字段 + 逐 URL 明细与日志） */
@@ -837,6 +889,8 @@ export const api = {
   config: () => get<AppConfig>('/config'),
   /** 定时抓取状态（设置页「定时抓取」组展示：下次执行 / 上次结果 / 线程心跳） */
   schedule: () => get<ScheduleStatus>('/schedule'),
+  /** 手动触发一次自动下载（不受定时时刻限制），返回本次汇总（含磁盘水位与结论文案） */
+  precipitateRun: () => post<PrecipitateRunResult>('/precipitate/run'),
   saveSettings: (items: Record<string, number | boolean | string[] | string>) =>
     put<{ ok: boolean; settings: SettingItem[] }>('/settings', { items }),
   resetSettings: (keys: string[] = []) =>

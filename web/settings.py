@@ -115,6 +115,51 @@ WHITELIST: dict[str, dict[str, Any]] = {
         "scope": "immediate",
         "desc": "晚于计划时刻超过该值即视为「当时服务未运行」，记为未执行且不补跑；默认 600（10 分钟）",
     },
+    "precipitate_enabled": {
+        "label": "启用自动下载",
+        "type": "bool",
+        "scope": "immediate",
+        "desc": "开启后由本服务按下面时刻自动筛选当天发布的帖子（含媒体与链接清单），提交到下载中心自动下载",
+    },
+    "precipitate_times": {
+        "label": "自动下载时刻",
+        "type": "times",
+        "scope": "immediate",
+        "desc": "每天在这几个时刻各执行一次自动下载（建议排在抓取时刻之后，确保当天数据已入库）；服务本地时间",
+    },
+    "precipitate_keywords": {
+        "label": "标题关键词（满足任一即入选）",
+        "type": "text",
+        "scope": "immediate",
+        "desc": "只下载标题含这些关键词的帖子，多个用逗号分隔；留空表示不按关键词过滤",
+    },
+    "precipitate_min_likes": {
+        "label": "最低点赞数",
+        "min": 0,
+        "max": 100000,
+        "scope": "immediate",
+        "desc": "点赞数 ≥ 该值才下载；0 表示不限（与最低回复数取「或」关系，任一达标即可）",
+    },
+    "precipitate_min_replies": {
+        "label": "最低回复数",
+        "min": 0,
+        "max": 100000,
+        "scope": "immediate",
+        "desc": "回复数 ≥ 该值才下载；0 表示不限（与最低点赞数取「或」关系，任一达标即可）",
+    },
+    "precipitate_fids": {
+        "label": "版块白名单（fid，逗号分隔）",
+        "type": "text",
+        "scope": "immediate",
+        "desc": "只下载这些版块的帖子，多个 fid 用逗号分隔；留空表示不限版块",
+    },
+    "precipitate_min_free_gb": {
+        "label": "磁盘水位阈值（GB）",
+        "min": 0,
+        "max": 1000,
+        "scope": "immediate",
+        "desc": "downloads/ 所在磁盘可用空间低于该值（GB）时停止自动下载，避免写满磁盘；0 表示不限制（谨慎）。默认 20，与资产条红色判据一致",
+    },
     "trash_keep_days": {
         "label": "回收站保留天数",
         "min": 1,
@@ -237,6 +282,20 @@ def _env_or_default(key: str) -> Any:
         return config.SCRAPE_SCHEDULE_USE_PROXY
     if key == "scrape_schedule_miss_tolerance":
         return config.SCRAPE_SCHEDULE_MISS_TOLERANCE
+    if key == "precipitate_enabled":
+        return config.PRECIPITATE_ENABLED
+    if key == "precipitate_times":
+        return config.PRECIPITATE_TIMES
+    if key == "precipitate_keywords":
+        return ""
+    if key == "precipitate_min_likes":
+        return 0
+    if key == "precipitate_min_replies":
+        return 0
+    if key == "precipitate_fids":
+        return ""
+    if key == "precipitate_min_free_gb":
+        return config.PRECIPITATE_MIN_FREE_GB
     if key == "share_host":
         return config.SHARE_HOST
     if key == "enable_auto_refresh":

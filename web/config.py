@@ -7,7 +7,7 @@
 路径与展示域名均可通过环境变量覆盖：
   POSTS_DB        数据库文件路径（默认 db/posts.db）
   OUTPUTS_DIR     outputs 目录（默认 outputs/）
-  DOWNLOADS_DIR   downloads 目录（默认 downloads/）
+  DOWNLOADS_DIR   downloads 目录（默认 downloads/，自动下载与手动下载共用此根）
   TXXY_PUBLIC_DOMAIN  唯一业务域名（默认 https://txxy.com）。全项目只有它与
                   TXXY_LOCAL_PROXY 两个域名相关配置，且都有默认值，
                   详见项目根 txxy_env.py——那是全项目域名的唯一配置源
@@ -224,3 +224,19 @@ SCRAPE_SCHEDULE_STATE_FILE = Path(
 # 错过容差（秒）：tick 晚于计划时刻超过该值即视为「当时服务未运行」→ 记「未执行」不补跑。
 # 600s 足够覆盖 tick 间隔（60s）与短暂卡顿，又能区分「服务没开」这种情况。
 SCRAPE_SCHEDULE_MISS_TOLERANCE = int(os.environ.get("TXXY_SCRAPE_SCHEDULE_MISS_TOLERANCE", "600"))
+
+# ---------------- 自动下载调度（页面可配置，原「自动沉淀」已合流到下载中心） ----------------
+# 由 web/scheduler.py 的 PrecipitateJob 在服务进程内按时刻自动筛选并下载当天入库帖子到下载中心。
+# 落盘位置即下载中心 DOWNLOADS_DIR（无独立根目录），与手动下载同一棵树；
+# 其余开关 / 时刻 / 筛选条件进页内白名单（web/settings.py）。
+# 默认关闭：自动下载是「可选自动化」，避免未配置筛选条件时把当天所有帖子无差别落盘。
+PRECIPITATE_ENABLED = _env_bool("TXXY_PRECIPITATE_ENABLED", False)
+PRECIPITATE_TIMES = normalize_times(os.environ.get("TXXY_PRECIPITATE_TIMES", ""))
+# 调度状态（已处理的计划时刻 + 上次结果）：落盘在 outputs/，与抓取调度状态同一模式
+PRECIPITATE_SCHEDULE_STATE_FILE = Path(
+    os.environ.get("TXXY_PRECIPITATE_SCHEDULE_STATE_FILE", str(BASE_DIR / "outputs" / "precipitate_schedule_state.json"))
+)
+# 落盘前磁盘水位阈值：下载中心(downloads/)所在挂载点可用空间低于该值（GB）即停止自动下载，避免写满磁盘。
+# 默认 20 GB，与资产条「磁盘剩余」红色判据（不足 10% 或不足 20GB）对齐——盘快满时自动下载会自动停，
+# 不会把盘写爆；该值可在参数设置页「自动下载」组调小（如只想留 5GB 余量）。
+PRECIPITATE_MIN_FREE_GB = int(os.environ.get("TXXY_PRECIPITATE_MIN_FREE_GB", "20"))

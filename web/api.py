@@ -25,6 +25,7 @@ import resources
 import runs
 import scheduler
 import settings
+import precipitate
 
 router = APIRouter()
 
@@ -754,13 +755,25 @@ def app_config() -> ConfigResp:
 
 @router.get("/schedule")
 def schedule_status() -> dict[str, Any]:
-    """定时抓取状态（参数设置页「定时抓取」组展示）。
+    """调度状态（参数设置页展示）。
 
-    返回启用状态 / 计划时刻 / 下次执行时间 / 今日已处理时刻 / 上次结果 / 调度线程心跳。
+    返回各任务类型的状态：{"scrape": {...}, "precipitate": {...}}。
     `next_run_at` 与真实触发判定同源计算（同一份时刻与已处理记录），
     避免页面上显示的「下次执行」与实际调度口径不一致。
     """
     return scheduler.scheduler.status()
+
+
+@router.post("/precipitate/run")
+def precipitate_run() -> dict[str, Any]:
+    """手动触发一次自动下载（不受定时时刻限制），返回本次汇总。
+
+    与定时自动下载同一入口（precipitate.run_precipitate）；便于即时验证筛选条件与落盘效果。
+    结果同步写回调度状态 last（与定时自动下载同源口径），使设置页「上次结果 / 磁盘告警」实时刷新。
+    """
+    summary = precipitate.run_precipitate()
+    scheduler.scheduler.record_precipitate_run(summary)
+    return summary
 
 
 @router.put("/settings")
@@ -1603,6 +1616,9 @@ def _invalidate_download_stats() -> None:
     # 可重下清单由 gone 集合派生：删除本地文件 → 该帖应立刻出现在「可重下」清单里；
     # 重新下载成功 → 应立刻退出清单。
     db.invalidate("re_downloads_")
+    # 同步失效 manager 内资产快照 memo（与上方 db 缓存同源）：否则写后首个请求仍可能命中
+    # 5s TTL 内的旧快照，缺口清单/可重下清单/看板资产卡会短暂显示旧数据（违反写后即失效）。
+    download_tasks.manager.invalidate_asset_snapshot()
 
 
 def _pct(part: int, total: int) -> float:
@@ -1717,11 +1733,23 @@ def _post_meta_by_paths(paths: set[str]) -> dict[str, dict[str, Any]]:
     与 _count_posts_by_paths 同一套 URL 形态展开（相对路径 + 展示域名完整 URL），
     保证「失败缺口清单」显示的是帖子标题与版块，而不是一串裸链接。
     库中查不到（帖子已被剔除 / 从未收录）时该路径不入结果，由调用方兜底为 url。
+
+    **重复行的取舍（2026-09-22 修复）**：同一帖子在库里可能同时存在「相对路径」与
+    「镜像域名完整 URL」两种形态的重复行（历史上带代理地址的脏数据），归一化后是同一个
+    键、且标题可能不同（实测 737 个路径中有 8 个冲突）。原实现直接用 dict 覆盖，
+    结果**依赖查询返回顺序**——调用方批量大小一变（分块边界变化）标题就跳变。
+    故显式偏好「原本就是相对路径」的规范行（项目约束：入库只存相对路径、域名不得入库）：
+    键未收录时写入；已收录但当前行才是规范形态时也写入（覆盖非规范行）。
     """
     out: dict[str, dict[str, Any]] = {}
     for r in _post_rows_by_paths(paths):
+        raw_url = str(r["url"])
+        key = config.to_storage_path(raw_url)
+        canonical = raw_url == key  # 规范形态：库里存的就是相对路径
+        if key in out and not canonical:
+            continue  # 已收录且当前行非规范：保留已有（规范优先）
         fid = r["fid"]
-        out[config.to_storage_path(str(r["url"]))] = {
+        out[key] = {
             "title": str(r["title"] or ""),
             "fid": str(fid) if fid is not None else None,
         }
@@ -2627,6 +2655,103 @@ def downloads_submit(req: DownloadSubmitReq) -> dict[str, Any]:
     return {"id": tid, "count": len(uniq)}
 
 
+# ---- 标题反查缓存（2026-09-22 下载中心性能优化）----
+# 任务标题由提交时的 URL 决定，任务建好后基本不变；但 SSE 每 500ms 推一帧、
+# 每帧都对所有任务的全部 URL 查一次 posts.db（IN 分块），空闲期也是纯浪费，
+# 且同步查库阻塞 async 事件循环。故加两级缓存：
+#   _PATH_TITLE_CACHE：path -> title，命中即不再查库（仅缓存命中项；未收录的 path
+#     不缓存，下一帧会再查——下载内容通常建任务前已入库，少数未收录的会自愈）；
+#   _TASK_TITLE_CACHE：task_id -> (urls 指纹, 有序去重标题列表)，urls 不变即直接复用，
+#     连「遍历 URL 查 path 缓存」都省掉。任务上限 200，缓存体量极小，无需 TTL。
+_PATH_TITLE_CACHE: dict[str, str] = {}
+_TASK_TITLE_CACHE: dict[str, tuple[tuple[str, ...], list[str]]] = {}
+
+
+def _warm_path_titles(tasks: list[dict[str, Any]]) -> None:
+    """把所有任务待查的 path 合并成**一次**查库，填充 _PATH_TITLE_CACHE。
+
+    原实现在 _attach_task_titles 的循环里对每个任务各调一次 _post_meta_by_paths：
+    197 个任务 = 197 次 posts_filtered 视图查询，实测冷缓存 17504ms（视图每次都要重算
+    黑名单子查询、且每次都要开关连接）；合并为单次查询后实测 533ms（约 33 倍）。
+    任务级缓存（_TASK_TITLE_CACHE）已命中的任务，其 path 全部跳过，不再重复查。
+    """
+    pending: list[str] = []
+    seen: set[str] = set()
+    for t in tasks:
+        urls = list(t.get("urls") or [])
+        cached = _TASK_TITLE_CACHE.get(t["id"])
+        if cached is not None and cached[0] == tuple(urls):
+            continue  # 该任务标题已缓存，无需再查
+        for u in urls:
+            p = config.to_storage_path(u)
+            if p and p not in _PATH_TITLE_CACHE and p not in seen:
+                seen.add(p)
+                pending.append(p)
+    if not pending:
+        return
+    meta = _post_meta_by_paths(set(pending))
+    for p in pending:
+        m = meta.get(p)
+        if m:
+            _PATH_TITLE_CACHE[p] = str(m["title"]).strip()
+        # 未收录的 path 不写入缓存：下一帧仍会查，待帖子入库后自愈
+
+
+def _derive_titles(urls: list[str]) -> list[str]:
+    """由 URL 列表派生有序去重标题（纯内存：只读 _PATH_TITLE_CACHE，零查库）。"""
+    paths: list[str] = []
+    for u in urls:
+        p = config.to_storage_path(u)
+        if p:
+            paths.append(p)
+    seen: set[str] = set()
+    titles: list[str] = []
+    for p in paths:
+        title = _PATH_TITLE_CACHE.get(p, "")
+        if title and title not in seen:
+            seen.add(title)
+            titles.append(title)
+    return titles
+
+
+def _attach_task_titles(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """给下载任务概要批量补 titles（URL → 帖子标题，多标题去重后按出现顺序保留）。
+
+    一个任务是「一组 URL 的集合」，可能对应多个不同帖子（多个标题）：列表按用户约定
+    只展示「主标题 + 等 N 个」，故这里返回去重后的标题列表，展示形态交给前端。
+    - 反查复用 _post_meta_by_paths（按入库相对路径取标题的唯一实现），不重复造轮子；
+    - Web 进程只读 posts.db（本项目硬约束），与 download_tasks 模块「不碰库」边界一致；
+    - 反查后移除 urls：列表/SSE 不需要，详情接口走 get 自带 urls；
+    - 标题按任务缓存（_TASK_TITLE_CACHE）：urls 不变即零查库、零重算，根治 SSE
+      每 500ms 全量查库导致的下载中心卡顿与事件循环阻塞；
+    - 首次（冷缓存）先把全部任务的待查 path 合并成**一次**查库（_warm_path_titles），
+      再逐任务纯内存派生——否则 197 个任务各查一次库会让「重启后首个请求」慢十几秒。
+    """
+    _warm_path_titles(tasks)
+    for t in tasks:
+        urls = list(t.get("urls") or [])
+        key = tuple(urls)
+        cached = _TASK_TITLE_CACHE.get(t["id"])
+        if cached is not None and cached[0] == key:
+            titles = cached[1]
+        else:
+            titles = _derive_titles(urls)
+            _TASK_TITLE_CACHE[t["id"]] = (key, titles)
+        t["titles"] = titles
+        t.pop("urls", None)
+    return tasks
+
+
+def _summary_sig(tasks: list[dict[str, Any]]) -> str:
+    """下载任务概要的廉价内存签名（不含 urls/titles 这类静态/大字段）。
+
+    用于 SSE 判断「任务状态是否真变」：变了才调 _attach_task_titles + 序列化整包，
+    没变只发心跳，避免空闲期每 500ms 一次全量查库与序列化。
+    """
+    slim = [{k: v for k, v in t.items() if k != "urls"} for t in tasks]
+    return json.dumps(slim, ensure_ascii=False, sort_keys=True)
+
+
 @router.get("/downloads")
 def downloads_list() -> dict[str, Any]:
     """全部下载任务概要（R1：不含 items/logs，含状态计数与 saved_dirs），按创建时间倒序。
@@ -2635,6 +2760,7 @@ def downloads_list() -> dict[str, Any]:
     """
     tasks = download_tasks.manager.summary()
     tasks.sort(key=lambda t: t["created_at"], reverse=True)
+    _attach_task_titles(tasks)
     return {"tasks": tasks}
 
 
@@ -2825,19 +2951,26 @@ async def downloads_events() -> StreamingResponse:
     headers = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
 
     async def gen():
-        last = ""
+        last_payload = ""
+        last_sig = None
         idle = 0.0
-        # 首帧必推
-        last = json.dumps(download_tasks.manager.summary(), ensure_ascii=False)
-        yield f"event: task_update\ndata: {last}\n\n"
+        # 首帧必推（带标题，仅这一次需要查库做暖缓存）
+        tasks = download_tasks.manager.summary()
+        last_payload = json.dumps(_attach_task_titles(tasks), ensure_ascii=False)
+        last_sig = _summary_sig(tasks)
+        yield f"event: task_update\ndata: {last_payload}\n\n"
         while True:
             await asyncio.sleep(0.5)
-            payload = json.dumps(download_tasks.manager.summary(), ensure_ascii=False)
-            if payload != last:
-                last = payload
+            tasks = download_tasks.manager.summary()
+            sig = _summary_sig(tasks)
+            if sig != last_sig:
+                # 状态真变：用（已暖缓存的）标题反查序列化整包推送
+                last_sig = sig
+                last_payload = json.dumps(_attach_task_titles(tasks), ensure_ascii=False)
                 idle = 0.0
-                yield f"event: task_update\ndata: {payload}\n\n"
+                yield f"event: task_update\ndata: {last_payload}\n\n"
             else:
+                # 空闲：跳过查库与整包重算，仅发心跳防中间层断开
                 idle += 0.5
                 if idle >= 15.0:
                     idle = 0.0
@@ -2848,10 +2981,24 @@ async def downloads_events() -> StreamingResponse:
 
 @router.get("/downloads/{tid}")
 def downloads_detail(tid: str) -> dict[str, Any]:
-    """单个下载任务详情。"""
+    """单个下载任务详情。链接明细逐条反查标题（title 优先，查不到留空串）。"""
     task = download_tasks.manager.get(tid)
     if task is None:
         raise HTTPException(404, f"未找到下载任务 {tid}")
+    # 给每条链接明细注入标题：URL → 帖子标题（单链接单标题，无主列表的多标题聚合问题）。
+    # 复用 _post_meta_by_paths（按入库相对路径取标题的唯一实现，只读 posts.db，不碰写库边界）。
+    # 必须构造新 item dict，不能原地 mutate：task 是 _public 的浅拷贝，其 items 仍指向持久化
+    # 对象，原地加键会把 title 写进磁盘上的任务 JSON（同类「迁移先 copy 再改写」坑）。
+    items = task.get("items") or []
+    paths = {config.to_storage_path(i["url"]) for i in items if i.get("url")}
+    meta = _post_meta_by_paths(paths)
+    task["items"] = [
+        {
+            **it,
+            "title": str(meta.get(config.to_storage_path(it["url"]), {}).get("title") or ""),
+        }
+        for it in items
+    ]
     return task
 
 
