@@ -30,9 +30,11 @@ import txxy_env
 # web.exe 路径：与 run_batch 原先的定义保持一致（本机硬编码路径属既有前提，
 # 见 CODEBUDDY.md「项目定位」：单人自用、本机运行）
 WEB_APP_EXE = r"D:\Tools\1024app_win10_2025_1.02\web.exe"
-# host/port 由唯一配置源的默认镜像地址派生，不另写字面量——
+# host/port 由唯一配置源的默认本机镜像端点派生，不另写字面量——
 # 否则改端口时，端口守护（启停 web.exe）与抓取/中继用的地址会对不上。
-_mirror = urlparse(txxy_env.DEFAULT_LOCAL_PROXY)
+# 守护只绑定默认本机端点（访问链默认第 1 项）：链上其余为外部同构镜像站 URL，
+# 不可本机启动、无需守护；即使用户在设置页/.env 改了链，本机守护的仍是这个默认端点。
+_mirror = urlparse(txxy_env.DEFAULT_LOCAL_MIRROR)
 WEB_HOST = _mirror.hostname or "127.0.0.1"
 WEB_PORT = _mirror.port or 1024
 WEB_APP_START_TIMEOUT = 15     # 启动 web.exe 后等待端口就绪的最长时间（秒）

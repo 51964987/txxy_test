@@ -3,27 +3,37 @@
 同一份代码跑在两种环境：本地 Windows 有 1024 端口的 web.exe 本地镜像（更快、能绕路），
 Docker / 离线 Linux 没有它，直连公开域名。
 
-配置项只有两个，且**都有合理默认值——零配置即可运行**（进程 export > .env > 代码默认）：
+配置项只有一个，且**有合理默认值——零配置即可运行**（进程 export > .env > 代码默认）：
 
-  TXXY_PUBLIC_DOMAIN  业务域名（默认 https://txxy.com）
-  TXXY_LOCAL_PROXY    本地镜像地址（默认：本地 Windows 自动启用 http://127.0.0.1:1024，
-                      其它环境不启用；**显式置空即强制直连**）
+  TXXY_FETCH_CHAIN  有序访问链，逗号分隔（如 http://127.0.0.1:1024,https://txxy.com）。
+                    成员为同一站点的**同构端点**（本机镜像 / 外部镜像站 / 公网主域），
+                    按序访问；**最后一项 = 公网主域**（业务域名 / 中继 302 降级目标），
+                    校验禁止其为回环 / 内网地址（解析唯一实现 parse_fetch_chain，
+                    .env / 参数设置页 / scraper 命令行三处共用，非法即 ValueError）。
+                    默认：本地 Windows = 本机镜像 + 公网主域；Docker / Linux = 仅公网主域。
 
-两个键各管一层，互不重叠：地址即开关（置空即关闭），展示前缀跟随本地镜像是否存在，
-因此不再需要额外的开关、展示域名或环境声明键。
+运行时 failover（fetch_chain() / current_fetch_host() / report_fetch_failure()）：实际请求
+按链顺序访问，**仅传输层错误（连接拒绝 / 超时）才切下一项**；4xx/5xx 是业务响应（该端点
+可能确实没有该内容），切换会拿到不一致的结果，故不切。粘住当前可用项不反复探测，链头
+故障 60 秒冷却后自动回切重试（恢复即粘回最高优先级）。访问链可在参数设置页运行时修改
+（set_fetch_chain 保存即生效；抓取子进程由 run_batch 注入 TXXY_FETCH_CHAIN 环境变量传播）。
 
 分层（互不影响）：
   存储层   数据库 / CSV 只存相对路径（/htm_data/...），不含域名 → 换域名零成本
-  业务层   抓取目标恒为业务域名
-  传输层   本地镜像只在 to_fetch_url() 生效一次，不污染业务 URL 与数据
-  展示层   页面链接前缀 display_domain()：有本地镜像用它（点得开、下载快），否则业务域名
+  业务层   抓取目标 = 链上任一同构端点（业务域取链尾），成员可互换
+  传输层   访问链只在 to_fetch_url() 生效一次，不污染业务 URL 与数据
+  展示层   页面链接前缀 display_domain()：跟随链上当前粘住的 host（点得开、下载快），
+           链头故障 failover 后随之指向下一项
 
 历史库里的完整 URL（含 127.0.0.1:1024 或旧域名前缀）经 to_display_url() 归一化展示，
 **无需迁移数据**。
 """
+import ipaddress
 import os
 import re
 import platform
+import threading
+import time
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -42,7 +52,7 @@ def load_dotenv(env_file: Path, override: bool = False) -> None:
     - 不覆盖已存在的环境变量：显式 export 的优先级更高
     - 忽略空行与 # 整行注释；支持 export 前缀、成对引号
     - 行内注释：仅当 # 前面是空白时才截断，避免误伤值里含 # 的情形
-      （本项目 .env 正是 `TXXY_PUBLIC_DOMAIN=https://...   # 注释` 这种写法）
+      （本项目 .env 正是 `TXXY_FETCH_CHAIN=http://...,https://...   # 注释` 这种写法）
 
     未直接使用 python-dotenv：容器与离线（air-gapped）环境按 requirements.txt
     安装，目前依赖里没有它；为不增加离线部署的打包负担，保留这份零依赖实现。
@@ -97,27 +107,163 @@ def detect_env() -> str:
 RUN_ENV = detect_env()
 
 # ================= 默认值（全项目只在这里出现一次） =================
-# 其它模块需要默认值时一律引用这两个常量，不得再复制字面量——
+# 其它模块需要默认值时一律引用这些常量，不得再复制字面量——
 # 否则将来改默认值必然漏改某一处，又变回「N 个地方配同一个东西」。
 DEFAULT_PUBLIC_DOMAIN = "https://txxy.com"
-DEFAULT_LOCAL_PROXY = "http://127.0.0.1:1024"
+# 本机 web.exe 镜像端点（默认链第 1 项）。mirror_service 的启停守护只绑定它——
+# 即使用户改了链，本机守护的仍是这个默认端点（外部镜像站不可本机启动、无需守护）。
+DEFAULT_LOCAL_MIRROR = "http://127.0.0.1:1024"
+# 本地 Windows 默认链：本机镜像优先、公网主域兜底；Docker / Linux 没有本机镜像，仅公网主域。
+DEFAULT_FETCH_CHAIN: list[str] = [DEFAULT_LOCAL_MIRROR, DEFAULT_PUBLIC_DOMAIN]
 
-# ================= 业务域名（唯一域名配置） =================
-# 抓取目标 / 展示（无本地镜像时）都用它。
-PUBLIC_DOMAIN = (os.environ.get("TXXY_PUBLIC_DOMAIN") or DEFAULT_PUBLIC_DOMAIN).rstrip("/")
+# ================= 访问链（唯一域名/端点配置，公网主域含在链内） =================
+# TXXY_FETCH_CHAIN：有序访问链，逗号分隔。链上任一成员都是同一站点的同构端点，按序访问；
+# **最后一项 = 公网主域**（业务域名、中继 302 降级目标），校验禁止其为回环 / 内网地址
+# ——降级目标必须脱离本机环境也能打开（业界同型做法如 nginx upstream 的 backup 标记，
+# 这里用「末项约定 + 校验兜底」表达，位置被重排时校验会拦住死配置）。
+_LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "0.0.0.0", "::1"})
 
-# ================= 本地镜像（传输层，仅抓取时使用） =================
-# web.exe 在 127.0.0.1:1024 提供本地镜像。它不是标准 HTTP 代理（实测不支持 CONNECT，
-# 走 HTTPS_PROXY 会 ProxyError），只能靠替换 host 访问，故需本项目自行处理。
-# 未显式配置时：本地 Windows 默认启用，Docker / Linux 不启用（那些环境没有 web.exe）。
-# 显式置空（TXXY_LOCAL_PROXY=）即强制直连——无需额外的布尔开关。
-_raw_proxy = os.environ.get("TXXY_LOCAL_PROXY")
-# 未显式配置（键不存在）时按环境取默认；显式配置（含置空）一律以配置值为准
-LOCAL_PROXY = (
-    _raw_proxy
-    if _raw_proxy is not None
-    else (DEFAULT_LOCAL_PROXY if RUN_ENV == ENV_LOCAL else "")
-).strip().rstrip("/")
+
+def _is_local_host(url: str) -> bool:
+    """URL 的 host 是否为回环 / 内网地址（链尾校验用；解析不出 host 视为本机地址）"""
+    host = (urlparse(url).hostname or "").lower()
+    if not host:
+        return True
+    if host in _LOCAL_HOSTS:
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        # 非点分 IP 的主机名：仅按常见内网后缀判定，其余视为公网（DNS 归属交由使用者）
+        return host.endswith((".local", ".lan", ".internal"))
+    return ip.is_private or ip.is_loopback or ip.is_link_local
+
+
+def parse_fetch_chain(raw: str | list[str] | tuple[str, ...]) -> list[str]:
+    """解析 + 校验访问链（唯一实现：.env / 参数设置页 / scraper 命令行三处共用）。
+
+    接受逗号分隔字符串或字符串序列：去空格、去尾斜杠、按序去重。
+    校验三条，非法即抛 ValueError（env 层 fail-fast、设置页转 400 提示、CLI 层打印退出）：
+    ① 至少一项；② 每项必须是 http(s):// 开头的完整地址（含 host）；
+    ③ **末项不得为回环 / 内网地址**（它是中继降级目标 / 业务域名）。
+    """
+    items = raw.split(",") if isinstance(raw, str) else list(raw)
+    out: list[str] = []
+    for item in items:
+        u = item.strip().rstrip("/")
+        if not u:
+            continue
+        p = urlparse(u)
+        if p.scheme not in ("http", "https") or not p.netloc:
+            raise ValueError(f"访问链成员必须是 http(s):// 开头的完整地址: {u!r}")
+        if u not in out:
+            out.append(u)
+    if not out:
+        raise ValueError("访问链不能为空：至少要有一个可访问的端点")
+    if _is_local_host(out[-1]):
+        raise ValueError(
+            f"访问链最后一项必须是公网可直达地址（它是中继降级目标 / 业务域名），不能是回环或内网地址: {out[-1]}"
+        )
+    return out
+
+
+_raw_fetch_chain = os.environ.get("TXXY_FETCH_CHAIN")
+
+
+def default_fetch_chain() -> list[str]:
+    """环境变量 / 代码默认链（**不含页内覆盖**）：设置页「默认」回显与 reset 的回落目标。
+
+    与 fetch_chain()（活值）分开的原因：页内改链只更新 _fetch_chain，若「默认」也取活值，
+    reset 后会把刚保存的覆盖值当成默认值回显（循环引用，2026-09-24 实测踩到）。
+    """
+    raw = os.environ.get("TXXY_FETCH_CHAIN")
+    if raw is not None:
+        return parse_fetch_chain(raw)
+    return list(DEFAULT_FETCH_CHAIN if RUN_ENV == ENV_LOCAL else [DEFAULT_PUBLIC_DOMAIN])
+
+
+_fetch_chain: list[str] = default_fetch_chain()
+
+# 业务域名（= 链尾，派生量）：供 import 期一次性引用（如 scraper 拼 BASE_URL）。
+# 运行期改链后以 public_domain() / fetch_chain() 活值为准——设置页改链只更新 _fetch_chain，
+# 本快照不回写，Web 端消费方一律走活值访问器（web/config.py 转发）。
+PUBLIC_DOMAIN: str = _fetch_chain[-1]
+
+# ---- 粘性 failover 状态（进程内；scraper 子进程等多进程消费者各自独立维护） ----
+# _fetch_idx: 当前粘住的链下标；_fetch_head_down_at: 链头最后一次传输层失败时刻（monotonic 秒）。
+# 回切口径：链头故障后冷却 _HEAD_RETRY_INTERVAL 秒，期间直接用粘住项（不反复撞连接超时）；
+# 冷却结束自动回切链头重试——恢复即粘回最高优先级，未恢复则再次下移并刷新冷却时刻。
+# RLock：current_fetch_host 持锁调用 fetch_chain()，后者也要拿锁（可重入避免自死锁）。
+_FETCH_LOCK = threading.RLock()
+_HEAD_RETRY_INTERVAL = 60.0
+_fetch_idx = 0
+_fetch_head_down_at = 0.0
+
+
+def fetch_chain() -> list[str]:
+    """当前访问链（活值副本）：镜像候选（配置序）+ 公网主域（末项兜底）。
+
+    活值而非模块常量：参数设置页可运行时改链（set_fetch_chain），消费方每次现取。
+    """
+    with _FETCH_LOCK:
+        return list(_fetch_chain)
+
+
+def public_domain() -> str:
+    """业务域名（活值）= 访问链最后一项：中继 302 降级目标、to_fetch_url 的替换基准"""
+    return _fetch_chain[-1]
+
+
+def set_fetch_chain(raw: str | list[str]) -> list[str]:
+    """运行时改链（参数设置页「保存即生效」的唯一入口）：校验通过才生效，并复位 failover 状态。
+
+    抓取子进程不共享本进程状态——run_batch 拉起时把当前链注入 TXXY_FETCH_CHAIN
+    环境变量，子进程 import 本模块时按 env 解析出同一份链（传播路径唯一，不另走文件）。
+    """
+    global _fetch_chain, _fetch_idx, _fetch_head_down_at
+    chain = parse_fetch_chain(raw)
+    with _FETCH_LOCK:
+        _fetch_chain = chain
+        _fetch_idx = 0  # 链变了，旧粘住下标失去意义：回到最高优先级重新粘
+        _fetch_head_down_at = 0.0
+    return list(chain)
+
+
+def current_fetch_host() -> str:
+    """当前粘住的访问 host（含链头回切判定）。
+
+    只读不切换：正常请求一律用它，不做任何探测（避免每个请求都先撞一次死镜像的超时）；
+    切换只由 report_fetch_failure 在传输层失败时驱动。
+    """
+    global _fetch_idx
+    with _FETCH_LOCK:
+        chain = _fetch_chain
+        if not chain:
+            return ""
+        if _fetch_idx >= len(chain):
+            _fetch_idx = 0
+        if _fetch_idx > 0 and time.monotonic() - _fetch_head_down_at >= _HEAD_RETRY_INTERVAL:
+            # 链头冷却期已过：回切链头重试（成功则自然粘回最高优先级，无需额外状态）
+            _fetch_idx = 0
+        return chain[_fetch_idx]
+
+
+def report_fetch_failure(host: str) -> str:
+    """传输层失败上报（连接拒绝 / 超时）：host 是链上当前粘住项时下移一格，返回下移后的 host。
+
+    4xx/5xx 属业务响应，**禁止**调用本函数切换——端点可能只是没有该内容，切到另一端点
+    反而拿到不一致的结果（口径见模块文档）。已在链尾（公网主域）时无处可退，原样返回。
+    """
+    global _fetch_idx, _fetch_head_down_at
+    with _FETCH_LOCK:
+        chain = _fetch_chain
+        idx = chain.index(host) if host in chain else _fetch_idx
+        if idx >= len(chain) - 1:
+            return chain[-1] if chain else host
+        if idx == 0:
+            _fetch_head_down_at = time.monotonic()
+        _fetch_idx = idx + 1
+        return chain[_fetch_idx]
 
 # ================= 展示端「同源中继」前缀（全项目唯一定义） =================
 # 本地镜像 web.exe 只绑回环，浏览器只能经看板转发访问（见 web/mirror.py），故前端把帖子
@@ -129,24 +275,24 @@ MIRROR_PREFIX = "/mirror"
 
 
 def use_local_proxy() -> bool:
-    """是否启用本地镜像：由 LOCAL_PROXY 是否有值决定（地址与开关合二为一）"""
-    return bool(LOCAL_PROXY)
+    """链上是否存在镜像候选（链长 > 1 即有）：run_batch 的 USE_LOCAL_PROXY 同源"""
+    return len(_fetch_chain) > 1
 
 
 def display_domain() -> str:
-    """页面链接前缀：本机有本地镜像就用它（点击即开、下载走本机），否则用业务域名。
+    """页面链接前缀：跟随访问链上当前粘住的 host（默认链头；端点挂了随 failover
+    指向下一项）。
 
     只影响**展示与外部点击**（帖子外链、CSV 导出、下载中心）；
-    不影响抓取（抓的是 PUBLIC_DOMAIN，传输层再按需走镜像）
-    与入库（恒为相对路径，与域名无关）。
+    不影响入库（恒为相对路径，与域名无关）。
     """
-    return LOCAL_PROXY or PUBLIC_DOMAIN
+    return current_fetch_host() or public_domain()
 
 
 def _own_hosts() -> set[str]:
-    """本站 host 集合：公开域名 + 本地代理（历史库里两种前缀都视为本站链接）"""
+    """本站 host 集合：访问链上所有 host（业务域名 + 全部镜像候选）都视为本站链接"""
     hosts: set[str] = set()
-    for u in (PUBLIC_DOMAIN, LOCAL_PROXY):
+    for u in fetch_chain():
         host: str = urlparse(u).netloc or ""
         if host:
             hosts.add(host)
@@ -231,14 +377,18 @@ def to_display_url(url: str | None) -> str:
 
 
 def to_fetch_url(url: str) -> str:
-    """业务 URL → 实际请求 URL（全项目唯一接触本地代理的函数）。
+    """业务 URL → 实际请求 URL（全项目唯一接触链上端点 host 的函数）。
 
-    启用本地镜像（use_local_proxy()）时把业务域名替换成本地镜像地址。业务代码其余
-    地方一律使用业务域名，从而保证镜像地址永远不会写进数据或入库链接。
+    按当前粘住的链上 host（current_fetch_host()）替换业务域名（= 活值链尾）；
+    当前即业务域名（链尾）时原样返回。业务代码其余地方一律使用业务域名，从而保证
+    链上端点地址永远不会写进数据或入库链接。链 failover 只发生在请求侧传输层失败时
+    （scraper.fetch_page / web.mirror 调 report_fetch_failure 后重算本函数）。
     """
-    if not use_local_proxy() or not PUBLIC_DOMAIN:
+    host = current_fetch_host()
+    public = public_domain()
+    if not host or not public or host == public:
         return url
-    return url.replace(PUBLIC_DOMAIN, LOCAL_PROXY, 1)
+    return url.replace(public, host, 1)
 
 
 # ================= 版块映射（抓取端与展示端共用） =================

@@ -8,9 +8,8 @@
   POSTS_DB        数据库文件路径（默认 db/posts.db）
   OUTPUTS_DIR     outputs 目录（默认 outputs/）
   DOWNLOADS_DIR   downloads 目录（默认 downloads/，自动下载与手动下载共用此根）
-  TXXY_PUBLIC_DOMAIN  唯一业务域名（默认 https://txxy.com）。全项目只有它与
-                  TXXY_LOCAL_PROXY 两个域名相关配置，且都有默认值，
-                  详见项目根 txxy_env.py——那是全项目域名的唯一配置源
+  TXXY_FETCH_CHAIN  唯一域名相关配置：有序访问链（逗号分隔，含公网主域链尾），
+                  默认值见项目根 txxy_env.py——那是全项目域名的唯一配置源
   TXXY_WEB_HOST   监听地址（默认 127.0.0.1，局域网访问设 0.0.0.0）
   TXXY_WEB_PORT   监听端口（默认 8080）
   TXXY_ENABLE_AUTO_REFRESH  是否启用数据总览自动刷新（默认 1/开启，设为 0 关闭）
@@ -76,11 +75,41 @@ DB_FILE = Path(os.environ.get("POSTS_DB", str(BASE_DIR / "db" / "posts.db")))
 OUTPUTS_DIR = Path(os.environ.get("OUTPUTS_DIR", str(BASE_DIR / "outputs")))
 DOWNLOADS_DIR = Path(os.environ.get("DOWNLOADS_DIR", str(BASE_DIR / "downloads")))
 
-# 展示域名（页面链接前缀）：本机有本地镜像则用镜像地址，否则用业务域名，
-# 见 txxy_env.display_domain()；抓取与入库另走 PUBLIC_DOMAIN / 相对路径，互不影响。
-PUBLIC_ROOT = _TXXY_ENV.display_domain()
+# 展示前缀不再存模块快照：参数设置页可运行时改链，消费方一律走下面的活值访问器
+# （快照会在改链后变陈旧——health 等接口必须反映当前生效链）。
 # 当前运行环境（local / docker / linux），由 /api/health 暴露，便于确认配置来源
 RUN_ENV = _TXXY_ENV.RUN_ENV
+
+
+# ---- 访问链活值访问器（唯一入口，禁止各处缓存快照） ----
+def fetch_chain() -> list[str]:
+    """当前访问链（含公网主域链尾）：中继转发与展示层按此现取"""
+    return _TXXY_ENV.fetch_chain()
+
+
+def public_domain() -> str:
+    """业务域名（活值）= 链尾：中继 302 降级目标等"""
+    return _TXXY_ENV.public_domain()
+
+
+def display_domain() -> str:
+    """展示前缀（活值）= 链上当前粘住的 host"""
+    return _TXXY_ENV.display_domain()
+
+
+def normalize_fetch_chain(raw: Any) -> list[str]:
+    """解析 + 校验访问链（非法抛 ValueError）：设置页保存路径的唯一校验入口"""
+    return _TXXY_ENV.parse_fetch_chain(raw)
+
+
+def default_fetch_chain() -> list[str]:
+    """环境变量 / 代码默认链（不含页内覆盖）：设置页「默认」回显与 reset 回落目标"""
+    return _TXXY_ENV.default_fetch_chain()
+
+
+def set_fetch_chain(raw: Any) -> list[str]:
+    """运行时改链（设置页 apply_runtime 的推送入口）：校验通过才生效并复位 failover 状态"""
+    return _TXXY_ENV.set_fetch_chain(raw)
 
 # ---- 帖子链接「同源中继」（/mirror，实现见 web/mirror.py）----
 # 背景（2026-09-17 实测）：web.exe 只绑回环（netstat 为 `TCP 127.0.0.1:1024 LISTENING`，
@@ -89,9 +118,8 @@ RUN_ENV = _TXXY_ENV.RUN_ENV
 # 常量唯一定义在 txxy_env（它与 URL 归一化同源：用户粘回来的中继链接要在 to_storage_path
 # 里剥掉前缀），此处只转发，不得复制字面量（本项目通用约束第 1 条）
 MIRROR_PREFIX = _TXXY_ENV.MIRROR_PREFIX
-MIRROR_UPSTREAM = _TXXY_ENV.LOCAL_PROXY   # 转发目标；空 = 本环境无镜像（Docker / 离线 Linux）
-# 镜像访问不了时的降级目标：同一路径交给业务域名。业务域名仍只定义在唯一配置源 txxy_env。
-PUBLIC_DOMAIN = _TXXY_ENV.PUBLIC_DOMAIN
+# 中继转发按访问链顺序 failover（含公网主域链尾），见 web/mirror.py；
+# 降级目标 = 链尾业务域名，经 public_domain() 活值取用，不存快照。
 
 
 def to_display_url(url: str | None) -> str:

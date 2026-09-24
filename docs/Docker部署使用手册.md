@@ -66,7 +66,7 @@ ss -lntp | grep 18088
 
 | 变量                | 说明                                  | 默认                      |
 | ------------------- | ------------------------------------- | ------------------------- |
-| `TXXY_PUBLIC_DOMAIN` | 唯一业务域名（抓取/入库/展示共用）    | `https://txxy.com`（无需配置，见 7.3） |
+| `TXXY_FETCH_CHAIN` | 有序访问链（末项=公网主域，抓取/中继/展示共用）    | 本地 `http://127.0.0.1:1024,https://txxy.com`；容器 `https://txxy.com`（无需配置，见 7.3） |
 | `TXXY_HOST_PORT`  | 宿主机映射端口                        | `18088`（脚本自动写入） |
 | `TXXY_IMAGE`      | 镜像 tag（**离线环境必填**）    | `txxy:latest`           |
 | `TZ`              | 时区，影响抓取目录与定时触发时间      | `Asia/Shanghai`         |
@@ -241,16 +241,23 @@ docker compose --profile cron up -d --build
 docker compose --profile cron down
 ```
 
-- 抓取入口为 `python -u run_batch.py false`（Docker 环境默认不启用本地代理），直连唯一业务域名（`TXXY_PUBLIC_DOMAIN`），容器内不依赖 `web.exe`；
+- 抓取入口为 `python -u run_batch.py false`（Docker 环境访问链默认仅公网主域），直连业务域名（链尾），容器内不依赖 `web.exe`；
 - cron 容器会等 web 健康检查通过后再启动（避免并发初始化）；
 - **离线环境不要启用**，源站不可达会持续失败。
 
 ### 7.3 域名与链接——唯一配置源
 
-域名相关配置**只有两个**，且**都有默认值——零配置即可运行**：`TXXY_PUBLIC_DOMAIN`
-（业务域名，默认 `https://txxy.com`）与 `TXXY_LOCAL_PROXY`（本地镜像，本地 Windows
-默认启用）。默认值只在项目根 `txxy_env.py` 一处维护（scraper / run_batch / web 全部
-只读不定义），改域名只改这一处。
+域名相关配置**只有一个键**，且**有默认值——零配置即可运行**：`TXXY_FETCH_CHAIN`
+（有序访问链，逗号分隔；成员为同一站点的**同构端点**——本机镜像 / 外部镜像站 / 公网主域，
+按序访问；**末项 = 公网主域**（业务域名 / 中继降级目标），校验禁止内网地址。
+本地 Windows 默认 = `http://127.0.0.1:1024,https://txxy.com`；Docker / Linux 默认 = 仅公网主域）。
+默认值只在项目根 `txxy_env.py` 一处维护（scraper / run_batch / web 全部只读不定义）。
+**也可在参数设置页「访问链」组运行时增删 / 排序**（页内设置 > `.env` > 代码默认）。
+
+**运行时访问链与 failover（2026-09-24 起）**：实际请求（抓取 `to_fetch_url`）与中继转发
+（`web/mirror.py`）按链顺序 failover：**仅传输层错误（连接拒绝 / 超时）才切下一项**；
+4xx/5xx 是业务响应（端点可能确实没有该内容），切换会拿到不一致的结果，故不切。
+粘住当前可用项不反复探测，链头故障 60 秒后自动回切重试。
 
 三层解耦：
 
@@ -260,25 +267,26 @@ docker compose --profile cron down
 |---|---|
 | 存储层 | 数据库 / CSV 只存相对路径（`/htm_data/...`），不含域名 → 换域名零成本 |
 | 业务层 | 抓取目标恒为业务域名 `https://txxy.com` |
-| 传输层 | 本地 1024 代理只在发起请求时生效（`to_fetch_url`），不进入数据 |
-| 展示层 | 页面链接前缀 `display_domain()`：**本地 → `http://127.0.0.1:1024`（服务端请求可直接用），Docker / Linux → `https://txxy.com`**；**浏览器打开 / 复制帖子的链接**再经同源中继 `/mirror`（本地镜像只绑回环，手机无法直连，见下） |
+| 传输层 | 访问链只在发起请求时生效（`to_fetch_url` 按链 failover），不进入数据 |
+| 展示层 | 页面链接前缀 `display_domain()`：**跟随链上当前粘住的端点（本地默认 `http://127.0.0.1:1024`；故障 failover 后随之指向下一项）**；**浏览器打开 / 复制帖子的链接**再经同源中继 `/mirror`（本地镜像只绑回环，手机无法直连，见下） |
 
 展示层按环境区分是刻意的：本地装了 `web.exe` 代理，链接走它更快且一定能打开；
-Docker / 离线 Linux 没有该程序，只能用公开域名。本地若把镜像置空
-（`TXXY_LOCAL_PROXY=`），展示也会自动退回公开域名（避免给出点不开的链接）。
+Docker / 离线 Linux 没有该程序，只能用公开域名。若把访问链只留公网主域
+（`TXXY_FETCH_CHAIN=https://txxy.com` 或设置页删掉镜像项），展示也会退回公开域名。
 
 **浏览器打开 / 复制帖子链接走同源中继 `/mirror`（2026-09-17 起）**：`web.exe` 只监听
 回环地址（实测 `netstat` 为 `TCP 127.0.0.1:1024 LISTENING`，安装目录内无可改绑定的配置），
 手机等其它设备访问 `http://<桌面IP>:1024/...` 必然失败。因此浏览器侧链接一律改为同源路径
-`http://<看板地址>/mirror/htm_data/...`，由看板进程转发到回环镜像（`web/mirror.py`）：
+`http://<看板地址>/mirror/htm_data/...`，由看板进程按访问链顺序转发（`web/mirror.py`）：
 看板已监听 `0.0.0.0`（局域网可达）时手机即可直接打开，无需额外防火墙规则或暴露 1024 端口。
-镜像未运行或本环境无镜像（Docker / 离线 Linux 的 `TXXY_LOCAL_PROXY` 为空）时，中继会
-**302 到业务域名同一路径**，即「1024 访问不了时用公开域名打开」。
-排查入口：`GET /api/health` 的 `mirror_upstream`（空 = 本环境无镜像）。
+链上某端点连不上时自动尝试下一项（含链尾公网主域）；整条链不可达时，中继会
+**302 到链尾业务域名同一路径**，即「镜像都访问不了时用公开域名打开」。
+排查入口：`GET /api/health` 的 `fetch_chain`（当前生效链）。
 
-> 容器里没有 `web.exe`，`TXXY_LOCAL_PROXY` 为空 → 看板启动器（`start_web.py`）会直接跳过镜像管理
-> （打印「未配置本地镜像，跳过」），中继 `/mirror` 也整体 302 到业务域名；本地 Windows 侧则由
-> `mirror_service.py` 统一负责启停（抓取批次与看板启动器共用同一实现）。
+> 容器里没有 `web.exe`，访问链默认仅公网主域 → 看板启动器（`start_web.py`）会直接跳过镜像管理
+> （打印「未配置镜像候选，跳过」），中继 `/mirror` 也整体 302 到业务域名；本地 Windows 侧则由
+> `mirror_service.py` 统一负责启停（抓取批次与看板启动器共用同一实现；守护只绑定默认第 1 项
+> 本机端点 `DEFAULT_LOCAL_MIRROR`，链上其余外部镜像站 URL 无需守护）。
 
 **导出物只存相对路径**：Web 端导出的 CSV 的「链接」列一律 `/htm_data/...`
 （`txxy_env.to_storage_path`），与库内、采集端 CSV 同一形态，**不带任何域名**——
@@ -291,8 +299,7 @@ Docker / 离线 Linux 没有该程序，只能用公开域名。本地若把镜�
 
 | 变量 | 说明 | 默认 |
 |---|---|---|
-| `TXXY_PUBLIC_DOMAIN` | 业务域名 | `https://txxy.com` |
-| `TXXY_LOCAL_PROXY` | 本地镜像地址（**置空 = 关闭、直连**） | 本地 Windows `http://127.0.0.1:1024`；Docker / Linux 空 |
+| `TXXY_FETCH_CHAIN` | 有序访问链，逗号分隔（成员为同构端点，按序 failover；**末项 = 公网主域**（业务域名 / 中继降级目标），校验禁止内网地址；只留公网主域即直连） | 本地 Windows `http://127.0.0.1:1024,https://txxy.com`；Docker / Linux `https://txxy.com` |
 
 **就这两个，且都有默认值——零配置即可运行。** 优先级：进程显式环境变量 > `.env` > 代码默认。
 
@@ -319,11 +326,11 @@ python scraper.py 7 https://xx.com           # 显式覆盖业务域名
 ```
 
 > **注意下载中心**：下载用的是页面链接，即展示域名——**本地环境经 1024 本地镜像下载**，
-> Docker / Linux 直连公开域名。若所在机器直连不通，把 `TXXY_LOCAL_PROXY` 设为可访问地址。
+> Docker / Linux 直连公开域名。若所在机器直连不通，把 `TXXY_FETCH_CHAIN` 设为可访问地址。
 
 本地直启（`python web/app.py`）同样读取项目根 `.env`：`txxy_env.py` / `web/config.py` 均内置
 零依赖 dotenv 加载（未引入 python-dotenv，离线环境友好）。行为同主流 dotenv——
-**不覆盖已存在的环境变量**，因此临时覆盖可直接 `export TXXY_PUBLIC_DOMAIN=...`，无需改文件。
+**不覆盖已存在的环境变量**，因此临时覆盖可直接 `export TXXY_FETCH_CHAIN=...`，无需改文件。
 
 ### 7.4 改配置后生效
 

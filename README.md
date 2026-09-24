@@ -20,7 +20,7 @@ pip install -r requirements.txt
 
 ```
 txxy_test/
-├── txxy_env.py         # 唯一配置源：环境判定 / 业务域名 / 本地镜像 / URL 转换 / 版块映射 / .env 加载
+├── txxy_env.py         # 唯一配置源：环境判定 / 访问链（含公网主域）与 failover / URL 转换 / 版块映射 / .env 加载
 ├── http_headers.py     # 唯一 UA 与 Accept 定义（零依赖，抓取与各下载模块共用，避免 UA 散落多份）
 ├── txt_export.py       # TXT 清单导出（磁力 / 云盘共用的「每行一条」写出逻辑）
 ├── scraper.py          # 单版块抓取器（写入 CSV + SQLite，断点续写、请求重试、连续失败保护、权限拦截检测）
@@ -114,8 +114,8 @@ python run_batch.py true       # 可选入参：本次强制开启本地代理
 > 术语：`web.exe` 提供的是**本地镜像**（替换 host 后访问），**不是标准 HTTP 代理**——实测不支持 CONNECT，走 `HTTPS_PROXY` 会 `ProxyError`，因此不能改用业界通用的代理环境变量。
 
 - 命令行：`python run_batch.py [true|false]`（接受 `true/1/yes/on` 与 `false/0/no/off`，大小写不敏感），如 `python run_batch.py false`；不传时取配置区默认值；
-- 本地镜像开关默认由 `txxy_env.py` 按环境自动决定（仅本地 Windows 开启），命令行 `true`/`false` 可强制；
-- 镜像开启时：`run_batch.py` 自动探测/启动/关闭 1024 端口 web 服务，`scraper.py` 发起请求时经 `txxy_env.to_fetch_url` 把域名临时替换为 `127.0.0.1:1024` ——**业务 URL 与入库数据始终是公开域名**；
+- 本地镜像开关默认由 `txxy_env.py` 按环境自动决定（链上有镜像候选即开启，仅本地 Windows 默认有），命令行 `true`/`false` 可强制；
+- 镜像开启时：`run_batch.py` 自动探测/启动/关闭 1024 端口 web 服务，`scraper.py` 发起请求时经 `txxy_env.to_fetch_url` 把域名临时替换为**访问链上当前粘住的端点**（`TXXY_FETCH_CHAIN` 有序链，默认 `127.0.0.1:1024` → 公网主域；某端点传输层连不上时自动切下一个，详见下文「配置」）——**业务 URL 与入库数据始终不含链上端点地址**；
 - 镜像关闭时：**1024 端口启不起来时的备选**——不再探测/启停端口，抓取直连业务域名；
 - **入库只存相对路径**：数据库/CSV 的 `url` 列存 `/htm_data/...`（不含域名，`txxy_env.to_storage_path` 规范化），换域名/换环境零成本；展示层渲染时再拼展示域名（`txxy_env.to_display_url`，本机有本地镜像则为镜像地址，否则为业务域名）。**Web 端导出的 CSV 同样只存相对路径**（与库内、采集端 CSV 形态一致，不带任何域名）。
 
@@ -290,8 +290,8 @@ python -X utf8 start_web.py        # 等价于 start_web.bat 的全部行为（�
   - **下载过程日志**：`download_files` 的过程输出（print）由 `download_tasks._ThreadLogCapture` **按线程**收集后汇入任务日志——下载中心在线程池里并发执行，直接用 `redirect_stdout` 会串扰且劫持 Web 进程输出，故改为「调用 attach 的线程写入自己的缓冲区，其余线程原样转发真实 stdout」；收集而非重写，避免与 CLI 各写一份下载日志；
 - **只读安全**：后端以 `PRAGMA query_only=ON` 只读访问 `db/posts.db`，绝不写库，与抓取写进程（WAL 模式）安全并发；
 - **URL 归一化**：任意存储格式（历史完整 URL / 新相对路径 / 复制出去的中继链接）经 `txxy_env.to_display_url` 归一化为当前展示域名（本机有本地镜像则为镜像地址，否则为业务域名），外部域名链接原样保留，**不改数据库**、无需迁移。反向同理：`to_storage_path` 会剥掉中继前缀 `/mirror`（常量唯一定义在 `txxy_env.MIRROR_PREFIX`），因此把复制出去的 `http://<看板>/mirror/htm_data/...` 粘回**下载中心粘贴框 / 黑名单**同样能被正确识别，与库内 `/htm_data/...` 同口径（判重、标题反查、已下载判定均按归一后的路径比对）；下载提交入口还会统一归一为服务端可直接请求的地址再落盘；
-- **帖子链接（手机也能打开）**：浏览器里点帖子 / 复制链接都走**同源中继** `http://<看板地址>/mirror/htm_data/...`，由看板进程转发到本机镜像 `127.0.0.1:1024`（`web/mirror.py`；前端唯一实现在 `web/frontend/src/utils/postUrl.ts`）。**为什么必须中继**：本地镜像 `web.exe` 只监听回环地址（实测 `netstat` 为 `TCP 127.0.0.1:1024 LISTENING`，安装目录内也无可改绑定的配置），手机访问 `127.0.0.1:1024` 只会指向手机自己，直连在任何配置下都不可能成功；中继让链接与访问方式（本机 / 局域网 IP）解耦，无需改防火墙或暴露额外端口。镜像未运行或本环境无镜像（Docker / 离线 Linux）时，中继自动 **302 到业务域名同一路径**，即「1024 访问不了时改用公开域名打开」。服务端自己发起的请求（下载中心、CSV 生成）仍直连 `127.0.0.1:1024`，不受影响；
-- **配置**：域名相关只有两项，都在项目根 `txxy_env.py`（`TXXY_PUBLIC_DOMAIN` 业务域名 / `TXXY_LOCAL_PROXY` 本地镜像地址，置空即直连；两者都有默认值，零配置可跑）；展示端其它配置在 `web/config.py` 顶部用环境变量覆盖（`TXXY_WEB_HOST` / `TXXY_WEB_PORT` / `POSTS_DB` / `TXXY_DOWNLOAD_*` 下载中心参数 / `TXXY_TRASH_DIR` 回收站目录 / `TXXY_TRASH_KEEP_DAYS`（默认 7）等），默认监听 `127.0.0.1:8088`（8080 常被本机其他程序占用）；
+- **帖子链接（手机也能打开）**：浏览器里点帖子 / 复制链接都走**同源中继** `http://<看板地址>/mirror/htm_data/...`，由看板进程按**访问链**顺序转发（`web/mirror.py`；前端唯一实现在 `web/frontend/src/utils/postUrl.ts`）。**为什么必须中继**：本地镜像 `web.exe` 只监听回环地址（实测 `netstat` 为 `TCP 127.0.0.1:1024 LISTENING`，安装目录内也无可改绑定的配置），手机访问 `127.0.0.1:1024` 只会指向手机自己，直连在任何配置下都不可能成功；中继让链接与访问方式（本机 / 局域网 IP）解耦，无需改防火墙或暴露额外端口。链上某端点连不上时自动尝试下一项（含链尾公网主域——服务端可达时直接经看板回源）；整条链不可达时，中继自动 **302 到链尾业务域名同一路径**，即「镜像都访问不了时改用公开域名打开」。服务端自己发起的请求（下载中心、CSV 生成）仍直连展示域名（`display_domain()` 随链 failover），不受影响；
+- **配置**：域名相关**只有一个键**，在项目根 `txxy_env.py`（`TXXY_FETCH_CHAIN` 有序访问链，逗号分隔；成员为同一站点的同构端点，**末项 = 公网主域**（业务域名 / 中继降级目标），校验禁止内网地址；默认本地 Windows = `http://127.0.0.1:1024,https://txxy.com`，Docker / Linux = 仅公网主域，零配置可跑；实际请求与中继转发按链 failover——**仅传输层错误（连不上/超时）才切下一项，4xx/5xx 是业务响应不切**）。**也可在参数设置页「访问链」组运行时增删 / 排序**（保存后看板立即生效，抓取批次自下一批生效；页内设置 > `.env` > 代码默认）；展示端其它配置在 `web/config.py` 顶部用环境变量覆盖（`TXXY_WEB_HOST` / `TXXY_WEB_PORT` / `POSTS_DB` / `TXXY_DOWNLOAD_*` 下载中心参数 / `TXXY_TRASH_DIR` 回收站目录 / `TXXY_TRASH_KEEP_DAYS`（默认 7）等），默认监听 `127.0.0.1:8088`（8080 常被本机其他程序占用）；
 - **自动刷新开关**：`TXXY_ENABLE_AUTO_REFRESH`（默认 `1` 开启）控制数据总览的自动刷新功能——开启时 Header 显示"自动刷新"开关、前端启动 5s 轮询（`REFRESH_INTERVAL=5000`），抓取过程中 KPI 卡与折线图准实时更新；后端统计接口配套 5s TTL 缓存（`web/db.py` 的 `_TTL=5`），避免轮询空转打库；如需关闭，启动前设置 `TXXY_ENABLE_AUTO_REFRESH=0`（或直接改 `web/config.py` 为 `False`）。
 - **开发模式**：`cd web/frontend && npm run dev` 启动 Vite（端口 5173，`/api` 与 `/mirror` 自动代理到 8088）热更新；改完执行 `npm run build` 重新构建，再启动 `python -X utf8 web/app.py` 生效。
 
@@ -340,12 +340,12 @@ python -X utf8 start_web.py        # 等价于 start_web.bat 的全部行为（�
 
 | 现象 | 原因与解决 |
 |---|---|
-| 请求报 `WinError 10061 连接拒绝` | 本地 web 服务（127.0.0.1:1024）未运行：先执行 `python run_batch.py`（自动启动 web.exe），或手动启动 `D:\Tools\1024app_win10_2025_1.02\web.exe`；若 web.exe 无法启动，执行 `python run_batch.py false`（或在 `.env` 把 `TXXY_LOCAL_PROXY` 置空）关闭本地镜像，将直连业务域名抓取 |
+| 请求报 `WinError 10061 连接拒绝` | 本地 web 服务（127.0.0.1:1024）未运行：先执行 `python run_batch.py`（自动启动 web.exe），或手动启动 `D:\Tools\1024app_win10_2025_1.02\web.exe`；若 web.exe 无法启动，执行 `python run_batch.py false`（或在参数设置页把访问链只留公网主域）直连抓取 |
 | `[终止] 检测到权限拦截` | 当前账号无权访问该版块，脚本自动停止，检查代理/账号 |
 | `内容非图片` | 图床返回广告 HTML 页：确认使用纯图片 `Accept` 头（已内置 `extract_images.IMG_HEADERS`） |
 | 下载失败提示 `ConnectionError / Read timed out` | 网络暂时性超时，脚本已自动降级重试一次；仍失败可稍后重跑（断点续传） |
 | 数据库重复数据 | `posts` 表以 `title` 为主键，重复标题自动覆盖更新，无需清理 |
-| 手机上点帖子链接打不开 | 帖子链接经看板同源中继 `/mirror` 转发到本机镜像：`127.0.0.1:1024` 未监听（web.exe 没在跑）时中继会 302 到业务域名，手机若无直连业务域名则仍打不开——先启动 `web.exe`（或跑一次抓取批次）再试；另外看板本身要用局域网 IP 访问（`start_web.bat` 默认监听 `0.0.0.0`，可访问地址在启动日志里）；排查可用 `GET /api/health` 看 `mirror_upstream` 是否为空 |
+| 手机上点帖子链接打不开 | 帖子链接经看板同源中继 `/mirror` 按访问链转发：整条链不可达（如 `127.0.0.1:1024` 未监听且无其它候选）时中继会 302 到链尾业务域名，手机若无直连业务域名则仍打不开——先启动 `web.exe`（或跑一次抓取批次）再试；另外看板本身要用局域网 IP 访问（`start_web.bat` 默认监听 `0.0.0.0`，可访问地址在启动日志里）；排查可用 `GET /api/health` 看 `fetch_chain` |
 | 资源删除返回 500，且看板随后整个退出 | 启动看板的环境里带了**外部 `sitecustomize` 注入**（IDE / 编辑器工具会把 shim 目录塞进 `PYTHONPATH`）：它拦截文件操作，在资源删除请求里抛 `SystemExit(1)`，该异常穿透 uvicorn 直接结束进程（日志里连 `Shutting down` 都没有）。用干净环境启动即可——`start_web.bat` 已清空 `PYTHONPATH`；若直接 `python start_web.py`，请先用 `set PYTHONPATH=`（PowerShell：`$env:PYTHONPATH=''`）清掉；启动日志里若出现「检测到外部 sitecustomize 注入」告警即说明仍在被注入 |
 | 日志在哪里 | `outputs/日期/<程序名>_<日期>_<批次时间>.log`（与 CSV 同目录），如 `outputs/20260812/run_batch_20260812_164347.log` |
 

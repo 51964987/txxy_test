@@ -36,11 +36,12 @@ STAGGER_DELAY = 5
 # scraper.py 路径
 SCRAPER_SCRIPT = os.path.join(os.path.dirname(__file__), "scraper.py")
 
-# ---- 域名与本地镜像：唯一配置源在项目根 txxy_env.py，此处只读不定义 ----
-# 全项目只有两个域名相关配置，且都有默认值（零配置可跑）：
-#   TXXY_PUBLIC_DOMAIN  业务域名（默认 https://txxy.com）
-#   TXXY_LOCAL_PROXY    本地镜像地址（本地 Windows 默认启用；置空=强制直连）
-# USE_LOCAL_PROXY 只由 TXXY_LOCAL_PROXY 是否有值推出，命令行 [true|false] 可临时覆盖。
+# ---- 域名与访问链：唯一配置源在项目根 txxy_env.py，此处只读不定义 ----
+# 全项目只有一个域名相关配置，且有默认值（零配置可跑）：
+#   TXXY_FETCH_CHAIN  有序访问链，逗号分隔（含公网主域，末项=业务域名/中继降级目标；
+#                     本地 Windows 默认 = 本机镜像 + 公网主域）。实际请求按链 failover：
+#                     传输层错误才切下一项，见 txxy_env.fetch_chain() / report_fetch_failure()
+# USE_LOCAL_PROXY 只由「链上是否有镜像候选（链长>1）」推出，命令行 [true|false] 可临时覆盖。
 USE_LOCAL_PROXY = txxy_env.use_local_proxy()
 
 # 是否忽略断点进度强制重跑（--restart）：True 时所有版块从第 1 页重新抓取，
@@ -127,8 +128,9 @@ def log(msg: str) -> None:
 
 
 def effective_root_url() -> str:
-    """本次实际访问的根地址：本地代理开启 → 代理地址；关闭 → 唯一业务域名"""
-    return txxy_env.LOCAL_PROXY if USE_LOCAL_PROXY else txxy_env.PUBLIC_DOMAIN
+    """本次实际访问的根地址：镜像链开启 → 链上当前粘住的 host（默认镜像1，故障时随
+    failover 下移）；关闭 → 唯一业务域名"""
+    return txxy_env.current_fetch_host() if USE_LOCAL_PROXY else txxy_env.public_domain()
 
 
 def _parse_bool(value: str) -> bool | None:
@@ -216,12 +218,10 @@ def run_scraper(fid: str, name: str, run_id: int = 0) -> tuple[str, str, bool, i
             # --restart：忽略断点进度，强制重跑该版块（scraper.py 会删除当天 CSV/进度文件后从头抓取）
             cmd.append("--restart")
         # 域名不再透传：子进程与父进程同一项目根，scraper 导入 txxy_env 时按环境与
-        # .env 自行取值。这里仅把本进程生效的本地镜像地址显式传给子进程——
-        # 置空即关闭，从而让命令行覆盖（python run_batch.py false）在子进程里不丢失。
+        # .env 自行取值。这里把本进程生效的**完整访问链**显式传给子进程——
+        # 链上仅末项（直连）即命令行覆盖（python run_batch.py false），在子进程里不丢失。
         proxy_addr = (
-            (txxy_env.LOCAL_PROXY or txxy_env.DEFAULT_LOCAL_PROXY)
-            if USE_LOCAL_PROXY
-            else ""
+            ",".join(txxy_env.fetch_chain()) if USE_LOCAL_PROXY else txxy_env.public_domain()
         )
         # 批量运行时由本脚本统一汇总写运行记录，关闭子进程各自的落库，避免重复记录；
         # 同时把 run_id 传给子进程，子进程实时更新自己版块的进度明细。
@@ -236,7 +236,7 @@ def run_scraper(fid: str, name: str, run_id: int = 0) -> tuple[str, str, bool, i
             k: v for k, v in os.environ.items() if k != "TZ"
         }
         env["SCRAPER_RECORD_RUN"] = "0"
-        env["TXXY_LOCAL_PROXY"] = proxy_addr
+        env["TXXY_FETCH_CHAIN"] = proxy_addr
         # 统一子进程 stdout 编码为 UTF-8：本脚本被 Web 端以 `python -X utf8 run_batch.py`
         # 拉起时处于 UTF-8 模式，下面的 Popen 会用 UTF-8 解码子进程输出；而子进程默认
         # 未开 UTF-8 模式（-X utf8 不继承、PYTHONUTF8 未设），stdout 走系统 locale
@@ -318,8 +318,12 @@ def main() -> None:
     _apply_cli_args()
     # 打印运行环境与生效配置：自动判定的，显式化出来便于排查
     log(
-        "[配置] 运行环境: %s，业务域名: %s，本地代理: %s"
-        % (txxy_env.RUN_ENV, txxy_env.PUBLIC_DOMAIN, "开" if USE_LOCAL_PROXY else "关")
+        "[配置] 运行环境: %s，访问链: %s，直连模式: %s"
+        % (
+            txxy_env.RUN_ENV,
+            " -> ".join(txxy_env.fetch_chain()),
+            "否" if USE_LOCAL_PROXY else "是（python run_batch.py false）",
+        )
     )
     if not SECTIONS:
         print("未配置版块，请在 SECTIONS 字典中添加版块ID和名称")
@@ -347,12 +351,12 @@ def main() -> None:
             print(f"[1024服务] web 服务启动失败，终止本次抓取: {e}", file=sys.stderr)
             print(
                 "[提示] 1024 端口启不起来时，可执行 python run_batch.py false"
-                + "（或在 .env 把 TXXY_LOCAL_PROXY 置空）关闭本地镜像，将直连业务域名重试",
+                + "（或在参数设置页把访问链只留公网主域）直连重试",
                 file=sys.stderr,
             )
             sys.exit(1)
     else:
-        log(f"[1024服务] 本地镜像已关闭（USE_LOCAL_PROXY=False），直连业务域名: {txxy_env.PUBLIC_DOMAIN}")
+        log(f"[1024服务] 镜像候选已关闭（USE_LOCAL_PROXY=False），直连业务域名: {txxy_env.public_domain()}")
 
     total = len(SECTIONS)
     print(f"共 {total} 个版块，并发数: {MAX_WORKERS}，启动间隔: {STAGGER_DELAY}s\n")

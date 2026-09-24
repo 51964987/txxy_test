@@ -476,8 +476,9 @@ export interface SettingItem {
   desc: string
   /** 生效范围：immediate=下一次调用即生效 / next_task=下一个任务生效 / frontend=前端直接应用 */
   scope: 'immediate' | 'next_task' | 'frontend'
-  /** times = 时刻列表（值为 string[]，如 ["08:00","20:00"]），供定时抓取计划时刻使用 */
-  type: 'int' | 'float' | 'bool' | 'array' | 'text' | 'enum' | 'times'
+  /** times = 时刻列表（值为 string[]，如 ["08:00","20:00"]）；
+   *  chain = 访问链（值为 string[]，有序端点 URL，末项 = 公网主域），供「访问链」设置使用 */
+  type: 'int' | 'float' | 'bool' | 'array' | 'text' | 'enum' | 'times' | 'chain'
   min?: number | null
   max?: number | null
   /** array 类型：可选项的键与展示标签 */

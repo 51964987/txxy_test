@@ -37,6 +37,11 @@ const lastSavedText = computed(() => {
  *  desc 可选：组内各项已有自述时不再重复加组级说明（「内容资产」组即如此，2026-09-13 文案收敛） */
 const GROUPS: { title: string; desc?: string; keys: string[]; extra?: 'schedule' | 'precipitate' }[] = [
   {
+    title: '访问链',
+    desc: '抓取 / 中继 / 下载共用的有序端点：某项连不上自动切下一项，最后一项为公网主域兜底（不能是内网地址）。保存后看板立即生效；抓取批次自下一批生效',
+    keys: ['fetch_chain'],
+  },
+  {
     title: '定时抓取',
     // 组级说明只讲一件用户必须知道的事：调度的唯一来源（避免与 OS 定时重复触发）
     desc: '由本服务按时刻自动启动抓取，保存后立即生效（Windows 计划任务与容器 cron 均已停用，同一时刻只应有一处调度）',
@@ -107,7 +112,7 @@ const GROUPS: { title: string; desc?: string; keys: string[]; extra?: 'schedule'
  *  array（勾选 + 上下移 + 「默认：…」长句）的固有宽度约 1000px，分栏时会把标签压成
  *  130px 窄条、描述文字挤成竖条（实测「演示轮播板块序列」），故与 Element Plus / Ant Design
  *  表单「复杂控件独占一行」同一做法。 */
-const WIDE_TYPES: SettingItem['type'][] = ['array', 'times']
+const WIDE_TYPES: SettingItem['type'][] = ['array', 'times', 'chain']
 
 const SCOPE_TEXT: Record<SettingItem['scope'], string> = {
   immediate: '立即生效',
@@ -262,6 +267,68 @@ function removeTime(it: SettingItem, index: number) {
     return
   }
   void saveOne(it, next)
+}
+
+// ===== 访问链（chain 类型）：有序端点列表编辑 =====
+/** 本地编辑缓冲：允许「新增占位行先补全、失焦再保存」——后端要求链成员合法且非空，
+ *  占位行直接提交会被 400 拒绝，故未保存的新行只存在缓冲里，成功后回到受控渲染 */
+const chainBuf = ref<string[] | null>(null)
+function chainRows(it: SettingItem): string[] {
+  return chainBuf.value ?? (Array.isArray(it.value) ? (it.value as string[]) : [])
+}
+function bufferChain(it: SettingItem, index: number, value: string) {
+  const rows = chainRows(it).slice()
+  rows[index] = value
+  chainBuf.value = rows
+}
+/** 提交链编辑：过滤空白行（新增占位行补全前不参与），全空则不提交（后端要求链非空） */
+async function saveChain(it: SettingItem, rows: string[]) {
+  const valid = rows.map((r) => r.trim()).filter(Boolean)
+  if (!valid.length) return
+  savingMap.value = { ...savingMap.value, [it.key]: true }
+  try {
+    const r = await api.saveSettings({ [it.key]: valid })
+    const updated = r.settings.find((s) => s.key === it.key)
+    if (updated) {
+      const idx = items.value.findIndex((x) => x.key === it.key)
+      if (idx >= 0) items.value[idx] = updated
+    }
+    chainBuf.value = null // 成功：丢弃缓冲回到受控渲染
+    lastSavedAt.value = Date.now()
+  } catch (e) {
+    if (isAborted(e)) return
+    // 校验失败（成员非法 / 末项为内网等）：保留缓冲与输入内容供继续修改，仅提示
+    ElMessage.error(`保存「${it.label}」失败: ${(e as Error).message}`)
+  } finally {
+    const next = { ...savingMap.value }
+    delete next[it.key]
+    savingMap.value = next
+  }
+}
+function editChainAt(it: SettingItem, index: number, value: string) {
+  const rows = chainRows(it).slice()
+  rows[index] = value
+  chainBuf.value = rows
+  void saveChain(it, rows)
+}
+function addChainRow(it: SettingItem) {
+  const rows = chainRows(it).slice()
+  rows.push('https://') // 占位前缀：补全 host 失焦后才真正提交
+  chainBuf.value = rows
+}
+function removeChainRow(it: SettingItem, index: number) {
+  const rows = chainRows(it).slice()
+  rows.splice(index, 1)
+  chainBuf.value = rows
+  void saveChain(it, rows)
+}
+function moveChainRow(it: SettingItem, index: number, dir: -1 | 1) {
+  const rows = chainRows(it).slice()
+  const j = index + dir
+  if (j < 0 || j >= rows.length) return
+  ;[rows[index], rows[j]] = [rows[j], rows[index]]
+  chainBuf.value = rows
+  void saveChain(it, rows)
 }
 
 /** 立即运行一次：复用既有手动入口（/api/runs/start，同一防重），用于验证上面的参数 */
@@ -774,6 +841,32 @@ onBeforeUnmount(() => {
                     <span class="sr-default">默认：{{ (it.default as string[]).join('、') }}</span>
                   </div>
                 </div>
+                <!-- 访问链：占位新行（https://）不合法不提交，补全 host 失焦（change）才保存；
+                     输入过程（input）只写本地缓冲，避免每个按键都触发一次 400 -->
+                <div v-else-if="it.type === 'chain'" class="sr-times">
+                  <div v-for="(u, i) in chainRows(it)" :key="`${it.key}-${i}`" class="st-row chain-row">
+                    <el-tag
+                      size="small"
+                      :type="i === chainRows(it).length - 1 ? 'success' : 'info'"
+                      class="chain-tag"
+                    >{{ i === chainRows(it).length - 1 ? '主域' : `镜像${i + 1}` }}</el-tag>
+                    <el-input
+                      :model-value="u"
+                      :size="isMobile ? 'small' : 'default'"
+                      placeholder="http(s)://host（末项须公网可直达）"
+                      class="chain-input"
+                      @update:model-value="(v: string) => bufferChain(it, i, v)"
+                      @change="(v: string) => editChainAt(it, i, v)"
+                    />
+                    <el-button link type="primary" size="small" :disabled="i === 0" @click="moveChainRow(it, i, -1)">上移</el-button>
+                    <el-button link type="primary" size="small" :disabled="i === chainRows(it).length - 1" @click="moveChainRow(it, i, 1)">下移</el-button>
+                    <el-button link type="danger" size="small" :disabled="chainRows(it).length <= 1" @click="removeChainRow(it, i)">删除</el-button>
+                  </div>
+                  <div class="st-actions">
+                    <el-button link type="primary" size="small" @click="addChainRow(it)">添加端点</el-button>
+                    <span class="sr-default text-muted">默认：{{ (it.default as string[]).join(' → ') }}</span>
+                  </div>
+                </div>
                 <template v-else-if="it.type === 'text'">
                   <el-input
                     :model-value="String(valueOf(it))"
@@ -1085,6 +1178,15 @@ onBeforeUnmount(() => {
 
 .st-picker {
   width: 120px;
+}
+
+/* 访问链行：标签固定宽、输入框吃满剩余空间（含移动端收缩） */
+.chain-tag {
+  flex: none;
+}
+
+.chain-input {
+  flex: 1 1 260px;
 }
 
 .st-actions {

@@ -278,7 +278,7 @@ def _ensure_mirror() -> "subprocess.Popen[bytes] | None":
     看板本身依旧可用，所以不能因为它拦住启动。
     """
     if not txxy_env.use_local_proxy():
-        print("[1024镜像] 未配置本地镜像（TXXY_LOCAL_PROXY 为空），跳过")
+        print("[1024镜像] 未配置镜像候选（TXXY_FETCH_CHAIN 仅公网主域），跳过")
         return None
     _ = _preload_batch_lock()  # 退出时要用它判断「有没有批次在跑」，必须提前加载
     try:

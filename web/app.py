@@ -115,10 +115,11 @@ def health():
         "ok": True,
         "db": str(config.DB_FILE),
         "db_exists": config.DB_FILE.is_file(),
-        "public_root": config.PUBLIC_ROOT,
-        # 帖子链接中继的转发目标（空 = 本环境无本地镜像，链接直接走业务域名）：
+        # 展示前缀与访问链均为活值：参数设置页改链后这里立即反映当前生效值
+        "public_root": config.display_domain(),
+        # 帖子链接中继的转发链（按序 failover；末项 = 公网主域/降级目标）：
         # 手机打不开帖子页时先看这里，再确认 web.exe 是否在运行
-        "mirror_upstream": config.MIRROR_UPSTREAM,
+        "fetch_chain": config.fetch_chain(),
         # 运行环境（local / docker / linux）：域名是环境自适应取值的，
         # 页面显示不对时先看这里确认跑在哪个环境
         "env": config.RUN_ENV,
@@ -172,7 +173,7 @@ def main():
         _h.stream = sys.stderr
 
     print(f"txxy 数据展示服务: http://{config.HOST}:{config.PORT}")
-    print(f"数据库: {config.DB_FILE}  公开域名: {config.PUBLIC_ROOT}")
+    print(f"数据库: {config.DB_FILE}  展示前缀: {config.display_domain()}")
     uvicorn.run(app, host=config.HOST, port=config.PORT)
 
 

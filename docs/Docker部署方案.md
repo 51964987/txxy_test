@@ -3,7 +3,8 @@
 > 状态：**已实施**。交付物已创建（第 4 节）、最小代码改动已完成（第 5 节）、一键部署脚本已提供（第 6 节）。
 > 变更历史：2026-08 追加三环境一键部署脚本；**2026-08-31 完成第 13 节优化**——数据默认改为命名卷隔离（共用宿主机 DB 保留为 overlay）、cron 改为 profile 默认不启用、web 非 root、补齐健康检查/日志轮转/资源限制、新增离线（air-gapped）镜像 tar 交付与 `deploy/deploy_offline.sh`。
 > 演进（2026-09）：域名配置收敛为**唯一配置源** `txxy_env.py`——只保留
-> `TXXY_PUBLIC_DOMAIN`（业务域名）与 `TXXY_LOCAL_PROXY`（本地镜像，置空即直连）两个键，
+> `TXXY_FETCH_CHAIN`（有序访问链，含公网主域末项；2026-09-24 前为
+> `TXXY_PUBLIC_DOMAIN` + `TXXY_LOCAL_PROXY` 两键，再早为单值镜像地址），
 > 且都有默认值（零配置可跑）；数据库/CSV 改存相对路径，历史完整 URL 由展示层自动
 > 归一化（无需迁移）。本文早期章节的旧写法已被取代，以 `.env.example` 与
 > 《部署使用手册》7.3 为准。
@@ -308,9 +309,9 @@ _verify_runs_ui.py
 ### 4.7 .env.example（草案）
 
 ```
-# ---- 域名（唯一配置源 txxy_env.py；只有两个键，都有默认值，零配置可跑）----
-# TXXY_PUBLIC_DOMAIN=https://txxy.com      # 业务域名（代码默认即此值，通常无需配置）
-# TXXY_LOCAL_PROXY=                        # 本地镜像：置空=直连（Docker/Linux 即默认空）
+# ---- 域名（唯一配置源 txxy_env.py；只有一个键，有默认值，零配置可跑）----
+# TXXY_FETCH_CHAIN=                        # 有序访问链（逗号分隔，末项=公网主域）：
+#                                          # Docker/Linux 默认仅公网主域即直连
 
 # ---- Web 服务 ----
 TXXY_WEB_HOST=0.0.0.0                 # 容器内必须 0.0.0.0 才能对外访问
@@ -339,8 +340,9 @@ TZ=Asia/Shanghai
 ### 5.1 抓取域名支持环境变量覆盖（已由 txxy_env 演进取代，仅存档）
 
 > 后续演进（2026-09）：域名默认值已收敛到项目根 `txxy_env.py`——只保留
-> `TXXY_PUBLIC_DOMAIN`（业务域名）与 `TXXY_LOCAL_PROXY`（本地镜像，置空即直连）两个键，
-> run_batch / scraper / web 只读不定义；本小节历史改动被取代。
+> `TXXY_FETCH_CHAIN`（有序访问链，末项=公网主域；2026-09-24 最终收敛为该单键——
+> 此前先后经历过 `TXXY_LOCAL_PROXY` 单值镜像、`TXXY_PUBLIC_DOMAIN` + `TXXY_FETCH_HOSTS`
+> 两键两种形态），run_batch / scraper / web 只读不定义；本小节历史改动被取代。
 
 `.env` 一处管理域名，各环境部署无需进容器改代码。
 
@@ -359,7 +361,7 @@ TZ=Asia/Shanghai
 ```bash
 # 1) 准备配置（各环境相同）
 cd txxy_test
-cp .env.example .env          # 按需修改 TXXY_PUBLIC_DOMAIN / TXXY_HOST_PORT
+cp .env.example .env          # 按需修改 TXXY_FETCH_CHAIN / TXXY_HOST_PORT
 
 # 2) 一键构建并启动（默认：命名卷隔离，不启用抓取）
 docker compose up -d --build
@@ -530,7 +532,7 @@ docker compose exec web ls db/ outputs/ downloads/
 | # | 事项 | 默认建议 |
 |---|---|---|
 | 1 | 抓取模式改为 `USE_LOCAL_PROXY=False` 直连业务域名 | 接受（Docker 无 web.exe，唯一可行） |
-| 2 | 唯一业务域名 `TXXY_PUBLIC_DOMAIN` | `https://txxy.com`（代码默认即此值，无需配置） |
+| 2 | 有序访问链 `TXXY_FETCH_CHAIN`（末项=公网主域） | `https://txxy.com`（容器代码默认即此值，无需配置） |
 | 3 | 域名收敛为唯一配置源 `txxy_env.py` | 完成（默认值统一在 txxy_env.py，仅两个键） |
 | 4 | 定时抓取时间 | 每日 01:00；环境 A 部署后**停用宿主机计划任务**（`schtasks /Delete /TN "txxy_daily_batch" /F`），只保留容器 cron，避免同时写库 |
 | 5 | 下载功能是否纳入容器 | 初期不内置，`downloads/` 卷预留 |
@@ -771,7 +773,7 @@ docker run --rm -v txxy_db:/data -v "$(pwd):/backup" alpine \
 
 - **A**：默认隔离后，宿主机计划任务 `txxy_daily_batch` 与容器 cron 不会争抢同一个 SQLite（各写各的库），**冲突风险自然消除**；仅当使用 `host-db` overlay 时才需要停计划任务。
 - **B（WSL）**：若项目位于 `/mnt/d/...`（DrvFs），bind mount 性能很差；默认改命名卷后此问题规避。建议 WSL 环境优先用默认隔离方案。
-- 两者均应在 `.env` 校验业务域名 `TXXY_PUBLIC_DOMAIN` 为实际可访问域名（不能是本地镜像地址）。
+- 两者均应在 `.env` 校验访问链 `TXXY_FETCH_CHAIN` 为实际可访问端点（末项须公网可直达，代码已强制）。
 
 #### 13.3.2 环境 C：私有离线 Linux（本次新增重点）
 
@@ -827,7 +829,7 @@ curl http://127.0.0.1:18088/api/health
 **离线环境的关键提醒**
 
 - **抓取功能在离线环境不可用**：`run_batch.py` / `scraper.py` 需要访问源站。离线环境定位为**纯数据展示**，cron 服务默认不启用（`profiles: ["cron"]`）。若误启用，任务会连续失败并留下现场日志。
-- **业务域名 `TXXY_PUBLIC_DOMAIN`**：离线环境无实际意义，帖子外链仍会指向无效地址（展示层已按业务域名归一化前缀，见《部署使用手册》7.3）。
+- **业务域名（访问链末项）**：离线环境无实际意义，帖子外链仍会指向无效地址（展示层已按链尾归一化前缀，见《部署使用手册》7.3）。
 - **Docker 本身可能未安装**：若离线机没有 Docker，需要提前准备对应发行版的离线安装包（`.deb` / `.rpm` 及其依赖），这超出 compose 能解决的范围，需在部署前确认。
 - **镜像 tar 体积**：`python:3.11-slim` + 依赖 + 前端产物，预计 250~400 MB，U 盘/内网传输可接受。
 
@@ -844,7 +846,7 @@ curl http://127.0.0.1:18088/api/health
 | 7 | **cron profile 化** | `profiles: ["cron"]` | 中 | 离线/纯展示场景不启 cron |
 | 8 | **init_db 并发** | 建议仅 web 初始化；cron 依赖 web 健康后再启动（`depends_on: service_healthy`） | 低 | 现为两容器各跑一次，幂等但存在竞争 |
 | 9 | **版本化 tag** | `vX.Y.Z-hash10` + `latest` | 高（离线必需） | 沿用 12.1 规范 |
-| 10 | **`.env` 校验** | 部署脚本校验 `TXXY_PUBLIC_DOMAIN` 非空且非本地地址（离线模式例外） | 中 | 避免拿着默认模板直接部署导致抓取全失败 |
+| 10 | **`.env` 校验** | 访问链末项（公网主域）由 `txxy_env.parse_fetch_chain` 强制非内网地址（离线模式例外） | 中 | 避免拿着默认模板直接部署导致抓取全失败 |
 | 11 | **`.dockerignore` 补充** | 增加 `*.md`、`docs/`、`_*.png`、`_*.txt`、`docker/bundle/` 等 | 低 | 减小构建上下文 |
 | 12 | **离线产物不入库** | `.gitignore` 增加 `docker/bundle/` | 中 | 避免几百 MB tar 进版本库 |
 

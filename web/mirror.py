@@ -9,11 +9,13 @@
 
 行为约定（三条）：
 
-1. 上游恒为 txxy_env.LOCAL_PROXY（唯一配置源），**不接受调用方传入地址**——否则本路由
-   就成了任意转发器（SSRF 入口）。
-2. 镜像连不上 / 返回 5xx（也就是「1024 访问不了」）→ 302 到业务域名同一路径；本环境未
-   配置本地镜像（Docker / 离线 Linux）时同样直接 302。这就是需求里的「降级用
-   PUBLIC_DOMAIN 打开」。4xx 不透传降级：那是镜像给出的真实答案（如页面确实不存在）。
+1. 上游恒取自唯一配置源的访问链（txxy_env.fetch_chain() → config.fetch_chain()），
+   **不接受调用方传入地址**——否则本路由就成了任意转发器（SSRF 入口）。
+2. 按链顺序 failover（仅传输层错误）：某端点连接拒绝 / 超时 → 尝试下一项（含链尾公网
+   主域——服务端可达时直接经看板回源，手机无需能直连公网）；整条链都连不上 → 302 到
+   链尾业务域名同一路径。这就是需求里的「降级用 PUBLIC_DOMAIN 打开」。4xx 不透传降级：
+   那是端点给出的真实答案（如页面确实不存在）；5xx 视为端点坏了，同样 302 降级——
+   5xx 属业务响应，按链口径不切到其它端点（避免内容不一致），直接落到链尾（与既有行为一致）。
 3. 只对 HTML 做两处必要重写，其余一律原样透传（含 Range，视频拖进度条靠它）：
    - 根相对属性 `href/src/action="/x"` → `/mirror/x`。镜像帖子页实测有 5 处这类导航
      （/profile.php、/message.php、/search.php、/notice.php），不重写会被看板 SPA 的
@@ -63,8 +65,8 @@ _CHARSET_RE = re.compile(r"charset=([\w-]+)", re.I)
 
 
 def _fallback_url(path: str, query: str) -> str:
-    """降级目标：业务域名 + 同一路径（查询串原样带上，避免二次编码）"""
-    url = f"{config.PUBLIC_DOMAIN}/{path.lstrip('/')}"
+    """降级目标：业务域名（链尾活值）+ 同一路径（查询串原样带上，避免二次编码）"""
+    url = f"{config.public_domain()}/{path.lstrip('/')}"
     return f"{url}?{query}" if query else url
 
 
@@ -140,29 +142,43 @@ def _iter_raw(up: requests.Response, chunk: int = 64 * 1024) -> Iterator[bytes]:
     include_in_schema=False,
 )
 def mirror(path: str, request: Request) -> Response:
-    """转发到本地镜像；镜像访问不了时降级到业务域名同一路径。"""
+    """按镜像候选链顺序转发；全部连不上时降级到业务域名同一路径。
+
+    failover 口径（与 txxy_env 访问链一致）：仅传输层错误（连接拒绝 / 超时）才切下一个
+    候选；4xx / 5xx 是上游的业务响应，不切候选（5xx 直接 302 降级到链尾公网）。
+    """
     query = request.url.query
-    upstream = config.MIRROR_UPSTREAM.rstrip("/")
-    if not upstream:  # 本环境没有本地镜像（Docker / 离线 Linux）：直接交给业务域名
+    candidates = config.fetch_chain()
+    if not candidates:  # 链为空（理论不可达：parse_fetch_chain 保证非空）：交给业务域名
         return RedirectResponse(_fallback_url(path, query), status_code=302)
 
-    target = f"{upstream}/{path}"
-    if query:
-        target = f"{target}?{query}"
     # 上游对 HEAD 不支持（实测 web.exe 对 HEAD 返回 404）：统一用 GET 取头，
     # 下面按 HEAD 语义「只回头、不读体」，既避免 404 又不多耗带宽
     upstream_method = "GET" if request.method == "HEAD" else request.method
-    try:
-        up = requests.request(
-            upstream_method,
-            target,
-            headers=_upstream_headers(request, upstream),
-            stream=True,
-            timeout=(3, 30),      # 连接 3s：本机回环服务，连不上就是没在跑
-            allow_redirects=False,  # 自行处理 Location 重写
-        )
-    except requests.RequestException:
-        # web.exe 未运行 / 已退出：这就是「1024 访问不了」，降级公开域名
+    up: requests.Response | None = None
+    upstream_used = ""
+    last_err = ""
+    for upstream in candidates:
+        target = f"{upstream}/{path}"
+        if query:
+            target = f"{target}?{query}"
+        try:
+            up = requests.request(
+                upstream_method,
+                target,
+                headers=_upstream_headers(request, upstream),
+                stream=True,
+                timeout=(3, 30),      # 连接 3s：连不上的镜像快速跳过，避免拖垮整条链
+                allow_redirects=False,  # 自行处理 Location 重写
+            )
+            upstream_used = upstream
+            break
+        except requests.RequestException as e:
+            # 该镜像连不上（web.exe 未运行 / 外部镜像不可达）：按链 failover 到下一个候选
+            last_err = f"{upstream}: {e}"
+    if up is None:
+        # 链上所有候选都传输层不可达：降级公开域名
+        print(f"[mirror] 镜像链全部不可达，降级业务域名；最后错误: {last_err}")
         return RedirectResponse(_fallback_url(path, query), status_code=302)
 
     status = up.status_code
@@ -171,7 +187,7 @@ def mirror(path: str, request: Request) -> Response:
 
     if 300 <= status < 400 and location:
         up.close()
-        return RedirectResponse(_rewrite_location(location, upstream), status_code=status)
+        return RedirectResponse(_rewrite_location(location, upstream_used), status_code=status)
     if status >= 500:
         # 镜像坏了（而非「这个路径不存在」）：同样降级，比把 500 透给用户更有用
         up.close()

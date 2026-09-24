@@ -1,8 +1,10 @@
 """页内参数设置：白名单定义、范围钳制、原子落盘与来源标注。
 
 定位：
-- 只覆盖「允许页内调整」的运行时参数（并发 / 节流 / 保留期 / 缓存 TTL / 自动刷新），
-  端口、路径、域名等部署配置一律不进白名单，仍走环境变量（业界同：属部署配置）；
+- 只覆盖「允许页内调整」的运行时参数（访问链 / 并发 / 节流 / 保留期 / 缓存 TTL / 自动刷新），
+  端口、路径等部署配置一律不进白名单，仍走环境变量（业界同：属部署配置）；
+  访问链（fetch_chain）虽属域名类，但它是运行时可换的端点顺序而非站点身份，
+  且需要随网络环境随时调整，故进白名单（2026-09-24 确立，末项公网主域仍由 parse 校验兜底）；
 - 默认值**不在这里重复定义**——各参数默认值仍在其归属模块（config.py / download_files.py /
   resources.py），本模块只存「用户覆盖值」，缺失即回落；
 - 落盘复用 atomicfile（临时文件 + 原子替换），损坏时回落默认值。
@@ -31,6 +33,12 @@ import config  # noqa: E402
 import download_files  # noqa: E402  项目根模块：默认下载间隔/重试次数在此，避免默认值两份
 
 WHITELIST: dict[str, dict[str, Any]] = {
+    "fetch_chain": {
+        "label": "访问链（抓取 / 中继 / 下载的端点顺序）",
+        "type": "chain",
+        "scope": "immediate",
+        "desc": "按序访问的同构端点：某项连不上自动切下一项；最后一项为公网主域（中继降级目标），不能是内网地址。保存后看板立即生效，抓取批次自下一批生效",
+    },
     "download_concurrency": {
         "label": "单任务内并行下载数",
         "min": 1,
@@ -262,6 +270,10 @@ def _load() -> dict[str, Any]:
 
 def _env_or_default(key: str) -> Any:
     """白名单外的键一律回落：环境/默认取值（各参数归属模块的既有常量）"""
+    if key == "fetch_chain":
+        # 默认 = 环境变量/代码默认链（**不含页内覆盖**）：若取活值，reset 后会把
+        # 刚保存的覆盖值当成默认值（循环引用）。生效值走 get()，页内覆盖时是活链
+        return config.default_fetch_chain()
     if key == "download_concurrency":
         return config.DOWNLOAD_CONCURRENCY
     if key == "download_task_concurrency":
@@ -371,6 +383,10 @@ def _clamp(key: str, value: Any) -> Any:
         # 时刻列表：规格化与校验统一交给 config.normalize_times（唯一实现，
         # 环境变量/设置文件/页面三处同一份规则），非法项丢弃、去重、升序、限量
         return config.normalize_times(value)
+    if t == "chain":
+        # 访问链：解析与校验唯一实现 txxy_env.parse_fetch_chain（.env / 页内 / CLI 同一份规则）。
+        # 非法抛 ValueError，由 API 层转 400 返回给前端；落盘的是校验后的规范化列表
+        return config.normalize_fetch_chain(value)
     if t == "enum":
         # 单选枚举：非法值一律回落默认值（不抛错），避免前端旧缓存 / 手改文件写入脏值
         allowed = {o["value"] for o in spec.get("options", [])}
@@ -445,6 +461,7 @@ def reset(keys: list[str] | None = None) -> list[dict[str, Any]]:
 
 def apply_runtime() -> None:
     """把「立即生效」类参数推进相关模块的运行态：
+    - 访问链：写回 txxy_env 的运行态链（reset 时回落环境变量/代码默认链）；
     - 下载节流/重试：写回 download_files 的运行态变量（默认值仍定义在该模块，此处只覆盖）；
     - 任务间并发：调整下载 worker 数量。
     其余参数由各调用点每次读取，无需推送。
@@ -460,3 +477,7 @@ def apply_runtime() -> None:
     download_tasks.manager.resize_workers(
         get_int("download_task_concurrency", config.DOWNLOAD_TASK_CONCURRENCY)
     )
+    # 访问链：页内覆盖 > 环境变量/默认。set_fetch_chain 校验通过才生效并复位 failover 状态；
+    # 校验失败（如手改设置文件写入非法链）抛 ValueError，由启动钩子的 try/except 记警告不阻断，
+    # 链保持环境变量/默认值（启动期已生效），页内修正后再保存即可
+    config.set_fetch_chain(get("fetch_chain", config.default_fetch_chain()))

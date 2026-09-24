@@ -55,7 +55,7 @@ echo "==> [2/5] 准备 .env"
 if [ ! -f .env ]; then
     cp .env.example .env
     echo "[提示] 已从 .env.example 生成 .env"
-    echo "[提示] 如需改业务域名，检查 TXXY_PUBLIC_DOMAIN（默认 https://txxy.com，一般无需改）"
+    echo "[提示] 如需改域名/镜像，检查 TXXY_FETCH_CHAIN（有序访问链，末项=公网主域；一般无需改）"
 else
     echo "[跳过] .env 已存在"
 fi

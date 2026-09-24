@@ -10,6 +10,7 @@
   run_batch_<YYYYMMDD>.log 存在 → 以执行汇总块为准；
   否则回退为同目录下 scraper_<fid>_<YYYYMMDD>.log，按 __SUMMARY__ 机器行统计。
 """
+import os
 import re
 import sqlite3
 import subprocess
@@ -744,6 +745,11 @@ def start_run(use_local_proxy: bool, restart: bool) -> dict[str, Any]:
                 f"{' '.join(cmd[2:])} =====\n".encode("utf-8")
             )
             try:
+                # 把 Web 进程当前生效的访问链注入子进程环境变量：页内改链只更新本进程
+                # 的 txxy_env 状态，子进程不共享——不注入的话子进程按 .env 取到旧链，
+                # 页内改动对抓取不生效（与 cmd 参数同属「显式传值」而非隐式继承）
+                env = dict(os.environ)
+                env["TXXY_FETCH_CHAIN"] = ",".join(config.fetch_chain())
                 proc = subprocess.Popen(
                     cmd,
                     cwd=str(config.BASE_DIR),
@@ -751,6 +757,7 @@ def start_run(use_local_proxy: bool, restart: bool) -> dict[str, Any]:
                     stdout=log_fh,
                     stderr=log_fh,
                     creationflags=flags,
+                    env=env,
                 )
             except OSError as e:
                 raise ValueError(f"启动抓取进程失败: {e}") from e

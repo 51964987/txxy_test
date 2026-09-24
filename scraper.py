@@ -102,13 +102,14 @@ def fetch_page(page_num: int) -> str | None:
         "search": "",
         "page": page_num,
     }
-    # 业务 URL 恒为公开域名；仅在此处按本地代理开关转换实际请求地址（传输层）。
-    # 打印实际请求地址，代理环境可见 http://127.0.0.1:1024，直连环境见公开域名
+    # 业务 URL 恒为公开域名；仅在此处按访问链（镜像候选 + 业务域名链尾）转换实际请求地址（传输层）。
+    # 打印实际请求地址：镜像环境可见 127.0.0.1:1024 等镜像 host，直连环境见公开域名
+    host_used = txxy_env.current_fetch_host()
     fetch_url = txxy_env.to_fetch_url(BASE_URL)
     print(f"[FID={FID}] 正在请求 版块第 {page_num} 页: {fetch_url}?fid={FID}&search=&page={page_num}")
     for attempt in range(1, REQUEST_MAX_RETRIES + 1):
         try:
-            resp = requests.get(fetch_url, params=params, headers=HEADERS, timeout=15)
+            resp = requests.get(fetch_url, params=params, headers=HEADERS, timeout=(3, 15))
             resp.encoding = "utf-8"
             if resp.status_code == 200:
                 if BLOCKED_TEXT in resp.text:
@@ -116,13 +117,22 @@ def fetch_page(page_num: int) -> str | None:
                     sys.exit(1)
                 return resp.text
             if resp.status_code in (408, 429) or resp.status_code >= 500:
-                # 服务端瞬时故障，值得重试
+                # 服务端瞬时故障，值得重试（业务响应，不切换镜像——镜像间内容可能不同步）
                 _retried_this_page = True
                 print(f"[FID={FID}] [警告] 第 {page_num} 页返回状态码 {resp.status_code}（第 {attempt}/{REQUEST_MAX_RETRIES} 次），稍后重试")
             else:
                 # 4xx 等确定性失败，重试无意义
                 print(f"[FID={FID}] [警告] 第 {page_num} 页返回状态码: {resp.status_code}，跳过")
                 return None
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+            # 传输层错误（连不上 / 超时）：链式 failover——下移到下一个镜像（或链尾公网域名）后重试。
+            # 连接超时收窄到 3s（读超时仍 15s）：死镜像不必等满 15s 才切换。
+            _retried_this_page = True
+            new_host = txxy_env.report_fetch_failure(host_used)
+            fetch_url = txxy_env.to_fetch_url(BASE_URL)
+            print(f"[FID={FID}] [错误] 第 {page_num} 页连接失败（第 {attempt}/{REQUEST_MAX_RETRIES} 次）: {e}")
+            print(f"[FID={FID}] [链切换] 访问 host: {host_used} -> {new_host}，后续重试使用新 host")
+            host_used = new_host
         except Exception as e:
             _retried_this_page = True
             print(f"[FID={FID}] [错误] 第 {page_num} 页请求失败（第 {attempt}/{REQUEST_MAX_RETRIES} 次）: {e}")
@@ -693,18 +703,27 @@ def _apply_cli_args() -> None:
     if len(page_args) > 2:
         print(f"[警告] 忽略多余的页码参数: {page_args[2:]}", file=sys.stderr)
     if root_url is not None:
-        # 覆盖业务域名（如 https://xx.com）：抓取与入库同源
-        txxy_env.PUBLIC_DOMAIN = root_url.rstrip("/")
-        print(f"[配置] 已指定业务域名: {txxy_env.PUBLIC_DOMAIN}")
+        # 覆盖业务域名（如 https://xx.com）：访问链收敛为仅该端点——镜像与本站同构，
+        # 换站点后原镜像不再成立，故不保留。经 set_fetch_chain 统一校验（含末项公网约束）。
+        try:
+            txxy_env.set_fetch_chain([root_url])
+        except ValueError as e:
+            print(f"[错误] 根地址不合法: {e}", file=sys.stderr)
+            sys.exit(1)
+        print(f"[配置] 已指定业务域名: {txxy_env.public_domain()}（访问链收敛为单端点）")
     if public_url is not None:
         if not public_url.lower().startswith(("http://", "https://")):
             print(f"[错误] --public 参数必须是 http(s) 开头的完整域名: {public_url!r}", file=sys.stderr)
             sys.exit(1)
-        # 域名已统一：--public 与 http(s) 根地址等价，均写入唯一业务域名
+        # 域名已统一：--public 与 http(s) 根地址等价，均收敛访问链
         # （保留该参数仅为兼容 run_batch / 旧调用习惯）
-        txxy_env.PUBLIC_DOMAIN = public_url.rstrip("/")
-        print(f"[配置] 已指定业务域名: {txxy_env.PUBLIC_DOMAIN}")
-    ROOT_URL = txxy_env.PUBLIC_DOMAIN  # pyright: ignore[reportConstantRedefinition]
+        try:
+            txxy_env.set_fetch_chain([public_url])
+        except ValueError as e:
+            print(f"[错误] --public 参数不合法: {e}", file=sys.stderr)
+            sys.exit(1)
+        print(f"[配置] 已指定业务域名: {txxy_env.public_domain()}（访问链收敛为单端点）")
+    ROOT_URL = txxy_env.public_domain()  # pyright: ignore[reportConstantRedefinition]
     PUBLIC_URL = ROOT_URL  # pyright: ignore[reportConstantRedefinition]
     BASE_URL = ROOT_URL + "/thread0806.php"  # pyright: ignore[reportConstantRedefinition]
     OUTPUT_DIR = f"outputs/{_OUTPUT_DATE}"  # pyright: ignore[reportConstantRedefinition]
