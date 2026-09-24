@@ -806,6 +806,9 @@ export interface DownloadTaskSummary {
   /** 全任务累计失败（含已完成链接），按类型：仅含 fail>0 的类型。
    *  用于进度列「失败：图片 8 · 种子 1」。 */
   failed_total?: Record<string, number>
+  /** 全任务累计成功文件数（含已完成链接与在途已落盘文件），按类型：仅含 >0 的类型。
+   *  与 failed_total 同源（live.done 累加，含已存在跳过、不含失败），悬浮说明用。 */
+  success_total?: Record<string, number>
 }
 
 /** 任务详情（GET /downloads/{tid}：概要字段 + 逐 URL 明细与日志） */

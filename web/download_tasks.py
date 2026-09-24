@@ -417,10 +417,13 @@ class DownloadTaskManager:
         }
         saved_dirs: list[str] = []
         # 实时进度聚合：current_link = 在途链接（_inflight）各类型 total/done/fail 求和；
-        # failed_total = 全任务累计失败（含已完成链接，用户要的「失败：图片 8 · 种子 1」）
+        # failed_total = 全任务累计失败（含已完成链接，用户要的「失败：图片 8 · 种子 1」）；
+        # success_total = 全任务累计成功文件数（含已完成链接与在途已落盘文件，与 failed_total
+        # 同源同循环聚合，悬浮说明用；done 含已存在跳过，与 fail 互斥不计失败文件）
         inflight: set[int] = set(t.get("_inflight", []) or [])
         cur: dict[str, dict[str, int]] = {tp: {"total": 0, "done": 0, "fail": 0} for tp in PROGRESS_TYPES}
         failed_total: dict[str, int] = {}
+        success_total: dict[str, int] = {}
         # 已结束链接的耗时累计（用于推算速度/ETA）：仅统计真正执行过的链接
         finished_elapsed: float = 0.0
         finished_cnt: int = 0
@@ -439,6 +442,9 @@ class DownloadTaskManager:
             live = it.get("live") or {}
             for tp in PROGRESS_TYPES:
                 cell = live.get(tp) or {}
+                d = cell.get("done", 0)
+                if d:
+                    success_total[tp] = success_total.get(tp, 0) + d
                 f = cell.get("fail", 0)
                 if f:
                     failed_total[tp] = failed_total.get(tp, 0) + f
@@ -471,6 +477,7 @@ class DownloadTaskManager:
         # 实时进度（路线 B）：仅保留有数据的类型——「获取到该类型才显示」由前端按此过滤
         base["current_link"] = {tp: cur[tp] for tp in PROGRESS_TYPES if cur[tp]["total"] > 0}
         base["failed_total"] = {tp: n for tp, n in failed_total.items() if n > 0}
+        base["success_total"] = {tp: n for tp, n in success_total.items() if n > 0}
         return base
 
     def get(self, tid: str) -> dict[str, Any] | None:

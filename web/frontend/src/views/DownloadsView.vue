@@ -40,6 +40,8 @@ type TaskProgressLike = {
   done?: number
   items_summary?: Record<string, number>
   current_link?: Record<string, { total: number; done: number; fail: number }>
+  success_total?: Record<string, number>
+  failed_total?: Record<string, number>
 }
 
 /** 在途链接的内部完成度（0~1）：跨类型合并 Σdone/Σtotal。
@@ -86,15 +88,35 @@ function progressTitle(t: TaskProgressLike): string {
   const head = `已处理链接 ${taskFinishedLinks(t)}/${t.total || 0}`
   const base = fail ? `${head}（其中失败 ${fail} 个）` : head
   const parts = Object.entries(t.current_link || {}).map(([tp, c]) => `${tp}「${c.done}/${c.total}」`)
-  return parts.length ? `${base}；当前链接：${parts.join(' · ')}` : base
+  const withCur = parts.length ? `${base}；当前链接：${parts.join(' · ')}` : base
+  // 文件维度累计（全任务）只进悬浮、不做常驻行：避免与「当前链接 done/total」「失败累计」
+  // 三个不同口径的数字并排混居（业界下载器通行做法：列表行给已完成 X/Y + 失败，细分进悬浮）
+  const okFiles = successTotalText(t.success_total)
+  return okFiles ? `${withCur}；成功文件：${okFiles}` : withCur
+}
+
+/** 失败行悬浮：失败与成功文件数并陈（成功为空则只给失败），悬停失败行即可对上两种口径 */
+function failRowTitle(t: TaskProgressLike): string {
+  const ok = successTotalText(t.success_total)
+  return ok ? `失败：${failedTotalText(t.failed_total)}；成功文件：${ok}` : `失败：${failedTotalText(t.failed_total)}`
+}
+
+/** 按类型计数的通用文案：图片 8 · 种子 1（仅列 >0 的类型；成功/失败累计共用这一份实现） */
+function typeCountsText(ct?: Record<string, number>): string {
+  if (!ct) return ''
+  return PROGRESS_TYPES.filter((t) => (ct[t] ?? 0) > 0)
+    .map((t) => `${t} ${ct[t]}`)
+    .join(' · ')
 }
 
 /** 全任务累计失败文案：失败 图片 8 · 种子 1（仅列 fail>0 的类型） */
 function failedTotalText(ft?: Record<string, number>): string {
-  if (!ft) return ''
-  return PROGRESS_TYPES.filter((t) => (ft[t] ?? 0) > 0)
-    .map((t) => `${t} ${ft[t]}`)
-    .join(' · ')
+  return typeCountsText(ft)
+}
+
+/** 全任务累计成功文件数文案（与 failed_total 同口径：live.done 累加，含已存在跳过） */
+function successTotalText(st?: Record<string, number>): string {
+  return typeCountsText(st)
 }
 
 /** 明细「结果」列文案：优先用 live（含 total/done/fail），回落到旧 stats */
@@ -1065,6 +1087,7 @@ function rowSig(t: DownloadTaskSummary): string {
     ls: t.log_seq,
     cl: t.current_link,
     ft: t.failed_total,
+    st: t.success_total,
   })
 }
 
@@ -1394,7 +1417,7 @@ onBeforeUnmount(() => {
             </div>
             <el-tooltip
               v-if="row.failed_total && Object.keys(row.failed_total).length"
-              :content="`失败：${failedTotalText(row.failed_total)}`"
+              :content="failRowTitle(row)"
               placement="top"
             >
               <div class="task-fail text-muted">
@@ -1490,7 +1513,7 @@ onBeforeUnmount(() => {
                两个入口的信息都不丢失——共用同一个「详情」抽屉，其中保留该字段。
                （.tc-meta 为 flex + gap，去掉首个子项不会留下多余分隔符） -->
           <div class="tc-meta text-muted">
-            <span>进度 {{ taskFinishedLinks(row) }}/{{ row.total }}</span>
+            <span :title="progressTitle(row)">进度 {{ taskFinishedLinks(row) }}/{{ row.total }}</span>
             <span v-if="row.speed != null">{{ row.speed }} 个/分</span>
             <span v-if="row.eta_sec">剩余 {{ formatDuration(row.eta_sec) }}</span>
           </div>
@@ -1500,7 +1523,11 @@ onBeforeUnmount(() => {
           <div v-else-if="row.status === 'running' || row.status === 'pending'" class="tc-meta text-muted">
             当前链接：解析中…
           </div>
-          <div v-if="row.failed_total && Object.keys(row.failed_total).length" class="tc-meta text-muted">
+          <div
+            v-if="row.failed_total && Object.keys(row.failed_total).length"
+            class="tc-meta text-muted"
+            :title="failRowTitle(row)"
+          >
             失败：{{ failedTotalText(row.failed_total) }}
           </div>
           <el-progress
