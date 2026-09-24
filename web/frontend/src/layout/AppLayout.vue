@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, type ComponentPublicInstance } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { api } from '../api'
 import { useAppStore } from '../stores/app'
 import { useDashboardStore } from '../stores/dashboard'
 import SideMenu from './SideMenu.vue'
 
 const route = useRoute()
+const router = useRouter()
 const app = useAppStore()
 const store = useDashboardStore()
 
@@ -50,10 +51,38 @@ function onAutoChange() {
   store.setAutoRefresh(store.autoRefresh)
 }
 
+/**
+ * 路由切换进度条：页面组件是懒加载的，从点击到新视图挂载之间会有一段「旧视图仍在」
+ * 的窗口（本地实测首次 0.2~0.7s，弱机器 / 开发模式数秒），没有反馈会被误认为点了没反应。
+ * 延迟 120ms 再显示，避免秒开的导航闪一下进度条。
+ */
+const routeLoading = ref(false)
+let routePendingTimer: ReturnType<typeof setTimeout> | null = null
+/** beforeEach / afterEach 返回的注销函数（本组件是常驻根布局，卸载即应用结束） */
+const removeRouteHooks: Array<() => void> = []
+
+function startRouteProgress(): void {
+  if (routePendingTimer !== null) return
+  routePendingTimer = setTimeout(() => {
+    routePendingTimer = null
+    routeLoading.value = true
+  }, 120)
+}
+
+function stopRouteProgress(): void {
+  if (routePendingTimer !== null) {
+    clearTimeout(routePendingTimer)
+    routePendingTimer = null
+  }
+  routeLoading.value = false
+}
+
 // 读取后端配置：自动刷新总开关（未启用时隐藏开关、不启动轮询）
 onMounted(async () => {
   app.initViewport()
   document.addEventListener('fullscreenchange', onFullscreenChange)
+  removeRouteHooks.push(router.beforeEach(() => startRouteProgress()))
+  removeRouteHooks.push(router.afterEach(() => stopRouteProgress()))
   try {
     const cfg = await api.config()
     store.setEnableAutoRefresh(!!cfg.enable_auto_refresh)
@@ -67,6 +96,8 @@ onMounted(async () => {
 // 组件卸载时停止时钟，避免定时器泄漏
 onUnmounted(() => {
   document.removeEventListener('fullscreenchange', onFullscreenChange)
+  removeRouteHooks.forEach((off) => off())
+  stopRouteProgress()
   app.disposeViewport()
   store.stopClock()
 })
@@ -149,7 +180,12 @@ onUnmounted(() => {
         </div>
       </el-header>
       <el-main class="main">
-        <router-view />
+        <!-- 路由切换进度条：覆盖「点击 → 新视图挂载」之间的空窗 -->
+        <div v-if="routeLoading" class="route-progress" aria-hidden="true" />
+        <router-view v-slot="{ Component, route: currentRoute }">
+          <!-- key 带上重载令牌：菜单点击当前页时靠它重建视图（刷新），而非走重复导航 -->
+          <component :is="Component" :key="`${currentRoute.path}#${app.viewReloadToken}`" />
+        </router-view>
       </el-main>
     </el-container>
   </el-container>
@@ -265,6 +301,29 @@ onUnmounted(() => {
   position: fixed;
   inset: 0;
   z-index: 1000;
+}
+
+/* 路由切换进度条：顶部 2px，z-index 高于卡片全屏(3000)与演示轮播条(4000) */
+.route-progress {
+  position: fixed;
+  top: 0;
+  left: 0;
+  height: 2px;
+  z-index: 5000;
+  background: var(--el-color-primary);
+  animation: route-progress-grow 1.2s ease-out forwards;
+}
+
+@keyframes route-progress-grow {
+  0% {
+    width: 0;
+  }
+  60% {
+    width: 70%;
+  }
+  100% {
+    width: 100%;
+  }
 }
 
 /* 移动端抽屉：去掉默认内边距，由 SideMenu 自身控制 */

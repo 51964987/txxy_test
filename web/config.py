@@ -86,7 +86,9 @@ RUN_ENV = _TXXY_ENV.RUN_ENV
 # 背景（2026-09-17 实测）：web.exe 只绑回环（netstat 为 `TCP 127.0.0.1:1024 LISTENING`，
 # 安装目录里也没有可改监听地址的配置），所以手机等设备**无法直连 1024**；而看板进程本身
 # 是局域网可达的，于是改由看板转发（详见 web/mirror.py 顶部说明）。
-MIRROR_PREFIX = "/mirror"                 # 中继路径前缀（前端 utils/postUrl.ts 使用同一契约）
+# 常量唯一定义在 txxy_env（它与 URL 归一化同源：用户粘回来的中继链接要在 to_storage_path
+# 里剥掉前缀），此处只转发，不得复制字面量（本项目通用约束第 1 条）
+MIRROR_PREFIX = _TXXY_ENV.MIRROR_PREFIX
 MIRROR_UPSTREAM = _TXXY_ENV.LOCAL_PROXY   # 转发目标；空 = 本环境无镜像（Docker / 离线 Linux）
 # 镜像访问不了时的降级目标：同一路径交给业务域名。业务域名仍只定义在唯一配置源 txxy_env。
 PUBLIC_DOMAIN = _TXXY_ENV.PUBLIC_DOMAIN

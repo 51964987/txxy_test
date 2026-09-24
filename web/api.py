@@ -2653,6 +2653,11 @@ def downloads_submit(req: DownloadSubmitReq) -> dict[str, Any]:
     urls = [u.strip() for u in req.urls if u and u.strip()]
     if not urls:
         raise HTTPException(400, "未提供任何下载链接")
+    # 归一为「服务端能直接请求」的展示地址（本机=回环镜像）后再入队：
+    # 粘贴来源可能是复制出去的中继链接（http://<看板>/mirror/htm_data/...）、业务域名链接、
+    # 或 CSV 导出的相对路径；原样入库会让 /mirror 前缀混进任务 URL，导致标题反查落空、
+    # 已下载 / 待下载判定失配（见 txxy_env._strip_mirror_prefix）。归一后去重也更准。
+    urls = [config.to_display_url(u) for u in urls]
     max_batch = settings.get_int("download_max_batch", config.DOWNLOAD_MAX_BATCH)
     if len(urls) > max_batch:
         raise HTTPException(400, f"单次最多提交 {max_batch} 个链接，当前 {len(urls)} 个")

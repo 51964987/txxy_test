@@ -583,10 +583,18 @@ class DownloadTaskManager:
             task_items = [list(t["items"]) for t in self._tasks.values()]
             history_items = list(self._history.items())
         alive, gone, active = self._classify_urls(task_items, history_items)
+        # 判重必须按「入库路径」比对，不能按原样字符串相等：
+        # 三类来源的形态本就不一致（任务项存的是提交时的完整 URL、履历键可能是相对路径），
+        # 而前端传来的又可能是复制出去的中继链接（http://<看板>/mirror/htm_data/...）或
+        # CSV 导出的相对路径（/htm_data/...）。原样比对会**漏报「已在途」**，用户重复提交
+        # 就会与在途任务并发写同一文件——而 check-dup 的存在正是为了挡住这件事。
+        p_alive = {config.to_storage_path(u) for u in alive}
+        p_gone = {config.to_storage_path(u) for u in gone}
+        p_active = {config.to_storage_path(u) for u in active}
         return {
-            "still_exists": [u for u in urls if u in alive],
-            "gone": [u for u in urls if u in gone],
-            "running": [u for u in urls if u in active],
+            "still_exists": [u for u in urls if config.to_storage_path(u) in p_alive],
+            "gone": [u for u in urls if config.to_storage_path(u) in p_gone],
+            "running": [u for u in urls if config.to_storage_path(u) in p_active],
         }
 
     def asset_snapshot(self) -> dict[str, Any]:

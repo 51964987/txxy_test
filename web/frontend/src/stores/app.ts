@@ -41,6 +41,15 @@ export const useAppStore = defineStore('app', () => {
   const drawerVisible = ref(false)
   const fullscreen = ref(false)
   const pseudoFullscreen = ref(false)
+  /**
+   * 当前视图重载令牌：+1 即让 router-view 的 key 变化，从而重新挂载当前视图。
+   * 用途：菜单点击「当前所在页」时不能用 router.push（会被判为重复导航而静默失败），
+   * 改以重建视图实现「刷新当前页」的语义。
+   */
+  const viewReloadToken = ref(0)
+  function reloadCurrentView(): void {
+    viewReloadToken.value++
+  }
 
   let media: MediaQueryList | null = null
 
@@ -132,6 +141,8 @@ export const useAppStore = defineStore('app', () => {
     drawerVisible,
     fullscreen,
     pseudoFullscreen,
+    viewReloadToken,
+    reloadCurrentView,
     initViewport,
     disposeViewport,
     toggleCollapsed,

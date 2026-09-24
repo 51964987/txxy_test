@@ -318,6 +318,14 @@ alwaysApply: true
 
 49. **调整 el-table 列宽前先算「横向滚动下限」，弹性列 `min-width` 增大会抬高它**（2026-09-23 确立，源于用户要求「下载中心进度列加宽但不出现横向滚动条」）：本项目 `el-table` 默认 `fit`，表格总宽 = 各固定 `width` 列宽之和 + 各 `min-width` 弹性列 min 之和（容器更宽时富余按 min 比例分给弹性列；更窄则弹性列缩到 min，再窄就溢出 → 横向滚动条）。因此**加宽一个弹性列会直接抬高横滚下限**，若不同步削减其它列，可能在用户「当前本不滚」的窗口里引入横滚。强制动作：① 动笔前列出所有列宽，算 `固定和 + 弹性min和` 当下值与目标值；② 加宽弹性列必须同步从其它列腾出空间（不要碰用户指定不动的列，如本项目标题列），手段是合并低密度列 / 微调宽列并配 `show-overflow-tooltip` 兜底；③ 目标下限必须 ≤ 用户当前实际可用内容宽（≈ 视口 − 侧栏(展开 212 / 折叠 64) − 页面内边距），拿不准就取保守值——宽屏下 `fit` 仍会自动把弹性列撑得更宽，不必为窄屏硬塞。本项目实例：下载中心进度列 `min-width` 170→260（而非用户最初提的 300），同时把「状态 + 类型」两列合并为 100px（释放约 68px）、创建时间 150→120（`show-overflow-tooltip` 兜底时间戳），下限由 970 控制在 962，保证不滚；宽屏下 `fit` 会把进度列实际撑到远超 260。
 
+50. **「复制出去的链接」必须能被自己的输入口原样吃回去：显示形态的前缀要收敛到唯一配置源，且唯一归一化函数必须双向认识它**（2026-09-24 确立，源于调研「帖子链接是否都按中继拼接」时发现的**回流漏洞**）：
+    - **触发场景**：前端为某种消费方式改造了链接形态（本项目：帖子链接统一改写成同源中继 `/mirror/htm_data/...`，好让手机等局域网设备也能打开），而这些链接又**会被用户粘回系统自己的输入框**（下载中心粘贴框、黑名单）。只要显示形态与入库形态不是同一个，且归一化函数只认后者，就必然出现「用户粘自己复制出来的链接 → 系统认不出来」的漏洞；它不会报错，只会让判重 / 标题反查 / 已下载判定**静默失配**。
+    - **强制动作（四件，缺一件都有漏网）**：① **前缀常量收敛到唯一配置源**（本项目 `txxy_env.MIRROR_PREFIX`），展示端与前端一律引用，**禁止复制字面量**（本项目 `web/config.py` 原有一份 `"/mirror"` 已改为引用）；② **唯一归一化函数双向识别该形态**：`to_storage_path` 剥掉前缀（保证入库与库内同形态），`_with_domain` 同样处理（保证能拼回可请求的绝对地址）；③ **判重 / 集合比对必须按归一化键，不能按原样字符串相等**（本项目 `dup_check` 原为 `u in active`，而任务项、履历键、前端输入三者的形态本就不一致 → 四种等价写法只有一种命中，漏报「已在途」会让用户重复提交、与在途任务并发写同一文件）；④ **提交入口统一归一为「服务端能直接请求」的地址再落盘**，不要让输入形态渗进持久化数据。
+    - **查询串只能补一次（本条修复中实测踩到，且改动前就存在于相对路径分支）**：有 scheme 时 `rest` 取自 `p.path`（**不含** query）→ 必须补；无 scheme 时 `rest` 就是原串、本身已带 query → 再补会变成 `?a=1?a=1`。改归一化函数后必须把「带 query 的绝对地址 / 带 query 的相对路径 / 带 query 的中继链接」各测一遍，只看不带 query 的样例会漏。
+    - **判据别只看「有没有剥前缀」，要看「等价写法是否都得到同一结果」**：把同一条链接的不同形态（中继 / 回环镜像 / 业务域名 / 相对路径）喂给同一个接口，结果必须一致——这才是「口径闭环」的充分判据。
+    - **本项目实例（2026-09-24）**：`txxy_env` 新增 `MIRROR_PREFIX` 与 `_strip_mirror_prefix`，`to_storage_path` / `_with_domain` 双向识别、并修掉相对路径 query 重复拼接；`web/config.py` 常量改为引用；`web/api.py` 的 `POST /downloads` 提交前 `to_display_url` 归一；`web/download_tasks.py` 的 `dup_check` 改按入库路径比对。实测（8089 隔离实例 + 临时任务/履历文件，规则 23）：中继链接提交后任务内存为 `http://127.0.0.1:1024/htm_data/0000/00/99999997.html`（前缀已剥）；**原形态 / 相对路径 / 业务域名 / 中继四种链接查重全部命中 `running`**；黑名单写入归一为 `/htm_data/2609/25/7437092.html`；CSV 导出 158646 行仍全为相对路径（0 行含域名或 `/mirror`）；`/mirror/htm_data/...` 中继 200；受影响 GET 接口 11 项全 200 + JSON；`vue-tsc` 0 错误。
+    - 文档索引：`docs/帖子链接中继转发知识点.md`（中继机制与其存在的理由）、`README.md`（URL 归一化 / 帖子链接条目）、`web/frontend/src/utils/postUrl.ts`（前端唯一出口）。
+
 ## 技术栈
 - 后端：Python3 + **FastAPI**；SQLite 只读（`db/posts.db`，WAL，`PRAGMA query_only=ON`）；统计接口经 `db.cached(key)` 做 **5s TTL** 内存缓存。
 - 数据写入由项目根目录独立 `scraper.py` 负责，**Web 进程严禁写库**（下载中心 `download_tasks.py` 仅做文件系统下载）。
@@ -398,3 +406,13 @@ txxy_test/                  # 抓取脚本在项目根：scraper.py / run_batch.
 | 布尔环境变量解析 | `web/config.py: _env_bool()` | `1/true/yes/on` 为真，空/未设置取默认；新增布尔配置一律用它，不再复制 `os.environ.get(...).lower() in (...)` |
 | 定时抓取调度 | `web/scheduler.py: ScrapeScheduler` | 应用内调度（60s tick 守护线程）：复用 `runs.start_run` 执行、幂等键 = (日期, 计划时刻) 落盘 `outputs/scrape_schedule_state.json`、错过不补跑、上一批在跑则跳过。禁止另起 subprocess 或第二套调度 |
 | 错误提示 | `web/app.py`（`HTTPException(detail)`）+ 前端 `ElMessage.error` | 后端统一 `detail`，前端统一解析，禁止另造 `{ok:false,msg}` 形态 |
+
+45. **「点了没反应」类交互问题先查「静默失败」，再查「被遮挡/被卡住」；任何点击必须有可见落点**（2026-09-24 确立，源于用户上报「有时候左侧菜单点了没反应」）：
+    - **触发场景**：用户报「点了没反应 / 偶发无响应」，或任何由 UI 事件触发的异步动作（路由跳转、懒加载、弹层开合）。这类问题**在类型检查、构建、启动检查里全部静默通过**，只在真实操作时暴露，且常被误判为「遮罩挡住 / 页面卡了」。
+    - **强制动作一：先按失败模式分类，再用实测逐项排除，禁止凭猜**。四类必须都过一遍：① **重复导航**——目标与当前状态完全相同时 vue-router 4 判 duplicated 并静默失败（不报错、不跳转）；② **异步资源加载失败**——懒加载 chunk 404 / 重新构建后 hash 变化，导航被 abort 且界面零反馈；③ **加载空窗无反馈**——旧视图仍在显示但用户以为没生效；④ **被遮挡 / 主线程被占**——用 `document.elementFromPoint` 命中测试 + 覆盖层 `getComputedStyle(display/visibility)` 判定遮挡，用 `PerformanceObserver({entryTypes:['longtask']})` 判定卡顿。**本项目实测结论**：①②③ 全部命中，④ 全部为假嫌疑（7 个路由的 `.el-overlay` 均 `display:none`、命中测试均落在菜单项、8s 内最长任务仅 276ms）。
+    - **强制动作二：静默失败必须有兜底，禁止只靠 console**。路由层至少要有 `router.onError`（识别 `Failed to fetch dynamically imported module` 等）+ `vite:preloadError` 两个入口，兜底动作 = 可见提示 + 自动恢复（本项目：提示「页面已更新，正在重新加载…」→ 1s 后 `location.reload()`，只触发一次）。同理，全局 `app.config.errorHandler` 缺失时视图 setup 抛错也会表现为「点了没反应/白屏」。
+    - **强制动作三：目标等于当前状态时不走 push，改显式语义**。第三方组件的「自动路由模式」（本项目 Element Plus `el-menu` 的 `router` 属性）内部就是裸 `router.push(index)`，失败路径什么都不做——**用之前先读它的实现**（`node_modules/element-plus/es/components/menu/src/menu.mjs` 的 `handleMenuItemClick`）。改为自管跳转：相同则重建视图（刷新语义，本项目 `<router-view>` 的 `:key` 带 `viewReloadToken`），不同才 push。
+    - **强制动作四：跨「点击 → 结果出现」的空窗必须有可见反馈**，且短任务不闪（延迟阈值，本项目 120ms 后显示顶部 2px 进度条，秒开导航实测不出现）。新增「重建当前视图」这类能力时，必须验证依赖生命周期的资源不泄漏（定时器 / SSE / 图表实例）：本项目实测重建 2 次后静置 12s `/api/` 请求 0 个、SSE 仅 1 条连接。
+    - **验证注意（Playwright）**：sync API 下**在 `page.route` 的 handler 里 `time.sleep` 会阻塞 Playwright 驱动线程**，期间所有 `evaluate`/`locator` 调用都排队，导致「延迟期间的现象观测不到」的**假失败**（本项目因此误判进度条未出现）；要模拟慢加载请用 CDP `Network.emulateNetworkConditions` 限速。判据也要选对：验证「视图是否重建」要打在**视图根元素**上（本项目 `.main` 是常驻容器，打在它上面永远不会被清除，曾产出一次假失败）。
+    - **本项目实例**：2026-09-24 修复「有时候左侧菜单点了没反应」——`router/index.ts` 加 `router.onError` + `vite:preloadError`；`stores/app.ts` 加 `viewReloadToken`；`layout/SideMenu.vue` 去掉 `el-menu` 的 `router`、自管跳转；`layout/AppLayout.vue` 加 `<router-view>` 的 key 与路由进度条。实测：7 个菜单跳转 44~412ms、点当前页视图重建、旧 chunk 404 时提示并自动重载、30KB/s 限速下进度条 184ms 出现、重建后无泄漏。落地说明见 `docs/侧边栏折叠与大屏全屏优化方案.md` §11。
+

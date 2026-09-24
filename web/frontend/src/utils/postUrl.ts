@@ -12,7 +12,10 @@
  * 同一路径（即「1024 访问不了时用 PUBLIC_DOMAIN 打开」），前端恒用中继前缀即可。
  */
 
-/** 同源中继前缀：与后端 `web/mirror.py` 的路由约定，改一处必须同步改另一处 */
+/** 同源中继前缀：后端唯一定义在 `txxy_env.MIRROR_PREFIX`（`web/config.py` 只转发），
+ *  路由在 `web/mirror.py`；三处是同一契约，改一处必须同步改另外两处。
+ *  后端同样认这个前缀：用户把复制出去的中继链接粘回下载框 / 黑名单时，
+ *  `txxy_env._strip_mirror_prefix` 会剥掉它再入库。 */
 export const MIRROR_PREFIX = '/mirror'
 
 /** 本站帖子路径标记：与库内视图 `substr(url, instr(url,'/htm_data/'))` 同一判定口径，

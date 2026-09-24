@@ -119,6 +119,14 @@ LOCAL_PROXY = (
     else (DEFAULT_LOCAL_PROXY if RUN_ENV == ENV_LOCAL else "")
 ).strip().rstrip("/")
 
+# ================= 展示端「同源中继」前缀（全项目唯一定义） =================
+# 本地镜像 web.exe 只绑回环，浏览器只能经看板转发访问（见 web/mirror.py），故前端把帖子
+# 链接拼成 /mirror/htm_data/...（唯一实现 web/frontend/src/utils/postUrl.ts）。
+# 前缀定在配置源而非展示端，是因为它同时也是**输入形态**：用户复制出去的中继链接被粘回
+# 下载框 / 黑名单时，必须在 to_storage_path 里剥掉它才能与库内 /htm_data/... 对齐（否则
+# 会被判成外部链接原样入库，见 _strip_mirror_prefix）。web/config.py 与前端均引用此常量。
+MIRROR_PREFIX = "/mirror"
+
 
 def use_local_proxy() -> bool:
     """是否启用本地镜像：由 LOCAL_PROXY 是否有值决定（地址与开关合二为一）"""
@@ -145,10 +153,25 @@ def _own_hosts() -> set[str]:
     return hosts
 
 
+def _strip_mirror_prefix(rest: str) -> str | None:
+    """本站同源中继路径（/mirror/htm_data/...）→ 剥掉前缀后的站点相对路径；非中继返回 None。
+
+    为什么必须识别它（2026-09-24）：前端复制出去的帖子链接是**中继形态**
+    （`postUrl.postCopyUrl` 产出 `http://<看板>/mirror/htm_data/...`），粘回下载框 / 黑名单
+    时其 host 是看板自身、**不在 `_own_hosts()` 里**，原逻辑会把它当「外部链接」原样返回
+    —— 于是 `/mirror` 前缀被写进任务与黑名单，与库内 `/htm_data/...` 对不上：标题反查落空、
+    已下载 / 待下载判定失配，下载时服务端还要自请求 8088 绕一圈。
+    判据只看路径前缀：本项目单人自用，不存在「需要保留的外部 /mirror 路径」这种情形。
+    """
+    if rest.startswith(MIRROR_PREFIX + "/"):
+        return rest[len(MIRROR_PREFIX):]
+    return None
+
+
 def to_storage_path(url: str | None) -> str:
     """完整 URL / 相对地址 → 入库相对路径（/htm_data/...，去掉域名前缀）。
 
-    - 本站链接（公开域名或本地代理开头）：截取 path + query
+    - 本站链接（公开域名 / 本地代理 / 看板中继开头）：截取 path + query
     - 已是相对路径：补前导斜杠规范化
     - 外部域名链接：原样返回（本站之外的链接不裁剪）
     """
@@ -156,12 +179,17 @@ def to_storage_path(url: str | None) -> str:
         return ""
     s = url.strip()
     p = urlparse(s)
-    if p.scheme and p.netloc and p.netloc not in _own_hosts():
-        return s  # 外部链接，不属于本站，不裁剪
     rest = p.path if p.scheme else s
+    stripped = _strip_mirror_prefix(rest)
+    if stripped is not None:
+        rest = stripped  # 中继链接：剥掉前缀即站点路径，按本站处理
+    elif p.scheme and p.netloc and p.netloc not in _own_hosts():
+        return s  # 外部链接，不属于本站，不裁剪
     if not rest.startswith("/"):
         rest = "/" + rest
-    if p.query:
+    # 查询串只补一次：有 scheme 时 rest 取自 p.path（不含 query），需要补；
+    # 无 scheme 时 rest 就是原串、本身已带 query，再补会变成 ?a=1?a=1
+    if p.query and p.scheme:
         rest = f"{rest}?{p.query}"
     return rest
 
@@ -175,6 +203,15 @@ def _with_domain(url: str | None, base: str) -> str:
         return ""
     s = url.strip()
     p = urlparse(s)
+    rest = p.path if p.scheme else s
+    stripped = _strip_mirror_prefix(rest)
+    if stripped is not None:
+        # 看板中继地址（用户粘回来的复制链接）：剥掉前缀后按本站路径拼目标域名。
+        # 查询串显式带回：有 scheme 时 rest 取自 p.path（不含 query），补上再交给
+        # to_storage_path；无 scheme 时 rest 即原串、本身已带 query，不可重复补
+        if p.scheme and p.query:
+            stripped = f"{stripped}?{p.query}"
+        return base + to_storage_path(stripped)
     if p.scheme:
         if p.netloc in _own_hosts():
             # 本站完整 URL（旧数据）：统一归一化到目标域名

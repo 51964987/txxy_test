@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, type Component } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
+import { useAppStore } from '../stores/app'
 import {
   Clock,
   Delete,
@@ -36,11 +37,26 @@ const MENU_ITEMS: MenuItem[] = [
 ]
 
 const route = useRoute()
+const router = useRouter()
+const app = useAppStore()
 const activeMenu = computed(() => route.path)
 
-/** 选中菜单项：移动端需通知外层关闭抽屉 */
-function onSelect() {
+/**
+ * 选中菜单项：自行跳转，不走 el-menu 的 router 模式。
+ * 原因：el-menu 的 router 模式内部只做 router.push(index)，当目标就是当前路径时
+ * vue-router 判为重复导航并静默失败（URL、高亮、内容全不变，控制台也不报错），
+ * 表现为「点了没反应」；此处改为「已是当前页则重建视图（刷新）」，保证点击必有反馈。
+ * 移动端需通知外层关闭抽屉，两个入口（桌面侧栏 / 移动抽屉）行为一致。
+ */
+function onSelect(index: string) {
   emit('navigate')
+  if (index === route.path) {
+    app.reloadCurrentView()
+    return
+  }
+  // 失败统一由 router/index.ts 的 router.onError 兜底（提示 + 自动重载），
+  // 此处仅避免未处理的 promise rejection
+  void router.push(index).catch(() => undefined)
 }
 </script>
 
@@ -57,7 +73,6 @@ function onSelect() {
       :default-active="activeMenu"
       :collapse="collapsed"
       :collapse-transition="false"
-      router
       class="side-menu"
       @select="onSelect"
     >
