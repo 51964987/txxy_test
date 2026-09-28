@@ -253,19 +253,53 @@ async function loadSchedule() {
   }
 }
 
-/** 时刻列表（times 类型）：直接读已保存值 */
+/** 时刻列表（times 类型）已保存值 */
 function timeList(it: SettingItem): string[] {
   return Array.isArray(it.value) ? (it.value as string[]) : []
 }
+
+/** 时刻下拉选项（5 分钟步长，共 288 项）：时刻在列表内必须互不相同，故用
+ *  「已占用项置灰」的下拉替代自由滚轮——业界预约/排期通行做法（订座、日历「添加时段」、
+ *  cron 编辑器）：从源头阻止选到重复值，而不是选完再校验回滚。el-time-picker 的
+ *  disabled-hours/minutes 只能按整小时段禁用，挡不住「08:00 已占用、08:30 可选」的
+ *  精确冲突，故不采用。步长如需更细改 TIME_STEP_MIN 即可。 */
+const TIME_STEP_MIN = 5
+const TIME_OPTIONS: string[] = Array.from({ length: (24 * 60) / TIME_STEP_MIN }, (_, i) => {
+  const m = i * TIME_STEP_MIN
+  return `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`
+})
+
+/** 该时刻是否已被本列表其它行占用（自身行除外） */
+function isTimeTaken(it: SettingItem, value: string, index: number): boolean {
+  return timeList(it).some((t, i) => i !== index && t === value)
+}
+
 function setTimeAt(it: SettingItem, index: number, value: string) {
-  const next = timeList(it).slice()
   if (!/^\d{2}:\d{2}$/.test(value)) return
+  const next = timeList(it).slice()
+  // 重复选择已被置灰挡住，此处仅作防御（存量非步长值、手改数据等边界）：
+  // 后端 normalize_times 会去重，直接提交会让另一行消失
+  if (next.some((t, i) => i !== index && t === value)) {
+    ElMessage.warning(`时刻 ${value} 已存在`)
+    return
+  }
   next[index] = value
   void saveOne(it, next)
 }
-/** 添加时刻：取第一个尚未占用的整点（同一天两个相同时刻没有意义，避免用户先存出重复项） */
+
+/** 时刻列表已达上限（上限取后端白名单 spec.max = config.MAX_SCHEDULE_TIMES，随快照下发） */
+function timesAtMax(it: SettingItem): boolean {
+  return it.max != null && timeList(it).length >= it.max
+}
+
+/** 添加时刻：取第一个尚未占用的整点（同一天两个相同时刻没有意义，避免用户先存出重复项）。
+ *  达上限时直接拦截：后端 normalize_times 会排序后截断到上限，多提交会把最晚的时刻挤掉 */
 function addTime(it: SettingItem) {
   const cur = timeList(it)
+  if (timesAtMax(it)) {
+    ElMessage.warning(`最多 ${it.max} 个时刻，已达上限`)
+    return
+  }
   const hours = Array.from({ length: 24 }, (_, h) => `${String(h).padStart(2, '0')}:00`)
   const pick = hours.find((t) => !cur.includes(t)) ?? '12:00'
   void saveOne(it, [...new Set([...cur, pick])].sort())
@@ -853,19 +887,35 @@ onBeforeUnmount(() => {
                 </template>
                 <div v-else-if="it.type === 'times'" class="sr-times">
                   <div v-for="(t, i) in timeList(it)" :key="`${it.key}-${i}`" class="st-row">
-                    <el-time-picker
+                    <!-- 已占用时刻置灰的下拉（唯一性从源头阻断）；filterable 支持输入过滤定位 -->
+                    <el-select
                       :model-value="t"
-                      format="HH:mm"
-                      value-format="HH:mm"
+                      filterable
                       :size="isMobile ? 'small' : 'default'"
                       placeholder="选择时刻"
                       class="st-picker"
-                      @update:model-value="(v: string | number | Date | null) => setTimeAt(it, i, v == null ? t : String(v))"
-                    />
+                      @change="(v: string) => setTimeAt(it, i, v)"
+                    >
+                      <el-option
+                        v-for="opt in TIME_OPTIONS"
+                        :key="opt"
+                        :label="opt"
+                        :value="opt"
+                        :disabled="isTimeTaken(it, opt, i)"
+                      />
+                    </el-select>
                     <el-button link type="danger" size="small" @click="removeTime(it, i)">删除</el-button>
                   </div>
                   <div class="st-actions">
-                    <el-button link type="primary" size="small" @click="addTime(it)">添加时刻</el-button>
+                    <el-button
+                      link
+                      type="primary"
+                      size="small"
+                      :disabled="timesAtMax(it)"
+                      @click="addTime(it)"
+                    >添加时刻</el-button>
+                    <!-- 达上限露出原因（带分母），按钮不消失、悬停可感知不可用 -->
+                    <span v-if="timesAtMax(it)" class="text-muted sr-default">已达上限 {{ it.max }} 个</span>
                     <span class="sr-default">默认：{{ (it.default as string[]).join('、') }}</span>
                   </div>
                 </div>

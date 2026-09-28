@@ -99,6 +99,10 @@ WHITELIST: dict[str, dict[str, Any]] = {
         "label": "抓取时刻",
         "type": "times",
         "scope": "immediate",
+        # 上限唯一定义 config.MAX_SCHEDULE_TIMES，随快照下发（it.max），前端据此拦截，
+        # 不在页面侧复制一份「6」；后端 normalize_times 对超限列表是排序后静默截断，
+        # 前端不拦会让「添加时刻」把最晚的时刻挤掉
+        "max": config.MAX_SCHEDULE_TIMES,
         "desc": "每天在这几个时刻各启动一次抓取（24 小时制，最多 6 个；服务本地时间）",
     },
     "scrape_schedule_restart": {
@@ -166,6 +170,8 @@ WHITELIST: dict[str, dict[str, Any]] = {
         "label": "自动下载时刻",
         "type": "times",
         "scope": "immediate",
+        # 同 scrape_schedule_times：上限唯一定义处，随快照下发供前端拦截
+        "max": config.MAX_SCHEDULE_TIMES,
         "desc": "每天在这几个时刻各执行一次自动下载（建议排在抓取时刻之后，确保当天数据已入库）；服务本地时间",
     },
     "precipitate_keywords": {
