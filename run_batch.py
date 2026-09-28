@@ -17,6 +17,7 @@ from datetime import datetime
 import file_logger
 import mirror_service
 import run_recorder
+import scrape_throttle
 import txxy_env
 from run_recorder import SectionInfo
 
@@ -27,11 +28,13 @@ from run_recorder import SectionInfo
 # 避免两处各存一份、再靠注释互相提醒「保持一致」。
 SECTIONS: dict[str, str] = txxy_env.SECTIONS
 
-# 并发数（同时运行的 subprocess 数量上限）
-MAX_WORKERS = 3
+# 并发数（同时运行的 subprocess 数量上限）与启动间隔（秒）：
+# 唯一定义在 scrape_throttle.py（Web 设置页白名单默认值同源），此处只引用不复制。
+# env 覆盖（TXXY_SCRAPE_*）来自 runs.start_run 注入（页内设置）或部署环境
+MAX_WORKERS = scrape_throttle.MAX_WORKERS
 
 # 启动间隔（秒），错开各子进程的启动，避免瞬时并发触发反爬
-STAGGER_DELAY = 5
+STAGGER_DELAY = scrape_throttle.STAGGER_DELAY
 
 # scraper.py 路径
 SCRAPER_SCRIPT = os.path.join(os.path.dirname(__file__), "scraper.py")
@@ -41,7 +44,8 @@ SCRAPER_SCRIPT = os.path.join(os.path.dirname(__file__), "scraper.py")
 #   TXXY_FETCH_CHAIN  有序访问链，逗号分隔（含公网主域，末项=业务域名/中继降级目标；
 #                     本地 Windows 默认 = 本机镜像 + 公网主域）。实际请求按链 failover：
 #                     传输层错误才切下一项，见 txxy_env.fetch_chain() / report_fetch_failure()
-# USE_LOCAL_PROXY 只由「链上是否有镜像候选（链长>1）」推出，命令行 [true|false] 可临时覆盖。
+# USE_LOCAL_PROXY 只由「链上是否有镜像候选（链长>1）」推出，命令行 [true|false] 可临时覆盖：
+# false = 剔除链上本地（回环/内网）端点后按序访问（外部镜像保留），非「只剩链尾直连」。
 USE_LOCAL_PROXY = txxy_env.use_local_proxy()
 
 # 是否忽略断点进度强制重跑（--restart）：True 时所有版块从第 1 页重新抓取，
@@ -128,9 +132,11 @@ def log(msg: str) -> None:
 
 
 def effective_root_url() -> str:
-    """本次实际访问的根地址：镜像链开启 → 链上当前粘住的 host（默认镜像1，故障时随
-    failover 下移）；关闭 → 唯一业务域名"""
-    return txxy_env.current_fetch_host() if USE_LOCAL_PROXY else txxy_env.public_domain()
+    """本次实际访问的根地址：镜像链开启 → 链上当前粘住的 host（默认链头，故障时随
+    failover 下移）；关闭 → 剔除本地端点后的链头（外部镜像保留，全被剔除时为业务域名）"""
+    return txxy_env.current_fetch_host() if USE_LOCAL_PROXY else (
+        (txxy_env.non_local_fetch_chain() or [txxy_env.public_domain()])[0]
+    )
 
 
 def _parse_bool(value: str) -> bool | None:
@@ -146,8 +152,8 @@ def _parse_bool(value: str) -> bool | None:
 def _apply_cli_args() -> None:
     """
     处理命令行可选参数：python run_batch.py [USE_LOCAL_PROXY] [--restart]
-    - USE_LOCAL_PROXY：传入时按传入的实际值覆盖顶部配置（如 python run_batch.py false 表示关闭本地代理）；
-      不传时使用配置区默认值。与 --restart 混用时位置不限。
+    - USE_LOCAL_PROXY：传入时按传入的实际值覆盖顶部配置（如 python run_batch.py false 表示
+      剔除链上本地镜像候选、其余端点仍按链序访问）；不传时使用配置区默认值。与 --restart 混用时位置不限。
     - --restart：忽略断点进度，强制重跑所有版块（透传给各 scraper.py 子进程，
       各版块当天已生成的 CSV/进度文件会被删除重新生成）。
     """
@@ -218,10 +224,13 @@ def run_scraper(fid: str, name: str, run_id: int = 0) -> tuple[str, str, bool, i
             # --restart：忽略断点进度，强制重跑该版块（scraper.py 会删除当天 CSV/进度文件后从头抓取）
             cmd.append("--restart")
         # 域名不再透传：子进程与父进程同一项目根，scraper 导入 txxy_env 时按环境与
-        # .env 自行取值。这里把本进程生效的**完整访问链**显式传给子进程——
-        # 链上仅末项（直连）即命令行覆盖（python run_batch.py false），在子进程里不丢失。
+        # .env 自行取值。这里把本进程生效的**访问链**显式传给子进程——
+        # USE_LOCAL_PROXY=False 时传「剔除本地端点后的链」（外部镜像仍按序 failover，
+        # 与开关名「走本地镜像（1024）」语义对齐；全被剔除时即仅链尾），在子进程里不丢失。
         proxy_addr = (
-            ",".join(txxy_env.fetch_chain()) if USE_LOCAL_PROXY else txxy_env.public_domain()
+            ",".join(txxy_env.fetch_chain())
+            if USE_LOCAL_PROXY
+            else ",".join(txxy_env.non_local_fetch_chain()) or txxy_env.public_domain()
         )
         # 批量运行时由本脚本统一汇总写运行记录，关闭子进程各自的落库，避免重复记录；
         # 同时把 run_id 传给子进程，子进程实时更新自己版块的进度明细。
@@ -316,12 +325,15 @@ def main() -> None:
     _ = file_logger.setup("run_batch")
     # 可选入参 USE_LOCAL_PROXY（不传则用配置区默认值），须在端口监控前生效
     _apply_cli_args()
-    # 打印运行环境与生效配置：自动判定的，显式化出来便于排查
+    # 打印运行环境与生效配置：自动判定的，显式化出来便于排查。
+    # 直连模式打印的是「剔除本地端点后的生效链」，与实际传给子进程的一致
     log(
-        "[配置] 运行环境: %s，访问链: %s，直连模式: %s"
+        "[配置] 运行环境: %s，访问链: %s，剔除本地镜像: %s"
         % (
             txxy_env.RUN_ENV,
-            " -> ".join(txxy_env.fetch_chain()),
+            " -> ".join(
+                txxy_env.fetch_chain() if USE_LOCAL_PROXY else txxy_env.non_local_fetch_chain()
+            ),
             "否" if USE_LOCAL_PROXY else "是（python run_batch.py false）",
         )
     )
@@ -356,7 +368,10 @@ def main() -> None:
             )
             sys.exit(1)
     else:
-        log(f"[1024服务] 镜像候选已关闭（USE_LOCAL_PROXY=False），直连业务域名: {txxy_env.public_domain()}")
+        log(
+            "[1024服务] 本地镜像候选已关闭（USE_LOCAL_PROXY=False），"
+            f"按链访问剩余端点: {' -> '.join(txxy_env.non_local_fetch_chain()) or txxy_env.public_domain()}"
+        )
 
     total = len(SECTIONS)
     print(f"共 {total} 个版块，并发数: {MAX_WORKERS}，启动间隔: {STAGGER_DELAY}s\n")

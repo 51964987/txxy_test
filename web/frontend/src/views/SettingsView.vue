@@ -55,6 +55,16 @@ const GROUPS: { title: string; desc?: string; keys: string[]; extra?: 'schedule'
     ],
   },
   {
+    title: '抓取节流',
+    desc: '并发与节奏直接影响源站压力，过高可能触发限流或封禁；保存后下一批抓取生效',
+    keys: [
+      'scrape_max_workers',
+      'scrape_stagger_delay',
+      'scrape_page_interval',
+      'scrape_max_retries',
+    ],
+  },
+  {
     title: '自动下载',
     desc: '按下面的筛选条件，每天在设定时刻自动把当天发布的帖子（含媒体与链接清单）提交到下载中心（downloads/）自动下载；保存后立即生效。建议自动下载时刻排在抓取时刻之后，确保当天数据已入库。',
     extra: 'precipitate',
@@ -117,6 +127,7 @@ const WIDE_TYPES: SettingItem['type'][] = ['array', 'times', 'chain']
 const SCOPE_TEXT: Record<SettingItem['scope'], string> = {
   immediate: '立即生效',
   next_task: '下一个下载任务生效（正在跑的任务不受影响）',
+  next_batch: '下一批抓取生效（经环境变量传播到抓取子进程）',
   frontend: '保存后前端立即应用',
 }
 
@@ -351,6 +362,14 @@ async function runNow() {
 
 /** 立即自动下载一次：复用 /api/precipitate/run（同一筛选/磁盘守卫），用于即时验证参数 */
 const autoDownloadNowLoading = ref(false)
+
+/** 调度心跳停滞判定：last_tick 距今超过 3×tick 间隔 → 调度线程可能已死。
+ *  tick_age_seconds 由服务端按服务端时钟计算，避免本机时钟偏差误报 */
+function tickStale(job: { tick_age_seconds?: number | null; tick_seconds?: number } | undefined): boolean {
+  if (!job || job.tick_age_seconds == null) return false
+  return job.tick_age_seconds > 3 * (job.tick_seconds ?? 60)
+}
+
 const precipitateDiskLow = computed(
   () => (sched.value?.precipitate?.last?.reason ?? '').includes('磁盘'),
 )
@@ -669,12 +688,16 @@ onBeforeUnmount(() => {
               </div>
               <div class="ss-row">
                 <span class="ss-label">调度线程</span>
-                <span class="ss-value text-muted">
+                <span
+                  class="ss-value"
+                  :class="tickStale(sched.scrape) ? '' : 'text-muted'"
+                  :style="tickStale(sched.scrape) ? { color: 'var(--el-color-danger)', fontWeight: '600' } : {}"
+                >
                   {{
                     sched.scrape.last_tick
                       ? `最近判定 ${sched.scrape.last_tick}（每 ${sched.scrape.tick_seconds} 秒一次）`
                       : '尚未运行'
-                  }}
+                  }}{{ tickStale(sched.scrape) ? ' · 心跳停滞，调度可能已停止' : '' }}
                 </span>
               </div>
             </template>
@@ -728,8 +751,13 @@ onBeforeUnmount(() => {
               </div>
               <div class="ss-row">
                 <span class="ss-label">调度线程</span>
-                <span class="ss-value text-muted">
+                <span
+                  class="ss-value"
+                  :class="tickStale(sched.precipitate) ? '' : 'text-muted'"
+                  :style="tickStale(sched.precipitate) ? { color: 'var(--el-color-danger)', fontWeight: '600' } : {}"
+                >
                   {{ sched.precipitate.last_tick ? `最近判定 ${sched.precipitate.last_tick}` : '尚未运行' }}
+                  {{ tickStale(sched.precipitate) ? '· 心跳停滞，调度可能已停止' : '' }}
                 </span>
               </div>
               <el-alert

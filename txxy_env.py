@@ -209,6 +209,17 @@ def fetch_chain() -> list[str]:
         return list(_fetch_chain)
 
 
+def non_local_fetch_chain() -> list[str]:
+    """剔除链上回环 / 内网端点后的访问链（USE_LOCAL_PROXY=False 的生效链）。
+
+    「不走本地镜像」≠「只剩链尾」：外部镜像候选仍按序参与 failover，仅本地
+    （回环 / 内网）端点被剔除——与开关名「走本地镜像（1024）」的字面语义对齐
+    （2026-09-28 用户确认的行为口径）。链尾经 parse_fetch_chain 校验必为公网，
+    天然保留；链上没有本地端点时返回值与 fetch_chain() 相同。
+    """
+    return [u for u in fetch_chain() if not _is_local_host(u)]
+
+
 def public_domain() -> str:
     """业务域名（活值）= 访问链最后一项：中继 302 降级目标、to_fetch_url 的替换基准"""
     return _fetch_chain[-1]

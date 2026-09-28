@@ -146,6 +146,11 @@ class ScheduledJob:
                 action, reason = self.handle_slot(date, at)
                 self._mark_locked(state, date, at, action, reason)
                 results.append({"date": date, "at": at, "action": action, "reason": reason})
+            # 心跳必须每个 tick 都落盘：否则「启用且空闲」时 last_tick 只改内存，
+            # 页面心跳长期停在最近一次事件时刻，无法区分「健康未到点」与「线程已死」
+            # （2026-09-28 实测：文件 mtime 停在上午触发时刻，页面心跳静止近 6 小时）。
+            # 事件 tick 的 _mark_locked 已写过一次，此处重复原子写的代价可忽略
+            self._save_locked(state)
         return results
 
     def status(self) -> dict[str, Any]:
@@ -181,6 +186,18 @@ class ScheduledJob:
             "last": last,
             "last_tick": last_tick,
         }
+        # 心跳健康度：last_tick 距今秒数（服务端时钟计算，避免前端时钟偏差误报）。
+        # 前端判据：超过 3×tick 间隔视为心跳停滞（调度线程可能已死），标红提示
+        tick_age: int | None = None
+        if last_tick:
+            try:
+                tick_age = max(
+                    0,
+                    int((now - datetime.strptime(str(last_tick), "%Y-%m-%d %H:%M:%S")).total_seconds()),
+                )
+            except ValueError:
+                tick_age = None
+        base["tick_age_seconds"] = tick_age
         base.update(self._extra_status())
         return base
 

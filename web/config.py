@@ -87,6 +87,11 @@ def fetch_chain() -> list[str]:
     return _TXXY_ENV.fetch_chain()
 
 
+def non_local_fetch_chain() -> list[str]:
+    """剔除链上回环/内网端点后的访问链（USE_LOCAL_PROXY=False 的生效链）：设置页弹窗预览用"""
+    return _TXXY_ENV.non_local_fetch_chain()
+
+
 def public_domain() -> str:
     """业务域名（活值）= 链尾：中继 302 降级目标等"""
     return _TXXY_ENV.public_domain()

@@ -1032,12 +1032,9 @@ function shortNextRun(v: string | null): string {
   return `${d.slice(5)} ${t}`
 }
 
-/** B2：磁盘低位判据——剩余不足总量 10% 或不足 20 GB（本机存媒体，盘满是头号风险） */
-const diskLow = computed(() => {
-  const a = assets.value
-  if (!a || !a.disk_total) return false
-  return a.disk_free < a.disk_total * 0.1 || a.disk_free < 20 * 1024 ** 3
-})
+/** B2：磁盘低位判据——后端 /stats/assets 统一计算下发（剩余 < 总量 10% 或 <
+ *  参数设置的「磁盘水位阈值」，与自动下载守卫同源），前端不再自算第二份 */
+const diskLow = computed(() => assets.value?.disk_low === true)
 
 
 
@@ -2580,7 +2577,7 @@ function renderFidTrendChart() {
                 @keydown.enter="goDownloads"
               >下载失败 <b>{{ assets.state.failed.toLocaleString() }}</b> ›</span>
             </el-tooltip>
-            <el-tooltip v-if="assets.disk_total > 0" content="本地媒体资产所在卷的可用容量；剩余不足总量 10% 或低于 20 GB 时标红" placement="top" :teleported="!app.fullscreen">
+            <el-tooltip v-if="assets.disk_total > 0" :content="`本地媒体资产所在卷的可用容量；剩余不足总量 10% 或低于磁盘水位阈值（${assets.disk_threshold_gb} GB，参数设置可调）时标红`" placement="top" :teleported="!app.fullscreen">
               <span class="ak-op" :class="{ 'ak-danger': diskLow }">磁盘剩余 {{ formatSize(assets.disk_free) }}</span>
             </el-tooltip>
           </span>

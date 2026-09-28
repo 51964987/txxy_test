@@ -47,7 +47,8 @@ txxy_test/                  # 抓取脚本在项目根：scraper.py / run_batch.
 
 | 能力 | 唯一实现位置 | 说明 |
 |---|---|---|
-| 环境判定 / 域名 / 访问链 / URL 转换 | `txxy_env.py`（项目根） | **唯一配置源**（2026-09-24 起单一 `TXXY_FETCH_CHAIN` 有序访问链，公网主域在链内、末项校验禁内网）：`parse_fetch_chain()`（解析+校验唯一实现，env/设置页/CLI 共用）、粘性 failover（`fetch_chain()` / `public_domain()` / `default_fetch_chain()` / `set_fetch_chain()` / `current_fetch_host()` / `report_fetch_failure()`）、`use_local_proxy()`、`display_domain()`、`to_storage_path()`、`to_display_url()`、`to_fetch_url()`、常量 `DEFAULT_PUBLIC_DOMAIN` / `DEFAULT_LOCAL_MIRROR` / `DEFAULT_FETCH_CHAIN` / `MIRROR_PREFIX` |
+| 环境判定 / 域名 / 访问链 / URL 转换 | `txxy_env.py`（项目根） | **唯一配置源**（2026-09-24 起单一 `TXXY_FETCH_CHAIN` 有序访问链，公网主域在链内、末项校验禁内网）：`parse_fetch_chain()`（解析+校验唯一实现，env/设置页/CLI 共用）、粘性 failover（`fetch_chain()` / `non_local_fetch_chain()`（剔除本地端点的生效链）/ `public_domain()` / `default_fetch_chain()` / `set_fetch_chain()` / `current_fetch_host()` / `report_fetch_failure()`）、`use_local_proxy()`、`display_domain()`、`to_storage_path()`、`to_display_url()`、`to_fetch_url()`、常量 `DEFAULT_PUBLIC_DOMAIN` / `DEFAULT_LOCAL_MIRROR` / `DEFAULT_FETCH_CHAIN` / `MIRROR_PREFIX` |
+| 抓取节流参数 | `scrape_throttle.py`（项目根，零依赖） | 版块并发 / 启动间隔 / 页间基础间隔 / 单页重试的默认值唯一定义（`TXXY_SCRAPE_*` 环境变量可覆盖）；run_batch、scraper、设置页白名单三方共用，禁止各写一份字面量 |
 | `.env` 加载 | `txxy_env.load_dotenv()` | 全项目唯一 dotenv 实现；`web/config.py` 等复用它 |
 | 展示端配置 | `web/config.py` | 只读不定义域名，域名相关全部取自 `txxy_env`（加载失败直接抛错，不静默降级） |
 | URL 归一化 | `web/db.py: normalize_url()` | 内部转调 `txxy_env.to_display_url()` |

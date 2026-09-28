@@ -12,6 +12,7 @@ from typing import TextIO
 
 import file_logger
 import run_recorder
+import scrape_throttle
 import txxy_env
 from http_headers import ACCEPT_HTML, build_headers
 
@@ -51,14 +52,21 @@ HEADERS = build_headers(ACCEPT_HTML)
 # 降低被封风险；初始值沿用原固定 3s
 REQUEST_INTERVAL_MIN = 1.0
 REQUEST_INTERVAL_MAX = 10.0
-REQUEST_INTERVAL_INIT = 3.0
+# 页间基础间隔与单页重试次数：唯一定义在 scrape_throttle.py（Web 设置页默认值同源），
+# env 覆盖（TXXY_SCRAPE_*）由 run_batch 注入（页内设置）或部署环境提供
+REQUEST_INTERVAL_INIT = scrape_throttle.PAGE_INTERVAL_INIT
 REQUEST_INTERVAL_STEP = 0.5
 # 单页请求最大重试次数（网络异常 / 超时 / 5xx / 429 时重试）
-REQUEST_MAX_RETRIES = 3
+REQUEST_MAX_RETRIES = scrape_throttle.MAX_RETRIES
 # 重试基础等待秒数，实际等待 = 基础值 × 第几次重试（第1次重试等3s，第2次等6s）
 RETRY_BASE_DELAY = 3
 # 连续失败页数阈值，达到后判定站点不可用并停止抓取，避免空转
 MAX_CONSECUTIVE_FAILURES = 3
+# 空产出判据阈值：成功取回 ≥N 页却一条链接都未解析出 → 判失败（假成功防护）。
+# 端点能返回 200 但页面结构不符（站点改版 / 镜像页模板不同 / 反爬页 200 兜住）时，
+# 请求全部「成功」而产出为 0，若无此判据整批会「全绿 0 收获」（2026-09-28 实测：
+# 真实镜像头部 13 版块 × 100 页全部 0 条却 status=ok）。取 3 页避免单页偶发误判
+EMPTY_OUTPUT_MIN_PAGES = 3
 
 # 每 N 页刷新 CSV 磁盘
 BATCH_SIZE = 10
@@ -505,6 +513,7 @@ def main() -> None:
 
         try:
             consecutive_failures = 0
+            pages_fetched = 0  # 成功取回（HTTP 200）的页数：空产出判据用
             for page in range(start_page, end_page + 1):
                 # 复用获取末页时已请求的第 1 页 HTML，避免重复请求
                 if page == start_page and page == 1 and first_page_html:
@@ -514,6 +523,7 @@ def main() -> None:
 
                 if html:
                     consecutive_failures = 0
+                    pages_fetched += 1
                     links = parse_links(html)
                     print(f"[FID={FID}] 版块 第 {page} 页提取到 {len(links)} 条数据")
 
@@ -573,6 +583,16 @@ def main() -> None:
                     interval = _adjust_interval(_retried_this_page)
                     _retried_this_page = False
                     time.sleep(interval)
+
+            # 空产出判据（假成功防护）：成功取回多页却 0 链接，说明端点返回的不是
+            # 预期页面结构——判失败而非 ok，避免「全绿 0 收获」污染运行记录与健康条。
+            # 续跑无增量的 0 条（未取到任何页）不受影响：pages_fetched 为 0 不触发。
+            if run_status == "ok" and pages_fetched >= EMPTY_OUTPUT_MIN_PAGES and total_rows == 0:
+                run_status = "error"
+                print(
+                    f"[FID={FID}] [异常] 成功取回 {pages_fetched} 页但解析产出 0 条链接，"
+                    "疑似页面结构不符（站点改版 / 镜像页模板不同 / 反爬页 200 兜住），判为失败"
+                )
 
         except KeyboardInterrupt:
             run_status = "cancelled"

@@ -467,6 +467,10 @@ export interface Assets {
   /** 存储卷总容量 / 可用容量（字节，0 = 未知） */
   disk_total: number
   disk_free: number
+  /** 磁盘低位判据（后端唯一计算：剩余 < 总量 10% 或 < 磁盘水位阈值），前端只读不再自算 */
+  disk_low: boolean
+  /** 磁盘水位阈值（GB，来自参数设置 precipitate_min_free_gb，与自动下载守卫同源） */
+  disk_threshold_gb: number
 }
 
 /** 单个可设置参数的快照（后端 settings.WHITELIST 生成） */
@@ -474,8 +478,9 @@ export interface SettingItem {
   key: string
   label: string
   desc: string
-  /** 生效范围：immediate=下一次调用即生效 / next_task=下一个任务生效 / frontend=前端直接应用 */
-  scope: 'immediate' | 'next_task' | 'frontend'
+  /** 生效范围：immediate=下一次调用即生效 / next_task=下一个任务生效 /
+   *  next_batch=下一批抓取生效（抓取节流，经环境变量传播到子进程）/ frontend=前端直接应用 */
+  scope: 'immediate' | 'next_task' | 'next_batch' | 'frontend'
   /** times = 时刻列表（值为 string[]，如 ["08:00","20:00"]）；
    *  chain = 访问链（值为 string[]，有序端点 URL，末项 = 公网主域），供「访问链」设置使用 */
   type: 'int' | 'float' | 'bool' | 'array' | 'text' | 'enum' | 'times' | 'chain'
@@ -540,6 +545,8 @@ export interface ScrapeScheduleStatus {
   last: ScheduleLast | null
   /** 调度线程最后一次判定的时间（为空或过旧即说明调度未在运行） */
   last_tick: string | null
+  /** 心跳健康度：last_tick 距今秒数（服务端时钟计算）；> 3×tick_seconds 视为停滞 */
+  tick_age_seconds: number | null
   /** 当前在跑的批次（null = 空闲）；页面据此禁用「立即运行一次」 */
   running: ScheduleRunning | null
   /** 超过计划时刻多久算「错过」（分钟） */
@@ -565,6 +572,8 @@ export interface PrecipitateScheduleStatus {
   today_done: string[]
   last: PrecipitateLast | null
   last_tick: string | null
+  /** 心跳健康度：last_tick 距今秒数（服务端时钟计算）；> 3×tick_seconds 视为停滞 */
+  tick_age_seconds: number | null
 }
 
 /** 手动触发自动下载的返回（POST /api/precipitate/run）：提交汇总 + 磁盘水位 */
@@ -963,7 +972,14 @@ export const api = {
     sort_order?: string
   }) => get<PostsPage>('/posts', p as Record<string, string | number | undefined>),
   runs: () =>
-    get<{ dates: RunSummary[]; local_proxy_default: boolean; active_pid: number | null }>('/runs'),
+    get<{
+      dates: RunSummary[]
+      local_proxy_default: boolean
+      /** 启动弹窗「生效访问链」预览：勾选 = 完整链；取消勾选 = 剔除本地端点后的链（后端唯一计算） */
+      chain_full: string[]
+      chain_no_local: string[]
+      active_pid: number | null
+    }>('/runs'),
   /** 启动一次 run_batch 全量抓取（参数与 run_batch 命令行一一对应） */
   startRun: (p: { use_local_proxy: boolean; restart: boolean }) =>
     post<{ started: boolean; pid: number }>('/runs/start', p),

@@ -377,6 +377,10 @@ class AssetsResp(BaseModel):
     source_usage: SourceUsageResp = SourceUsageResp()  # 来源占用 Top（版块/作者，容量洞察卡）
     disk_total: int = 0                             # 存储卷总容量（字节）
     disk_free: int = 0                              # 存储卷可用容量（字节）
+    # 磁盘低位判据（后端唯一计算：剩余 < 总量 10% 或 < 磁盘水位阈值，与自动下载守卫同源）；
+    # 大屏 B2 直接消费，前端不再自算第二份（2026-09-28 前 Dashboard 硬编码 20GB 已废弃）
+    disk_low: bool = False
+    disk_threshold_gb: int = 0                      # 磁盘水位阈值（GB，参数设置 precipitate_min_free_gb）
 
 
 class FidMetaResp(BaseModel):
@@ -780,19 +784,26 @@ def precipitate_run() -> dict[str, Any]:
 def update_settings(req: SettingsUpdateReq) -> dict[str, Any]:
     """保存参数设置：仅白名单内的键，范围自动钳制；保存后返回最新快照。
 
-    生效范围由各参数标注（immediate / next_task / frontend），前端据此提示用户。
+    生效范围由各参数标注（immediate / next_task / next_batch / frontend），前端据此提示用户。
+    写后立即可见：改链影响 /runs 下发的弹窗预览链、改磁盘阈值影响 /stats/assets 的
+    低位判据——两者都有 5s TTL 缓存，这里显式失效，不等 TTL。
     """
     try:
         items = settings.update(req.items)
     except ValueError as e:
         raise HTTPException(400, str(e))
+    db.invalidate("runs")
+    db.invalidate("assets")
     return {"ok": True, "settings": items}
 
 
 @router.post("/settings/reset")
 def reset_settings(req: SettingsResetReq) -> dict[str, Any]:
-    """恢复默认：keys 为空则清空全部覆盖值。"""
-    return {"ok": True, "settings": settings.reset(req.keys)}
+    """恢复默认：keys 为空则清空全部覆盖值。缓存失效口径与 PUT 相同。"""
+    items = settings.reset(req.keys)
+    db.invalidate("runs")
+    db.invalidate("assets")
+    return {"ok": True, "settings": items}
 
 
 # ---------------- 统计 ----------------
@@ -1996,12 +2007,19 @@ def stats_assets(
         }
 
         # ---- 存储容量：剩余空间（业界做法：存储与计数分列两个视图）----
+        # 磁盘低位判据也在此处统一计算下发（唯一口径 = 参数设置的「磁盘水位阈值」，
+        # 与自动下载守卫同源；原大屏硬编码 20GB 已废弃，避免两处定义漂移）
         disk_total = disk_free = 0
         try:
             du = shutil.disk_usage(config.DOWNLOADS_DIR)
             disk_total, disk_free = int(du.total), int(du.free)
         except OSError:
             pass  # 取不到容量不影响其余指标（0 = 未知，前端不渲染该行）
+        threshold_gb = settings.get_int("precipitate_min_free_gb", config.PRECIPITATE_MIN_FREE_GB)
+        disk_low = bool(
+            disk_total
+            and (disk_free < disk_total * 0.1 or disk_free < threshold_gb * 1024 ** 3)
+        )
 
         return {
             "posts_total": posts_total,
@@ -2019,6 +2037,8 @@ def stats_assets(
             "source_usage": _source_usage(snap, res),
             "disk_total": disk_total,
             "disk_free": disk_free,
+            "disk_low": disk_low,
+            "disk_threshold_gb": threshold_gb,
         }
 
     return db.cached(f"assets_v2:{days}", _calc)
@@ -2269,6 +2289,11 @@ def _runs_cached() -> dict[str, Any]:
             "dates": runs.list_runs(),
             # 抓取触发弹窗的默认参数：与 run_batch 配置区同源（txxy_env.use_local_proxy）
             "local_proxy_default": config.use_local_proxy(),
+            # 启动弹窗「生效访问链」预览：勾选 = 完整链；取消勾选 = 剔除本地端点后的链。
+            # 本地/内网判定唯一实现 txxy_env._is_local_host（经 non_local_fetch_chain），
+            # 前端不做第二份判断
+            "chain_full": config.fetch_chain(),
+            "chain_no_local": config.non_local_fetch_chain(),
             # Web 端启动且仍存活的抓取进程 pid：前端据此区分「终止进程」与「清理孤儿」
             "active_pid": runs.active_pid(),
         }

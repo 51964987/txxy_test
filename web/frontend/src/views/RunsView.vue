@@ -77,6 +77,8 @@ async function refreshQuiet(force = false) {
     const r = await api.runs()
     dates.value = r.dates
     localProxyDefault.value = r.local_proxy_default
+    chainFull.value = r.chain_full
+    chainNoLocal.value = r.chain_no_local
     activePid.value = r.active_pid
     clampPage()
     // 数据整体替换后 el-table 的高亮会丢，重新选回当前行
@@ -126,6 +128,8 @@ async function loadList() {
     const r = await api.runs()
     dates.value = r.dates
     localProxyDefault.value = r.local_proxy_default
+    chainFull.value = r.chain_full
+    chainNoLocal.value = r.chain_no_local
     activePid.value = r.active_pid
     clampPage()
     await nextTick()
@@ -196,19 +200,10 @@ const startVisible = ref(false)
 const starting = ref(false)
 const startForm = reactive({ use_local_proxy: true, restart: false })
 
-/** 启动对话框展示用的生效访问链：打开对话框时现取（复用 /api/config 设置快照），
- *  保证与设置页最新保存的链一致；取不到只影响预览展示，不阻断启动流程 */
-const startChain = ref<string[]>([])
-async function loadStartChain() {
-  try {
-    const cfg = await api.config()
-    const item = cfg.settings.find((s) => s.key === 'fetch_chain')
-    if (item && Array.isArray(item.value)) startChain.value = item.value as string[]
-  } catch (e) {
-    if (isAborted(e)) return
-    startChain.value = []
-  }
-}
+/** 启动对话框展示用的生效访问链：随 /api/runs 列表一起下发（后端唯一计算本地/内网剔除），
+ *  勾选 = 完整链；取消勾选 = 剔除本地镜像候选后的链 */
+const chainFull = ref<string[]>([])
+const chainNoLocal = ref<string[]>([])
 
 /** 将要执行的命令行预览（对应 run_batch.py 入参说明） */
 const startCmd = computed(
@@ -217,20 +212,20 @@ const startCmd = computed(
     (startForm.restart ? ' --restart' : ''),
 )
 
-/** 本次运行的生效访问链预览：勾选 = 完整链；取消勾选 = 本批临时收窄为仅链尾
- *  （子进程只拿到链尾单端点，直连、无 failover，链上镜像候选不参与） */
+/** 本次运行的生效访问链预览：取消勾选时本地镜像候选不参与本批，
+ *  外部镜像与公网主域仍按链序 failover（语义与设置页「走本地镜像（1024）」一致） */
 const startChainPreview = computed(() => {
-  if (!startChain.value.length) return ''
+  const chain = startForm.use_local_proxy ? chainFull.value : chainNoLocal.value
+  if (!chain.length) return ''
   return startForm.use_local_proxy
-    ? startChain.value.join(' → ')
-    : `仅 ${startChain.value[startChain.value.length - 1]}（直连，无镜像候选）`
+    ? chain.join(' → ')
+    : `${chain.join(' → ')}（已剔除本地镜像候选）`
 })
 
 function openStartDialog() {
   startForm.use_local_proxy = localProxyDefault.value
   startForm.restart = false
   startVisible.value = true
-  void loadStartChain()
 }
 
 async function confirmStart() {
@@ -632,10 +627,11 @@ onBeforeUnmount(() => {
       <!-- 启动抓取：参数与 run_batch.py 命令行一一对应（业界 Run with parameters） -->
       <el-dialog v-model="startVisible" title="启动抓取批次" width="520px">
         <div class="start-cmd">{{ startCmd }}</div>
-        <el-checkbox v-model="startForm.use_local_proxy">按访问链抓取（true）</el-checkbox>
+        <el-checkbox v-model="startForm.use_local_proxy">使用本地镜像（1024）（true）</el-checkbox>
         <div class="param-desc">
-          按设置页「访问链」顺序抓取（含镜像候选）；取消勾选则本批临时收窄为仅链尾直连、
-          不切换镜像（对应入参 USE_LOCAL_PROXY）。默认跟随访问链：链上存在镜像候选时勾选
+          勾选：按设置页「访问链」顺序访问（含本地镜像）。取消勾选：本批剔除链上本地镜像候选，
+          其余端点（外部镜像 / 公网主域）仍按链序访问（对应入参 USE_LOCAL_PROXY）。
+          默认跟随访问链：链上存在镜像候选时勾选
         </div>
         <div class="param-desc" v-if="startChainPreview">本次生效访问链：{{ startChainPreview }}</div>
         <el-checkbox v-model="startForm.restart">强制重跑（--restart）</el-checkbox>

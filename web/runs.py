@@ -23,6 +23,13 @@ from typing import Any
 import config
 import db
 
+# 项目根加入 sys.path：scrape_throttle.py 位于项目根（与 settings.py / mirror.py 的自举
+# 同一约定；常规模块 .py 优先于命名空间包，root 的 db/ 目录不会遮蔽 web/db.py）
+if str(config.BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(config.BASE_DIR))
+import scrape_throttle  # noqa: E402
+import settings  # noqa: E402
+
 DATE_DIR_RE = re.compile(r"^(\d{8})$")
 TS_RE = re.compile(r"^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]")
 SUMMARY_RE = re.compile(r"__SUMMARY__ fid=(\S+)\s+rows=(\d+)\s+db_rows=(\d+)\s+pages=(\d+)")
@@ -750,6 +757,21 @@ def start_run(use_local_proxy: bool, restart: bool) -> dict[str, Any]:
                 # 页内改动对抓取不生效（与 cmd 参数同属「显式传值」而非隐式继承）
                 env = dict(os.environ)
                 env["TXXY_FETCH_CHAIN"] = ",".join(config.fetch_chain())
+                # 抓取节流参数同路注入（下一批生效的唯一传播路径）：
+                # run_batch / scraper 子进程经 scrape_throttle 按环境变量取值，
+                # 默认值定义在该模块（Web 与 CLI 共用，白名单默认值同源）
+                env["TXXY_SCRAPE_MAX_WORKERS"] = str(
+                    settings.get_int("scrape_max_workers", scrape_throttle.MAX_WORKERS)
+                )
+                env["TXXY_SCRAPE_STAGGER_DELAY"] = str(
+                    settings.get_int("scrape_stagger_delay", scrape_throttle.STAGGER_DELAY)
+                )
+                env["TXXY_SCRAPE_PAGE_INTERVAL"] = str(
+                    settings.get_int("scrape_page_interval", scrape_throttle.PAGE_INTERVAL_INIT)
+                )
+                env["TXXY_SCRAPE_MAX_RETRIES"] = str(
+                    settings.get_int("scrape_max_retries", scrape_throttle.MAX_RETRIES)
+                )
                 proc = subprocess.Popen(
                     cmd,
                     cwd=str(config.BASE_DIR),

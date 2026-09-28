@@ -31,6 +31,7 @@ if str(_ROOT) not in sys.path:
 from atomicfile import write_json_atomic  # noqa: E402
 import config  # noqa: E402
 import download_files  # noqa: E402  项目根模块：默认下载间隔/重试次数在此，避免默认值两份
+import scrape_throttle  # noqa: E402  项目根模块：抓取节流默认值唯一定义处（同上理由）
 
 WHITELIST: dict[str, dict[str, Any]] = {
     "fetch_chain": {
@@ -104,13 +105,45 @@ WHITELIST: dict[str, dict[str, Any]] = {
         "label": "强制全量重跑（--restart）",
         "type": "bool",
         "scope": "immediate",
-        "desc": "开＝忽略断点进度、删除当天已生成的 CSV 重新抓取；关＝断点续跑（当天已抓过的页跳过）",
+        "desc": "开＝忽略断点进度、删除当天已生成的 CSV 重新抓取；关＝断点续跑（当天已抓过的页跳过）。"
+                "注意：定时批默认开启（刷新旧帖互动数），与手动「启动抓取」弹窗的默认（续跑）相反",
     },
     "scrape_schedule_use_proxy": {
         "label": "走本地镜像（1024）",
         "type": "bool",
         "scope": "immediate",
-        "desc": "与手动「启动抓取」弹窗的开关同一含义；关＝直连业务域名",
+        "desc": "与手动「启动抓取」弹窗的开关同一含义。关＝本批剔除链上本地镜像候选，"
+                "其余端点（外部镜像 / 公网主域）仍按访问链顺序访问",
+    },
+    # ---- 抓取节流（下一批生效）：默认值唯一定义在项目根 scrape_throttle.py，
+    # 经 runs.start_run 注入 TXXY_SCRAPE_* 环境变量传播到 run_batch / scraper 子进程 ----
+    "scrape_max_workers": {
+        "label": "版块并发数",
+        "min": 1,
+        "max": 6,
+        "scope": "next_batch",
+        "desc": "同时运行的版块抓取子进程数；过高易触发源站限流/封禁",
+    },
+    "scrape_stagger_delay": {
+        "label": "版块启动间隔（秒）",
+        "min": 2,
+        "max": 30,
+        "scope": "next_batch",
+        "desc": "错开各版块子进程的启动时刻，避免瞬时并发触发反爬",
+    },
+    "scrape_page_interval": {
+        "label": "页间基础间隔（秒）",
+        "min": 1,
+        "max": 15,
+        "scope": "next_batch",
+        "desc": "同版块逐页请求的基础间隔（自适应：页面异常自动翻倍，上限 10 秒）",
+    },
+    "scrape_max_retries": {
+        "label": "单页重试次数",
+        "min": 1,
+        "max": 5,
+        "scope": "next_batch",
+        "desc": "网络异常 / 超时 / 5xx / 429 时单页的总尝试次数",
     },
     # 单位与 TXXY_SCRAPE_SCHEDULE_MISS_TOLERANCE 环境变量保持一致（秒），
     # 同一参数两层入口（env / 页内）同一口径，避免换算引入第二份单位定义。
@@ -294,6 +327,15 @@ def _env_or_default(key: str) -> Any:
         return config.SCRAPE_SCHEDULE_USE_PROXY
     if key == "scrape_schedule_miss_tolerance":
         return config.SCRAPE_SCHEDULE_MISS_TOLERANCE
+    # 抓取节流默认值：唯一定义在项目根 scrape_throttle.py（run_batch / scraper 同源）
+    if key == "scrape_max_workers":
+        return scrape_throttle.MAX_WORKERS
+    if key == "scrape_stagger_delay":
+        return scrape_throttle.STAGGER_DELAY
+    if key == "scrape_page_interval":
+        return scrape_throttle.PAGE_INTERVAL_INIT
+    if key == "scrape_max_retries":
+        return scrape_throttle.MAX_RETRIES
     if key == "precipitate_enabled":
         return config.PRECIPITATE_ENABLED
     if key == "precipitate_times":
