@@ -689,6 +689,37 @@ function downloadTask(row: DownloadTaskSummary) {
   void startTasks([row])
 }
 
+// ---- 「补跑失败」：任务级「部分文件失败」缺口入口（2026-09-27 新增） ----
+// 任务级缺口有两种形态：「下载」覆盖 fail/cancelled 链接（重跑未成功链接）；
+// 但整链判 ok、仅部分文件失败的链接（结果列「失败 N」）不在其列——终态 done 任务
+// 更是连「下载」都没有。业界做法（qBittorrent Recheck / IDM 分段重试）都是给
+// 「部分缺口」独立补跑入口，且幂等（已落盘文件自动跳过）。
+/** 任务存在「部分文件失败」文件缺口（failed_total 即全任务 live.fail 累计，含已完成链接） */
+function taskPartialFail(t: DownloadTaskSummary): boolean {
+  return !!t.failed_total && Object.values(t.failed_total).some((n) => n > 0)
+}
+/** 「补跑失败」入口可见性：有文件缺口且任务不在跑/不在队列（补跑会整任务重新入队，
+ *  与 retry_url 同一守卫；暂停收尾窗口 pause_requested=true 期间同样拒绝） */
+function canRetryPartial(t: DownloadTaskSummary): boolean {
+  return (
+    taskPartialFail(t) &&
+    t.status !== 'running' &&
+    t.status !== 'pending' &&
+    !t.pause_requested
+  )
+}
+/** 补跑任务里「整体成功但部分文件失败」的链接（后端只重置这批，不动 fail/cancelled 项） */
+async function retryPartialFiles(t: DownloadTaskSummary) {
+  try {
+    const r = await api.retryDownloadPartial(t.id)
+    ElMessage.success(`已在本任务内补跑 ${r.count} 个部分失败的链接，已存在的文件会自动跳过`)
+    await loadTasks()
+  } catch (e) {
+    if (isAborted(e)) return
+    ElMessage.error(`补跑失败: ${(e as Error).message}`)
+  }
+}
+
 /** 工具栏主按钮：有在途任务 → 全部暂停（勾选了在途任务则只暂停勾选的）；
  *  否则 → 开始下载（勾选了未完成任务则只动勾选的，否则一键全部开始） */
 function onPrimaryAction() {
@@ -902,16 +933,25 @@ const itemStats = computed(() => {
   const ok = n('ok')
   const fail = n('fail')
   const cancelled = n('cancelled')
-  return { total: items.length, ok, fail, cancelled, skip: n('skip'), problem: fail + cancelled }
+  // 「部分文件失败」计入异常：这些行结果列显示「失败 N」且可补跑，
+  // 必须能在异常页签里找到（口径与「重新下载」按钮可用性一致）
+  const partial = items.filter(
+    (i) => (i.status === 'ok' || i.status === 'skip') && itemPartialFail(i),
+  ).length
+  return { total: items.length, ok, fail, cancelled, skip: n('skip'), problem: fail + cancelled + partial }
 })
 
 /** 异常优先排序 + 状态筛选：让用户第一眼看到需要处理的链接 */
 const filteredItems = computed(() => {
   const items = [...(detailTask.value?.items ?? [])]
-  // 异常（fail/cancelled）在前，其次 pending/running，成功与跳过在后
-  const rank: Record<string, number> = { fail: 0, cancelled: 0, running: 1, pending: 1 }
-  items.sort((a, b) => (rank[a.status] ?? 2) - (rank[b.status] ?? 2))
-  if (itemFilter.value === 'problem') return items.filter((i) => (rank[i.status] ?? 2) === 0)
+  // 异常（fail/cancelled/部分文件失败）在前，其次 pending/running，成功与跳过在后
+  const rank = (i: DownloadItem) => {
+    if (i.status === 'fail' || i.status === 'cancelled' || itemPartialFail(i)) return 0
+    if (i.status === 'running' || i.status === 'pending') return 1
+    return 2
+  }
+  items.sort((a, b) => rank(a) - rank(b))
+  if (itemFilter.value === 'problem') return items.filter((i) => rank(i) === 0)
   if (itemFilter.value === 'ok') return items.filter((i) => i.status === 'ok' || i.status === 'skip')
   return items
 })
@@ -940,15 +980,28 @@ function itemRetryLocked(): boolean {
   const t = detailTask.value
   return t?.status === 'running' || t?.pause_requested === true
 }
-/** 明细行「重新下载」的可用性与提示：成功/跳过无需重下，进行中/排队中不可重下 */
-function itemRetryDisabled(status: string): boolean {
-  if (itemRetryLocked()) return true
-  return status === 'ok' || status === 'skip' || status === 'running' || status === 'pending'
+/** 链接行是否存在「部分文件失败」：status=ok/skip 但 live 有 fail>0——
+ *  整链判成功（局部成功不算失败），结果列却显示「失败 N」，业界做法（qBittorrent
+ *  Recheck / IDM 分段重试）允许对这类缺口补跑，且重跑幂等（已落盘文件自动跳过） */
+function itemPartialFail(row: DownloadItem): boolean {
+  const live = row.live
+  if (!live) return false
+  return PROGRESS_TYPES.some((t) => (live[t]?.fail || 0) > 0)
 }
-function itemRetryTip(status: string): string {
+/** 明细行「重新下载」的可用性与提示：整链成功/跳过无需重下；部分文件失败可补跑；
+ *  进行中/排队中不可重下（任务在跑时整任务重排队会与 worker 并发） */
+function itemRetryDisabled(row: DownloadItem): boolean {
+  if (itemRetryLocked()) return true
+  if (row.status === 'ok' || row.status === 'skip') return !itemPartialFail(row)
+  return row.status === 'running' || row.status === 'pending'
+}
+function itemRetryTip(row: DownloadItem): string {
   if (itemRetryLocked()) return '任务正在下载中（或暂停后仍在收尾），请等它停下后再重下该链接'
-  if (status === 'ok' || status === 'skip') return '该链接已成功，无需重下'
-  if (status === 'running' || status === 'pending') return '该链接正在下载或排队中，暂不能重下'
+  if (row.status === 'ok' || row.status === 'skip') {
+    if (!itemPartialFail(row)) return '该链接已成功，无需重下'
+    return '该链接有部分文件失败：重跑会自动跳过已存在的文件，只补失败的部分'
+  }
+  if (row.status === 'running' || row.status === 'pending') return '该链接正在下载或排队中，暂不能重下'
   return '重新下载该链接（在本任务内重跑，结果显示在当前详情）'
 }
 
@@ -1434,9 +1487,11 @@ onBeforeUnmount(() => {
              信息不丢失——「详情」抽屉的 el-descriptions 已含「创建时间」，且列表默认排序在
              终态分支内部仍按 created_at 倒序（与是否渲染该列无关）。
              移除释放 100px 固定宽度，据此把进度列 min-width 提到 300：
-             横滚下限由 962 降至 902，仍低于原 970：按内容区=视口−侧栏(展开212/折叠64)−页卡边距
-             (~40) 估算，视口约 ≥1006（侧栏折叠）/ ≥1154（侧栏展开）即可完整铺开不横滚。 -->
-        <el-table-column label="操作" width="200" fixed="right">
+             横滚下限由 962 降至 902；2026-09-27 操作列 200→224（补「补跑失败」按钮，
+             最坏四按钮并存：详情+下载+补跑失败+删除）升至 926，仍低于原 970：
+             按内容区=视口−侧栏(展开212/折叠64)−页卡边距(~40) 估算，
+             视口约 ≥1030（侧栏折叠）/ ≥1178（侧栏展开）即可完整铺开不横滚。 -->
+        <el-table-column label="操作" width="224" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" @click="showDetail(row)">详情</el-button>
             <el-button
@@ -1458,6 +1513,15 @@ onBeforeUnmount(() => {
             >
               下载
             </el-button>
+            <!-- 「补跑失败」= 只补「整体成功但部分文件失败」的链接（「下载」不覆盖的缺口，
+                 与其互补不重叠）：终态 done 任务的唯一补跑入口，幂等（已存在文件自动跳过） -->
+            <el-tooltip
+              v-if="canRetryPartial(row)"
+              content="只补「部分文件失败」的链接（结果列有「失败 N」的行）；已存在的文件会自动跳过。失败/已取消链接请用「下载」"
+              placement="top"
+            >
+              <el-button link type="success" @click="retryPartialFiles(row)">补跑失败</el-button>
+            </el-tooltip>
             <el-button
               v-if="!TERMINAL.includes(row.status)"
               link
@@ -1555,6 +1619,16 @@ onBeforeUnmount(() => {
               @click="downloadTask(row)"
             >
               下载
+            </el-button>
+            <!-- 与桌面表格同源同口径：「补跑失败」只补「部分文件失败」的链接（移动端同入口） -->
+            <el-button
+              v-if="canRetryPartial(row)"
+              size="small"
+              type="success"
+              link
+              @click="retryPartialFiles(row)"
+            >
+              补跑失败
             </el-button>
             <el-button
               v-if="!TERMINAL.includes(row.status)"
@@ -1979,14 +2053,15 @@ onBeforeUnmount(() => {
           </el-table-column>
           <el-table-column label="操作" width="88" fixed="right">
             <template #default="{ row }">
-              <!-- 成功/跳过无需重下；running/pending 正在处理不可重下 -->
-              <el-tooltip :content="itemRetryTip(row.status)" placement="top">
+              <!-- 整链成功/跳过无需重下；部分文件失败（结果列「失败 N」）可补跑（幂等）；
+                   running/pending 正在处理不可重下 -->
+              <el-tooltip :content="itemRetryTip(row)" placement="top">
                 <!-- 包裹层不可省：disabled 按钮不派发鼠标事件，tooltip 会静默不显示 -->
                 <span class="tip-wrap">
                   <el-button
                     link
                     type="primary"
-                    :disabled="itemRetryDisabled(row.status)"
+                    :disabled="itemRetryDisabled(row)"
                     @click="retryItem(row)"
                   >
                     重新下载

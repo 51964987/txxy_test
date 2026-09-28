@@ -417,9 +417,11 @@ class DownloadTaskManager:
         }
         saved_dirs: list[str] = []
         # 实时进度聚合：current_link = 在途链接（_inflight）各类型 total/done/fail 求和；
-        # failed_total = 全任务累计失败（含已完成链接，用户要的「失败：图片 8 · 种子 1」）；
-        # success_total = 全任务累计成功文件数（含已完成链接与在途已落盘文件，与 failed_total
-        # 同源同循环聚合，悬浮说明用；done 含已存在跳过，与 fail 互斥不计失败文件）
+        # failed_total = 各链接**最近一次执行**的失败文件累计（含已完成链接，用户要的
+        #   「失败：图片 8 · 种子 1」；重跑时 _reset_item 清 live，故不叠加历史轮次，
+        #   2026-09-27 由「全任务累计」收敛为「当前缺口」口径）；
+        # success_total = 同口径的成功文件数（含已存在跳过，与 failed_total 同源同循环
+        #   聚合，悬浮说明用；done 含已存在跳过，与 fail 互斥不计失败文件）
         inflight: set[int] = set(t.get("_inflight", []) or [])
         cur: dict[str, dict[str, int]] = {tp: {"total": 0, "done": 0, "fail": 0} for tp in PROGRESS_TYPES}
         failed_total: dict[str, int] = {}
@@ -803,12 +805,7 @@ class DownloadTaskManager:
         for it in t["items"]:
             status = it.get("status")
             if status in ("fail", "cancelled", "running"):
-                # 重置该链接，准备重跑（清空旧结果，让 download_files 重新落盘）
-                it["status"] = "pending"
-                it["stats"] = {}
-                it["error"] = None
-                it["saved_dir"] = None
-                it["elapsed"] = None
+                self._reset_item(it)  # 清旧结果 + 清 live 计数器（否则重跑口径叠加）
                 pending_count += 1
             elif status == "pending":
                 pending_count += 1
@@ -911,31 +908,99 @@ class DownloadTaskManager:
             # running/pending 正在跑或排队中，无需重复提交
             if item.get("status") in ("running", "pending"):
                 return False
-            # 重置该链接，准备重跑（清空旧结果，让 download_files 重新落盘）
-            item["status"] = "pending"
-            item["stats"] = {}
-            item["error"] = None
-            item["saved_dir"] = None
-            item["elapsed"] = None
-            # 重置任务整体为可调度状态（若已终态）；done 仅计真正成功/跳过（ok+skip），
-            # 失败/取消不计入，否则与进度条口径矛盾（进度 50/50 却全失败/取消）
-            t["cancel_requested"] = False
-            t["done"] = sum(1 for it in t["items"] if it.get("status") in ("ok", "skip"))
-            t["status"] = "pending"
-            t["started_at"] = None
-            t["finished_at"] = None
-            # 重新入队：抬高 seq 令牌、置 _queued，交给 worker 再跑一遍（只跑 pending 项）
-            self._seq += 1
-            t["_ticket"] = self._seq
-            t["_queued"] = True
-            self._queue.put((1, self._seq, tid))
-            _log(t, f"已请求重新下载 1 个链接（将在原任务内重跑）：{url}")
+            self._reset_item(item)  # 清旧结果 + 清 live 计数器（否则重跑口径叠加）
+            # 重置任务整体为可调度状态并重新入队（与 retry_partial 共用同一收尾段）
+            self._requeue_task_locked(t, f"已请求重新下载 1 个链接（将在原任务内重跑）：{url}")
             self._persist_locked()
         # 锁外启动 worker：start() 内部也会加 self._lock，必须在持锁块外调用，
         # 否则 threading.Lock 不可重入会死锁（整个下载线程卡死、所有接口超时）。
         # 这与 submit() 保持一致（submit 同样是先 start() 再在锁内 put）。
         self.start()
         return True
+
+    @staticmethod
+    def _reset_item(it: dict[str, Any]) -> None:
+        """重置单个链接准备重跑（retry_url / retry_partial / _requeue_locked 三处共用，
+        同一逻辑只允许一处定义）。
+
+        必须连 live 计数器一并清空（2026-09-27 修复）：live 是**跨执行的累加器**
+        （download_files._bump 用 `+=`，submit_one 用 setdefault 复用旧 dict）——
+        不清零则上一轮的 fail/done 会原样带入本轮：
+        - 重跑再失败 → failed_total 旧账新账一起算（如旧失败 100 → 显示 101+）；
+        - 重跑成功 → 旧失败也不清零 → done 任务常驻「失败：图片 100」假缺口，
+          「补跑失败」按钮永远可点（点了无可补跑），口径彻底污染。
+        清零后 failed_total / success_total / 明细「结果」列均为**最近一次执行**的口径
+        （即「当前缺口」），与下载履历「fail_at 非空即当前失败缺口、成功即清空」对齐。
+        """
+        it["status"] = "pending"
+        it["stats"] = {}
+        it["live"] = new_progress()
+        it["error"] = None
+        it["saved_dir"] = None
+        it["elapsed"] = None
+
+    def _requeue_task_locked(self, t: dict[str, Any], log_line: str) -> None:
+        """把已重置链接的任务整体拉回可调度状态并重新入队（**须在持锁状态下调用**）。
+
+        retry_url / retry_partial 共用的收尾段（同一逻辑只允许一处定义）：
+        done 仅计真正成功/跳过（ok+skip），失败/取消不计入，否则与进度条口径矛盾
+        （进度 50/50 却全失败/取消）；重新入队抬高 seq 令牌，旧队列元素自动失效。
+        """
+        t["cancel_requested"] = False
+        t["done"] = sum(1 for it in t["items"] if it.get("status") in ("ok", "skip"))
+        t["status"] = "pending"
+        t["started_at"] = None
+        t["finished_at"] = None
+        # 重新入队：抬高 seq 令牌、置 _queued，交给 worker 再跑一遍（只跑 pending 项）
+        self._seq += 1
+        t["_ticket"] = self._seq
+        t["_queued"] = True
+        self._queue.put((1, self._seq, t["id"]))
+        _log(t, log_line)
+
+    def retry_partial(self, tid: str) -> tuple[int, str]:
+        """补跑任务中「整体成功但部分文件失败」的链接（status 为 ok/skip 且 live 有 fail>0）。
+
+        背景（2026-09-27）：单链接部分文件失败时，只要有任一文件成功，_record_result
+        就判 ok（局部成功不算整链失败）——任务以 done 终态收场后，「开始下载」不覆盖
+        这类链接（_requeue_locked 只重排 fail/cancelled/running/pending），任务列表与
+        详情「结果」列却显示「失败 N」，用户看得见缺口却没有入口。业界做法
+        （qBittorrent Recheck / IDM 分段重试 / Sonarr 缺口重搜）都是「部分失败可补跑、
+        重试幂等」，本方法补齐该入口。
+
+        语义与守卫：
+        - 只重置 ok/skip 且 live.fail>0 的链接，不动 fail/cancelled 项（那是「开始下载」
+          的职责），不生成新任务，结果仍显示在原任务详情里；
+        - 重跑幂等：已落盘文件会被 download_files 判「已存在跳过」，只补失败的部分；
+        - 任务正在被 worker 执行（含暂停收尾窗口）拒绝——补跑把整个任务重新入队，
+          与在跑 worker 并发会重复跑同一任务（与 retry_url 同一守卫）。
+
+        返回 (本次重置的链接数, 拒绝原因)。count=0 且 reason 非空表示未执行任何重置。
+        """
+        with self._lock:
+            t = self._tasks.get(tid)
+            if not t:
+                return 0, "任务不存在"
+            if t.get("_executing") or t.get("pause_requested"):
+                return 0, "任务正在下载中（或暂停后仍在收尾），请等它停下后再补跑"
+            n = 0
+            for it in t["items"]:
+                if it.get("status") not in ("ok", "skip"):
+                    continue
+                live = it.get("live") or {}
+                if not any((cell or {}).get("fail", 0) > 0 for cell in live.values()):
+                    continue
+                self._reset_item(it)  # 清旧结果 + 清 live 计数器（否则重跑口径叠加）
+                n += 1
+            if not n:
+                return 0, "没有「部分文件失败」的链接可补跑"
+            self._requeue_task_locked(
+                t, f"已请求补跑 {n} 个部分失败的链接（已存在的文件会自动跳过）"
+            )
+            self._persist_locked()
+        # 锁外启动 worker：与 retry_url 同一理由（threading.Lock 不可重入，锁内 start 会死锁）
+        self.start()
+        return n, ""
 
     def prioritize(self, tid: str) -> bool:
         """排队任务插队（D5）：仅 pending 且仍在队列中的任务有效。

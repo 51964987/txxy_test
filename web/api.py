@@ -3099,6 +3099,23 @@ def downloads_retry_url(tid: str, req: DownloadRetryUrlReq) -> dict[str, Any]:
     return {"id": tid, "url": req.url}
 
 
+@router.post("/downloads/{tid}/retry-partial")
+def downloads_retry_partial(tid: str) -> dict[str, Any]:
+    """补跑任务里「整体成功但部分文件失败」的链接（ok/skip 且 live 有 fail>0）。
+
+    与 /retry-url（单链接）、/batch-start（重跑 fail/cancelled 项）互补：
+    任务终态 done 但「结果」列有「失败 N」时的唯一补跑入口。重跑幂等——
+    已落盘文件会被判「已存在跳过」，只补失败的部分（业界下载器通行做法）。
+    400 = 任务不存在 / 无可补跑链接 / 任务正在下载中（补跑会整任务重新入队）。
+    """
+    count, reason = download_tasks.manager.retry_partial(tid)
+    if count == 0:
+        raise HTTPException(400, reason)
+    # 补跑链接重新进入「在途」：与 /retry-url 同一套「写后即失效」约定
+    _invalidate_download_stats()
+    return {"id": tid, "count": count}
+
+
 @router.post("/downloads/clear")
 def downloads_clear() -> dict[str, Any]:
     """清空「已完成」（done）任务记录：failed / cancelled 保留，返回删除数。"""

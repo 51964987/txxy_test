@@ -751,7 +751,8 @@ export interface DownloadDupResult {
   running: string[]
 }
 
-export type DownloadItemStatus = 'pending' | 'ok' | 'skip' | 'fail' | 'cancelled'
+/** 单链接状态：running=正在下载（worker 执行期间的真实状态，此前类型遗漏） */
+export type DownloadItemStatus = 'pending' | 'running' | 'ok' | 'skip' | 'fail' | 'cancelled'
 /** 任务状态：paused（已暂停）是**非终态**——未跑链接保留为 pending，可由 startDownloads 继续 */
 export type DownloadTaskStatus = 'pending' | 'running' | 'paused' | 'done' | 'failed' | 'cancelled'
 
@@ -1035,9 +1036,16 @@ export const api = {
   startDownloads: (ids: string[]) => post<DownloadBatchResult>('/downloads/batch-start', { ids }),
   /** 批量暂停：排队中 / 下载中任务转「已暂停」（非终态，可再「开始下载」继续） */
   pauseDownloads: (ids: string[]) => post<DownloadBatchResult>('/downloads/batch-pause', { ids }),
-  /** 重新下载任务里的单个链接（就地重跑原任务，不另开任务）；404 = 链接不存在或正在下载 */
+  /** 重新下载任务里的单个链接（就地重跑原任务，不另开任务）；409 = 链接不存在或正在下载 */
   retryDownloadUrl: (id: string, url: string) =>
     post<{ id: string; url: string }>(`/downloads/${id}/retry-url`, { url }),
+  /**
+   * 补跑任务里「整体成功但部分文件失败」的链接（ok/skip 且 live 有 fail>0）。
+   * 与 retryDownloadUrl（单链接）、startDownloads（重跑 fail/cancelled 项）互补；
+   * 幂等：已落盘文件自动跳过，只补失败的部分。400 = 无可补跑链接或任务正在下载中。
+   */
+  retryDownloadPartial: (id: string) =>
+    post<{ id: string; count: number }>(`/downloads/${id}/retry-partial`),
   prioritizeDownload: (id: string) => post<{ id: string }>(`/downloads/${id}/prioritize`),
   clearDownloads: () => post<{ cleared: number }>('/downloads/clear'),
   deleteDownload: (id: string) => del<{ id: string }>(`/downloads/${id}`),
