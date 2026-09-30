@@ -71,5 +71,5 @@ txxy_test/                  # 抓取脚本在项目根：scraper.py / run_batch.
 | 页内参数设置 | `web/settings.py` | 唯一实现：`get/get_int/get_float/get_bool` + `snapshot/update/reset/apply_runtime`；只存覆盖值，默认值仍在各归属模块 |
 | 计划时刻规格化 | `web/config.py: normalize_times()` | 丢弃非法项、去重、升序、限量 `MAX_SCHEDULE_TIMES` |
 | 布尔环境变量解析 | `web/config.py: _env_bool()` | 布尔配置解析入口 |
-| 定时抓取调度 | `web/scheduler.py: ScrapeScheduler` | 应用内调度（60s tick 守护线程）：复用 `runs.start_run`、幂等键落盘、错过不补跑 |
+| 定时抓取调度 | `web/scheduler.py: JobScheduler` | 应用内调度（60s tick 守护线程，任务注册模式 `ScheduledJob`/`ScrapeJob`/`PrecipitateJob`）：复用 `runs.start_run`、幂等键落盘、错过不补跑（`ScrapeScheduler` 为旧名） |
 | 错误提示 | `web/app.py` + 前端 `ElMessage.error` | 后端统一 `detail`，前端统一解析 |
