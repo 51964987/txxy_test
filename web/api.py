@@ -920,6 +920,7 @@ def _health_verdict(
     ok: int,
     total_sections: int,
     run_date: str | None,
+    run_time: str | None = None,         # 批次启动时刻（"HH:MM:SS"，日志回退记录可能为 None）
     progress: int | None,
     running: int,
     failed_sections: list[str],
@@ -933,9 +934,15 @@ def _health_verdict(
     ＞ 批次失败（有版块没抓到）＞ 发布空窗（入库正常但站点当期无新帖，仅提示）
     ＞ 资产停滞（采集一切正常，只是久未沉淀新的本地资产）。
 
+    批次语义的文案统一带「日期 + 时刻」（run_stamp，时刻截到 HH:MM 与设置页定时
+    时刻口径一致）；日志回退记录无时刻 → 退化为仅日期，二者皆无 → "—"。
+    滞后类文案（距今 N 天）天然无批次时刻，不拼接。
+
     抽成纯函数的理由：真实数据长期处于正常态，warn / danger 分支无法自然复现，
     内联在查询流程里就只能靠推演；独立后可用等价脚本逐分支实测（见交付说明）。
     """
+    # 批次标识（文案统一来源）：有时刻截到 HH:MM，仅日期 / "—" 逐级退化
+    run_stamp = f"{run_date or '—'}{f' {run_time[:5]}' if run_time else ''}"
     level = "ok"
     if (run_lag_days is not None and run_lag_days >= 3) or (run_status == "error" and fail > 0):
         level = "danger"
@@ -958,23 +965,23 @@ def _health_verdict(
         # 进行中用「版块级明细」替代裸百分比：成功 / 失败 / 未执行 + 进行中数量，
         # 一眼看清批次进度（与运行记录页版块状态同源）；百分比作为次信息不再作主文案。
         message = (
-            f"成功 {ok} 个版块 / 失败 {fail} 个 / 未执行 {skip} 个"
+            f"批次 {run_stamp} 进行中 · 成功 {ok} 个版块 / 失败 {fail} 个 / 未执行 {skip} 个"
             f"（{running} 个进行中）"
         )
     elif fail:
-        message = f"最近批次 {fail} 个版块失败：{'、'.join(failed_sections) or '详见运行记录'}"
+        message = f"最近批次 {run_stamp}：{fail} 个版块失败：{'、'.join(failed_sections) or '详见运行记录'}"
     elif run_lag_days is not None and run_lag_days >= 2:
         message = f"已 {run_lag_days} 天无入库活动"
     elif run_status == "error":
-        message = "最近批次异常结束（无失败版块明细）"
+        message = f"最近批次 {run_stamp} 异常结束（无失败版块明细）"
     elif run_status == "cancelled":
-        message = "最近批次被手动中断"
+        message = f"最近批次 {run_stamp} 被手动中断"
     elif days_lag is not None and days_lag >= 3:
         message = f"最新发布日距今 {days_lag} 天（入库正常，站点当期无新帖）"
     elif asset_stall_days is not None and asset_stall_days >= _ASSET_STALL_DAYS:
         message = f"已 {asset_stall_days} 天无新增本地资产（采集正常）"
     elif total_sections:
-        message = f"最近批次 {run_date or '—'} 正常 · {ok}/{total_sections} 个版块成功"
+        message = f"最近批次 {run_stamp} 正常 · {ok}/{total_sections} 个版块成功"
     else:
         message = "暂无批次记录"
     return level, message
@@ -1065,6 +1072,7 @@ def stats_health() -> HealthResp:
             ok=ok,
             total_sections=total_sections,
             run_date=run_date,
+            run_time=run_time,
             progress=progress,
             running=int(latest.get("running") or 0) if latest else 0,
             failed_sections=failed_sections,
