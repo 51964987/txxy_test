@@ -24,6 +24,7 @@ import ratelimit
 import resources
 import runs
 import scheduler
+import kb_export  # 项目根模块（scheduler 导入即确认项目根在 sys.path）：批次运行现场唯一来源
 import settings
 import precipitate
 
@@ -766,6 +767,35 @@ def schedule_status() -> dict[str, Any]:
     避免页面上显示的「下次执行」与实际调度口径不一致。
     """
     return scheduler.scheduler.status()
+
+
+@router.post("/kb/run")
+def kb_run() -> dict[str, Any]:
+    """手动触发一次知识库增量批次（设置页「立即执行增量」按钮）。
+
+    与定时增量同一入口（KbJob 工作线程）、同一筛选条件（kb_fids / kb_date_scope）、
+    同一份批次状态；执行异步（批次可达小时级，不阻塞请求），结果写回调度状态 last。
+    防重 / 抓取活跃 / 磁盘水位拒绝以 ValueError 抛出 → 409。"""
+    try:
+        return scheduler.scheduler.trigger_kb_run()
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+
+@router.get("/kb/logs")
+def kb_logs(after: int = Query(0, ge=0)) -> dict[str, Any]:
+    """知识库批次运行现场（设置页「执行日志」抽屉，GET /api/kb/logs?after=<seq>）。
+
+    增量日志（kb_export 进程内环形缓冲，仅返回 after 之后的新行）+ 结构化进度 +
+    运行态一次拿全，前端 2s 轮询增量追加。纯内存切片 O(新增行数)，
+    禁止在此路径查库 / 扫盘（原 10：推送通道禁止每帧全量重算）。"""
+    lines, last_seq = kb_export.log_snapshot(after)
+    return {
+        "running": scheduler.scheduler.kb_running(),
+        "lines": lines,
+        "last_seq": last_seq,
+        "progress": dict(kb_export.live_progress) or None,
+    }
 
 
 @router.post("/precipitate/run")

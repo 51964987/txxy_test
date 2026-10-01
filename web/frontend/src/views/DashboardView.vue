@@ -997,6 +997,7 @@ const SCHEDULE_ACTION_TEXT: Record<ScheduleAction, string> = {
   skipped: '跳过（上一批仍在跑）',
   missed: '错过（当时服务未运行）',
   failed: '启动失败',
+  done: '执行完成',
 }
 
 /** 健康条定时抓取徽标：启用 → 「定时 08:00/20:00 · 下次 今天 20:00 · 今日 1/2」；未启用 → 灰字提示 */

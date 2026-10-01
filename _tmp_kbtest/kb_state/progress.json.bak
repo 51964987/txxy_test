@@ -1,0 +1,44 @@
+{
+ "initial_done": false,
+ "recovery_mode": false,
+ "done": {},
+ "failed": {
+  "E2E测试样本帖二：运行态与增量游标验证": {
+   "count": 2,
+   "reason": "抓取: 请求失败 / 非 200",
+   "last_at": "2026-10-01 23:09:38"
+  },
+  "E2E测试样本帖一：环形缓冲与进度验证": {
+   "count": 2,
+   "reason": "抓取: 请求失败 / 非 200",
+   "last_at": "2026-10-01 23:09:39"
+  }
+ },
+ "permanent": [],
+ "last_summary": {
+  "total": 0,
+  "fetched": 0,
+  "reconverted": 0,
+  "skipped_idempotent": 0,
+  "skipped_human_modified": 0,
+  "human_overwrite_warn": 0,
+  "failed_fetch": 2,
+  "failed_extract": 0,
+  "llm_done": 0,
+  "llm_failed": 0,
+  "llm_skipped_no_key": 0,
+  "llm_content_filtered": 0,
+  "truncated": 0,
+  "empty_name_fallback": 0,
+  "orphan_old_url_rows": 0,
+  "skipped_moved_or_deleted": 0,
+  "permanent_now": 0,
+  "magnet_rewritten": 0,
+  "magnet_conflict_skipped": 0,
+  "watermark_stop": false,
+  "llm_stage_posts": 0,
+  "filter_fids": [],
+  "filter_date_scope": "all",
+  "elapsed_seconds": 1.9
+ }
+}

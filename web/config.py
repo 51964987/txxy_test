@@ -21,6 +21,7 @@
 """
 import os
 import re
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 
@@ -275,3 +276,101 @@ PRECIPITATE_SCHEDULE_STATE_FILE = Path(
 # 默认 20 GB，与资产条「磁盘剩余」红色判据（不足 10% 或不足 20GB）对齐——盘快满时自动下载会自动停，
 # 不会把盘写爆；该值可在参数设置页「自动下载」组调小（如只想留 5GB 余量）。
 PRECIPITATE_MIN_FREE_GB = int(os.environ.get("TXXY_PRECIPITATE_MIN_FREE_GB", "20"))
+
+# ---------------- 知识库沉淀定时增量（kb_export 一期，方案 §3.7） ----------------
+# 由 web/scheduler.py 的 KbJob 按时刻拉起独立工作线程执行 kb_export 增量批次。
+# 注意水位阈值**不在此新定义**：复用媒体线唯一常量 PRECIPITATE_MIN_FREE_GB（原 37/38）。
+# 隔离实例环境变量（原 47）：TXXY_VAULT_ROOT / TXXY_KB_STATE_ROOT / TXXY_KB_SCHEDULE_STATE_FILE，
+# 路径类变量均无 TXXY_ 之外的约束，唯 vault / kb_state 根随本节键一并进原 47 表。
+KB_EXPORT_ENABLED = _env_bool("TXXY_KB_EXPORT_ENABLED", True)
+# 默认每晚 23:00（2026-09-29 用户确认）；页内「知识库」组可改
+KB_EXPORT_TIMES = normalize_times(os.environ.get("TXXY_KB_EXPORT_TIMES", "23:00"))
+# 调度状态（已处理时刻 + 上次结果）：与抓取 / 沉淀调度状态同一模式
+KB_EXPORT_SCHEDULE_STATE_FILE = Path(
+    os.environ.get("TXXY_KB_SCHEDULE_STATE_FILE", str(BASE_DIR / "outputs" / "kb_schedule_state.json"))
+)
+# 错过容差（秒）：与抓取调度同口径（tick 晚于计划时刻超过该值记「未执行」不补跑）
+KB_EXPORT_MISS_TOLERANCE = int(os.environ.get("TXXY_KB_SCHEDULE_MISS_TOLERANCE", "600"))
+# 定时增量单批帖数上限（≥ 实测日均增量 × 2，修订 31；默认 3000）。
+# 唯一定义在此（config 为 kb_export 与 settings 的公共下游，避免二者互相引用成环）；
+# kb_export 以转发引用暴露同名常量，白名单默认值亦取此处。
+KB_BATCH_MAX_POSTS = int(os.environ.get("TXXY_KB_BATCH_MAX_POSTS", "3000"))
+
+# ---- LLM 编译层配置（修订 13/36；修订 37 多后端化：provider/model/base_url 页内可改，API key env-only）----
+# 默认值唯一定义在此（config 为 kb_export 与 settings 的公共下游）；优先级链（原 31）：
+# 页内覆盖（web_settings.json）→ 环境变量 → 代码默认。key 绝不进页 / 不入 web_settings.json。
+# 各后端官方 base_url（2026-10-01 官方文档取证）：
+#   DeepSeek：OpenAI 兼容，https://api.deepseek.com（/v1 亦可），见 api-docs.deepseek.com/zh-cn；
+#   GLM/智谱：https://open.bigmodel.cn/api/paas/v4，见 docs.bigmodel.cn/cn/guide/start/quick-start；
+#   Ollama：OpenAI 兼容端点 http://127.0.0.1:11434/v1，见 ollama 文档 openai.md。
+LLM_PROVIDER_SPECS: dict[str, dict[str, Any]] = {
+    "deepseek": {
+        "label": "DeepSeek（云 API）",
+        "base_url": "https://api.deepseek.com/v1",
+        "models": ["deepseek-chat", "deepseek-reasoner", "deepseek-v4.1-flash"],
+    },
+    "glm": {
+        "label": "GLM / 智谱（云 API）",
+        "base_url": "https://open.bigmodel.cn/api/paas/v4",
+        "models": ["glm-5.3-flash", "glm-4.6", "glm-4.5-air", "glm-4.5-flash"],
+    },
+    "ollama": {
+        "label": "本地 Ollama",
+        "base_url": "http://127.0.0.1:11434/v1",
+        "models": [],  # 本地模型随 ollama list 而定，不预设选项（页内自由填写）
+    },
+    "custom": {
+        "label": "自定义（OpenAI 兼容）",
+        "base_url": "",  # 必填：页内自填地址
+        "models": [],
+    },
+}
+LLM_PROVIDERS = list(LLM_PROVIDER_SPECS)        # 页内下拉受限取值（随快照 options 下发）
+LLM_PROVIDER_DEFAULT = "deepseek"               # 修订 37：原 cloud 档废除，默认改 DeepSeek
+LLM_MODEL_DEFAULT = ""                          # 空字符串 = 未配置（LLM 段降级跳过并留待办）
+
+
+def default_llm_base_url(provider: str) -> str:
+    """按 provider 给 base_url 代码默认（env 覆盖与页内覆盖不在此层）；未知档位回落默认档。"""
+    return LLM_PROVIDER_SPECS.get(provider, {}).get("base_url") or LLM_PROVIDER_SPECS[LLM_PROVIDER_DEFAULT]["base_url"]
+
+
+def default_llm_model(provider: str) -> str:
+    """按 provider 给模型名代码默认：该档预置的第一个模型；无预置档（ollama/custom）为空 = 未配置。"""
+    models = LLM_PROVIDER_SPECS.get(provider, {}).get("models") or []
+    return str(models[0]) if models else LLM_MODEL_DEFAULT
+
+
+def llm_key_env(provider: str) -> str:
+    """API key 的环境变量名（唯一拼接规则，2026-10-01 用户拍板）：{PROVIDER 大写}_API_KEY；
+    Ollama 本地无需鉴权 → 空串。键名示例：DEEPSEEK_API_KEY / GLM_API_KEY / CUSTOM_API_KEY。"""
+    return "" if provider == "ollama" else f"{provider.upper()}_API_KEY"
+
+
+def llm_api_key(provider: str) -> str:
+    """按生效 provider 从环境变量解析 API key（旧 TXXY_LLM_API_KEY 口径废除，不兼容保留）；
+    Ollama 档返回空串（调用方据此跳过 Authorization 头）。"""
+    env_name = llm_key_env(provider)
+    return os.environ.get(env_name, "").strip() if env_name else ""
+
+
+# ---- 知识库增量发布日期范围（修订 37：原 kb_only_today 布尔升级为多档枚举）----
+# 取值集合与默认值唯一定义在此；kb_export 增量筛选与设置页枚举共用。
+KB_DATE_SCOPES = ["all", "today", "yesterday", "3d", "7d"]
+KB_DATE_SCOPE_DEFAULT = "all"  # 与原 kb_only_today 代码默认（不限）同语义；「今天」由页内覆盖承担
+
+
+def kb_date_window(scope: str, today: str) -> tuple[str | None, str | None]:
+    """kb_date_scope → 发布日期闭区间 [lo, hi]（与 posts.date 同为 YYYY-MM-DD 字符串，可直接比较）。
+    today = 服务本地时区的当天（YYYY-MM-DD）。未知值一律回落「不限」（all），不抛错。"""
+    if scope == "today":
+        return today, today
+    if scope == "yesterday":
+        lo = (datetime.strptime(today, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
+        return lo, lo
+    days = {"3d": 3, "7d": 7}.get(scope)
+    if days:
+        lo = (datetime.strptime(today, "%Y-%m-%d") - timedelta(days=days - 1)).strftime("%Y-%m-%d")
+        return lo, today
+    return None, None  # all（含未知值）：不限发布日期，增量集由单批帖数上限兜底
+

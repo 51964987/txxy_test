@@ -29,6 +29,7 @@ import config
 import runs
 import settings
 import precipitate
+import kb_export  # 项目根模块（settings 已把项目根加进 sys.path）：知识库增量批次唯一执行入口
 
 
 _TICK_SECONDS = 60
@@ -314,6 +315,112 @@ class PrecipitateJob(ScheduledJob):
             self._mark_locked(state, date, at, action, reason)
 
 
+class KbJob(ScheduledJob):
+    """定时知识库增量批次（kb_export 一期，方案 §3.7）。
+
+    「拉起独立工作线程」是第三种执行模式而非同模式注册（修订 16）：
+    tick 只负责判时触发，长批次在线程里跑，tick 心跳照常落盘。
+    """
+
+    name = "kb"
+
+    def __init__(self) -> None:
+        # 独立锁实例（修订 20 拍板）：ScheduledJob._lock 是**类属性**、全子类共用，
+        # 且 PrecipitateJob.handle_slot 持锁内同步执行分钟级自动下载——kb 若共用共享锁，
+        # 到点判定会被长期占用、超错过容差记 missed（当晚增量静默丢失）。
+        # 实例属性覆盖类属性后，仅本任务的 tick 判定被串行化，与抓取 / 沉淀互不阻塞。
+        self._lock = threading.Lock()  # 实例属性有意覆盖类属性（见上注释，修订 20）
+        self._worker: threading.Thread | None = None
+
+    def enabled(self) -> bool:
+        return settings.get_bool("kb_export_enabled", config.KB_EXPORT_ENABLED)
+
+    def times(self) -> list[str]:
+        return config.normalize_times(settings.get("kb_export_times", config.KB_EXPORT_TIMES))
+
+    def state_file(self) -> Path:
+        return config.KB_EXPORT_SCHEDULE_STATE_FILE
+
+    def _miss_tolerance(self) -> int:
+        return config.KB_EXPORT_MISS_TOLERANCE
+
+    def handle_slot(self, date: str, at: str) -> tuple[str, str]:
+        """处理单个计划时刻，返回 (action, reason)。**必须秒回**（修订 19 硬约束）：
+        tick 在共享判定流程内同步调用本方法，任何同步长执行都会停摆心跳。"""
+        # ① 错过判定（与 ScrapeJob 同口径：晚于计划时刻超容差 = 当时服务未运行，不补跑）
+        planned = datetime.strptime(f"{date} {at}", "%Y-%m-%d %H:%M")
+        late = (datetime.now() - planned).total_seconds()
+        if late > self._miss_tolerance():
+            return "missed", f"已过计划时刻 {int(late // 60)} 分钟（当时服务未运行），按「不补跑」跳过"
+        # ② 抓取活跃即跳过（修订 15：不等待；kb 与抓取无互斥锁，单向让路）
+        if runs.has_active_run() or runs.active_pid() is not None:
+            return "skipped", "抓取批次正在运行，本次知识库增量跳过（不等待）"
+        # ③ 上一批 kb 增量仍在执行（工作线程级防重；跨进程互斥由 kb_export 的 OS 文件锁兜底）
+        if self._worker is not None and self._worker.is_alive():
+            return "skipped", "上一批知识库增量仍在执行，跳过本次"
+        # ④ 磁盘水位启动校验（修订 33⑥：低于阈值 skipped 且原因页面可见）
+        threshold = settings.get_int("precipitate_min_free_gb", config.PRECIPITATE_MIN_FREE_GB)
+        free = kb_export._disk_free_gb(kb_export.KB_STATE_ROOT)
+        if free < threshold:
+            return "skipped", f"磁盘水位不足（剩余 {free:.1f}GB < {threshold}GB），跳过本次增量"
+        # ⑤ 秒回三步之末：起独立工作线程执行批次（批次结果经 record_now 写回 last）
+        # 注：「首建完成标记未置位即拒绝」（修订 18/19）已按 2026-10-01 需求调整移除——
+        # 暂缓全库首建、只做增量；防增量集退化职责由单批帖数上限 + 增量筛选条件承担。
+        self._worker = threading.Thread(
+            target=self._run_batch_thread, name="kb-export-worker", daemon=True
+        )
+        self._worker.start()
+        return "started", "已启动知识库增量批次（后台线程执行，结果见「上次结果」）"
+
+    def trigger_manual(self) -> dict[str, Any]:
+        """手动触发一次增量批次（设置页「立即执行增量」按钮，POST /api/kb/run）。
+
+        与定时同一执行入口 / 同一筛选 / 同一份状态（状态同源，原 21/40/43）；
+        防重与守卫判据与 handle_slot 同口径，拒绝以 ValueError 抛出（API 层转 409）。"""
+        if self._worker is not None and self._worker.is_alive():
+            raise ValueError("上一批知识库增量仍在执行，请等它结束再触发")
+        if runs.has_active_run() or runs.active_pid() is not None:
+            raise ValueError("抓取批次正在运行，为避免叠加镜像链压力，请等抓取结束后再触发")
+        threshold = settings.get_int("precipitate_min_free_gb", config.PRECIPITATE_MIN_FREE_GB)
+        free = kb_export._disk_free_gb(kb_export.KB_STATE_ROOT)
+        if free < threshold:
+            raise ValueError(f"磁盘水位不足（剩余 {free:.1f}GB < {threshold}GB），已停止触发")
+        self._worker = threading.Thread(
+            target=self._run_batch_thread, name="kb-export-worker", daemon=True
+        )
+        self._worker.start()
+        # 手动触发不在 fired 体系（无计划时刻），直接写 last 供设置页立即反映
+        self.record_now("started", "已手动启动知识库增量批次（后台线程执行，结果见本条更新）")
+        return {"started": True}
+
+    def _run_batch_thread(self) -> None:
+        """工作线程体：复用 kb_export 唯一执行入口（与手动 CLI 同一函数、同一份状态、同锁互斥）。"""
+        try:
+            summary = kb_export.run_scheduled()
+        except Exception as e:  # 单次执行异常不能拖垮调度（线程级隔离）
+            self.record_now("failed", f"知识库增量执行异常: {e}")
+            return
+        action = "failed" if summary.get("error") else "done"
+        self.record_now(action, kb_export.summarize_reason(summary))
+
+    def record_now(self, action: str, reason: str) -> None:
+        """工作线程执行完毕后把结果写回调度状态 last（与定时口径同源，设置页实时反映）。"""
+        now = datetime.now()
+        with self._lock:
+            state = self._load_state()
+            self._mark_locked(state, now.strftime("%Y-%m-%d"), now.strftime("%H:%M"), action, reason)
+
+    def _extra_status(self) -> dict[str, Any]:
+        """job 级状态（修订 23/25 两级口径）：挂既有 /api/schedule 快照 + 设置页调度区透出。
+
+        quick_status 为廉价口径（COUNT − done 代理积压，60s TTL memo），
+        禁止在状态查询路径做全量 exists() 磁盘判据（修订 20）。"""
+        extra: dict[str, Any] = kb_export.quick_status()
+        extra["running"] = bool(self._worker is not None and self._worker.is_alive())
+        extra["tick_seconds"] = _TICK_SECONDS
+        return extra
+
+
 class JobScheduler:
     """多任务类型调度器：单线程 tick 所有已注册任务，对外暴露 start/stop/tick/status。"""
 
@@ -321,6 +428,7 @@ class JobScheduler:
         self._jobs: dict[str, ScheduledJob] = {
             "scrape": ScrapeJob(),
             "precipitate": PrecipitateJob(),
+            "kb": KbJob(),
         }
         self._lock: threading.Lock = threading.Lock()
         self._thread: threading.Thread | None = None
@@ -343,6 +451,20 @@ class JobScheduler:
         """手动沉淀（/precipitate/run）后回填状态，供设置页「上次结果 / 磁盘告警」实时反映，
         与定时沉淀落同一份 last（同源口径）。"""
         self._jobs["precipitate"].record_now(summary)
+
+    def trigger_kb_run(self) -> dict[str, Any]:
+        """手动触发知识库增量（/api/kb/run）：防重 / 守卫在 KbJob.trigger_manual 内，
+        拒绝以 ValueError 抛出（API 层转 409）。"""
+        kb_job = self._jobs.get("kb")
+        if kb_job is None:
+            raise ValueError("知识库任务未注册")
+        return kb_job.trigger_manual()
+
+    def kb_running(self) -> bool:
+        """知识库增量工作线程是否存活（/api/kb/logs 运行态唯一取值口径，
+        与快照 extra["running"] 同判据；前端禁止另行推断）。"""
+        kb_job = self._jobs.get("kb")
+        return bool(kb_job is not None and kb_job._worker is not None and kb_job._worker.is_alive())
 
     def start(self) -> None:
         """启动调度线程（幂等）：先立即 tick 一次，再按间隔循环。

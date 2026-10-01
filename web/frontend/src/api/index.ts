@@ -488,6 +488,11 @@ export interface SettingItem {
   max?: number | null
   /** array 类型：可选项的键与展示标签 */
   options?: { value: string; label: string }[]
+  /** 默认值展示文案（spec.default_text）：空默认值参数用它替代「自动（取访问地址）」兜底文案 */
+  defaultText?: string | null
+  /** LLM 三项（llm_*）专有：多后端规格随快照下发（web/config.LLM_PROVIDER_SPECS），
+   *  前端切后端联动回填与模型下拉选项的唯一数据源，禁止前端复制一份字面量 */
+  providers?: Record<string, { label: string; base_url: string; models: string[]; key_env: string }>
   value: number | boolean | string[] | string
   default: number | boolean | string[] | string
   /** 来源：file=设置文件覆盖 / default=环境或默认 */
@@ -500,7 +505,7 @@ export interface AppConfig {
 }
 
 /** 定时抓取调度动作：started=已启动批次 / skipped=上一批仍在跑 / missed=错过（服务未运行）/ failed=启动失败 */
-export type ScheduleAction = 'started' | 'skipped' | 'missed' | 'failed'
+export type ScheduleAction = 'started' | 'skipped' | 'missed' | 'failed' | 'done'
 
 /** 上次调度结果（页面展示「上次结果」用，原因由后端原样给出） */
 export interface ScheduleLast {
@@ -593,10 +598,61 @@ export interface PrecipitateRunResult {
   reason: string
 }
 
+/** 知识库增量任务状态（GET /api/schedule.kb，一期方案 §3.7-5）：
+ *  job 级字段挂既有调度快照（修订 23/25 两级口径），积压为廉价代理口径 */
+export interface KbScheduleStatus {
+  enabled: boolean
+  times: string[]
+  next_run_at: string | null
+  today_done: string[]
+  last: ScheduleLast | null
+  last_tick: string | null
+  tick_age_seconds: number | null
+  /** 「首建完成」标记（--mark-initial-done）：未置位时定时增量跳过 */
+  initial_done: boolean
+  /** kb_state 处于「恢复重建」状态：--reconvert 拒绝执行，首轮须 --force */
+  recovery_mode: boolean
+  /** 待处理积压（库内帖数 − 已完成数，廉价代理口径；null = 库不可读） */
+  backlog: number | null
+  /** LLM 段积压（llm_failed 未达上限 + llm 待办清单，单独分列——修订 23） */
+  llm_backlog: number
+  permanent: number
+  done: number
+  /** 批次工作线程是否在跑 */
+  running: boolean
+  tick_seconds: number
+}
+
 /** 调度状态（GET /api/schedule）：按任务类型分组 */
 export interface ScheduleStatus {
   scrape: ScrapeScheduleStatus
   precipitate: PrecipitateScheduleStatus
+  kb: KbScheduleStatus
+}
+
+/** 知识库批次日志行（seq 全局单调递增，作增量拉取游标） */
+export interface KbLogLine {
+  seq: number
+  text: string
+}
+
+/** 知识库批次结构化进度（批次运行中由 kb_export 维护，结束后为 null） */
+export interface KbLogProgress {
+  stage: string
+  idx: number
+  total: number
+  started_at: string
+  /** LLM 段进度（进入 LLM 阶段后才有值；total 仍为抓取帖数，LLM 段用这对） */
+  llm_idx?: number
+  llm_total?: number
+}
+
+/** 知识库批次运行现场（GET /api/kb/logs?after=<seq>：增量日志 + 进度 + 运行态） */
+export interface KbLogsResult {
+  running: boolean
+  lines: KbLogLine[]
+  last_seq: number
+  progress: KbLogProgress | null
 }
 
 export interface PostsPage {
@@ -913,6 +969,10 @@ export const api = {
   schedule: () => get<ScheduleStatus>('/schedule'),
   /** 手动触发一次自动下载（不受定时时刻限制），返回本次汇总（含磁盘水位与结论文案） */
   precipitateRun: () => post<PrecipitateRunResult>('/precipitate/run'),
+  /** 手动触发一次知识库增量批次（异步执行，结果写回调度状态 last）；拒绝时 409 detail */
+  kbRun: () => post<{ started: boolean }>('/kb/run'),
+  /** 知识库批次运行现场：after 之后的增量日志行 + 结构化进度 + 运行态（日志抽屉 2s 轮询） */
+  kbLogs: (after: number) => get<KbLogsResult>(`/kb/logs?after=${after}`),
   saveSettings: (items: Record<string, number | boolean | string[] | string>) =>
     put<{ ok: boolean; settings: SettingItem[] }>('/settings', { items }),
   resetSettings: (keys: string[] = []) =>

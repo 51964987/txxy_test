@@ -32,6 +32,8 @@ from atomicfile import write_json_atomic  # noqa: E402
 import config  # noqa: E402
 import download_files  # noqa: E402  项目根模块：默认下载间隔/重试次数在此，避免默认值两份
 import scrape_throttle  # noqa: E402  项目根模块：抓取节流默认值唯一定义处（同上理由）
+# 注意：本模块不导入 kb_export——kb_export._page_setting 会延迟导入本模块，
+# 任何方向的模块级互导都形成静态导入环；kb 默认值统一经 web/config.py 承载。
 
 WHITELIST: dict[str, dict[str, Any]] = {
     "fetch_chain": {
@@ -207,6 +209,91 @@ WHITELIST: dict[str, dict[str, Any]] = {
         "scope": "immediate",
         "desc": "downloads/ 所在磁盘可用空间低于该值（GB）时停止自动下载，避免写满磁盘；0 表示不限制（谨慎）。默认 20，与资产条红色判据一致",
     },
+    # ---- 知识库沉淀（kb_export 一期，方案 §3.7-2）：默认值唯一定义在
+    # web/config.py（时刻/开关）与项目根 kb_export.py（间隔键/单批上限）----
+    "kb_export_enabled": {
+        "label": "启用知识库增量",
+        "type": "bool",
+        "scope": "immediate",
+        "desc": "开启后由本服务按下面时刻自动执行一次知识库增量批次（首建完成标记置位前会跳过并提示原因）",
+    },
+    "kb_export_times": {
+        "label": "知识库时刻",
+        "type": "times",
+        "scope": "immediate",
+        # 同 scrape_schedule_times：上限唯一定义处（MAX_SCHEDULE_TIMES），随快照下发供前端拦截
+        "max": config.MAX_SCHEDULE_TIMES,
+        "desc": "每天在这几个时刻各执行一次知识库增量批次（默认每晚 23:00；与抓取/自动下载时刻重叠会提醒）；服务本地时间",
+    },
+    "kb_fetch_interval": {
+        "label": "知识库帖间间隔（秒）",
+        "type": "float",
+        "min": 0.5,
+        "max": 60,
+        "scope": "immediate",
+        "desc": "kb_export 抓帖子详情页的间隔（一帖 = 一页请求，默认取抓取页间间隔 3s）。"
+                "定时增量建议调慢兜请求量；首建手动分片允许实测调快压缩总时延",
+    },
+    "kb_batch_max_posts": {
+        "label": "知识库单批帖数上限",
+        "min": 100,
+        "max": 20000,
+        "scope": "immediate",
+        "desc": "定时增量单批最多处理的帖子数（超限截断、余量次日续跑，date 新帖优先）。"
+                "实测日均增量约 1200 帖，上限须 ≥ 日均 × 2 否则积压只增不减；默认 3000",
+    },
+    "kb_fids": {
+        "label": "增量版块筛选（fid，逗号分隔）",
+        "type": "text",
+        "scope": "immediate",
+        "desc": "知识库增量只处理这些版块的帖子，多个 fid 用逗号分隔（如 7,22）；留空表示不限版块。"
+                "定时增量与「立即执行增量」按钮同一份筛选",
+    },
+    "kb_date_scope": {
+        "label": "增量发布日期范围",
+        "type": "enum",
+        "options": [
+            {"value": "all", "label": "全部（不限发布日期）"},
+            {"value": "today", "label": "今天发布"},
+            {"value": "yesterday", "label": "昨天发布"},
+            {"value": "3d", "label": "近 3 天发布（含今天）"},
+            {"value": "7d", "label": "近 7 天发布（含今天）"},
+        ],
+        "scope": "immediate",
+        # 修订 37：原 kb_only_today 布尔（2026-10-01 需求调整）升级为多档日期范围枚举；
+        # 日期窗换算唯一实现 web/config.kb_date_window，按 posts.date（发布日，服务本地时区）圈定
+        "desc": "增量集按帖子发布日（posts.date）圈定的日期范围；定时增量与「立即执行增量」按钮同一份筛选。"
+                "选「全部」时增量集 = 库内全部未沉淀帖（由单批帖数上限兜底防失控）",
+    },
+    # ---- LLM 编译层（修订 13/36/37）：provider/model/base_url 页内可改，API key env-only；
+    # 多后端规格（label/base_url/models）唯一定义在 web/config.LLM_PROVIDER_SPECS，随快照下发 ----
+    "llm_provider": {
+        "label": "LLM 后端",
+        "type": "enum",
+        "options": [
+            {"value": key, "label": str(spec["label"])}
+            for key, spec in config.LLM_PROVIDER_SPECS.items()
+        ],
+        "scope": "immediate",
+        "desc": "知识库 concept/entity 判定用的后端档位；切换后自动回填该后端的接口地址与模型名默认值（可再手改）。"
+                "API 密钥按后端从环境变量读取（DEEPSEEK_API_KEY / GLM_API_KEY / CUSTOM_API_KEY，Ollama 无需），不进页；切换后下一批次生效",
+    },
+    "llm_model": {
+        "label": "LLM 模型名",
+        "type": "text",
+        "scope": "immediate",
+        "desc": "模型标识：下拉可选该后端预置模型，也可直接输入任意模型名（如 ollama 本地 qwen3:8b）；"
+                "留空 = 未配置，LLM 段自动降级跳过（帖入待办清单）",
+        "default_text": "未配置（LLM 段跳过）",
+    },
+    "llm_base_url": {
+        "label": "LLM 接口地址",
+        "type": "text",
+        "scope": "immediate",
+        "desc": "OpenAI 兼容 base URL；ollama 档保存时实测连通性，连不上拒绝保存。"
+                "留空 = 跟随所选后端的官方默认地址（DeepSeek api.deepseek.com/v1 / GLM open.bigmodel.cn/api/paas/v4 / Ollama 127.0.0.1:11434/v1）",
+        "default_text": "自动（跟随所选后端的官方默认）",
+    },
     "trash_keep_days": {
         "label": "回收站保留天数",
         "min": 1,
@@ -356,6 +443,30 @@ def _env_or_default(key: str) -> Any:
         return ""
     if key == "precipitate_min_free_gb":
         return config.PRECIPITATE_MIN_FREE_GB
+    if key == "kb_export_enabled":
+        return config.KB_EXPORT_ENABLED
+    if key == "kb_export_times":
+        return config.KB_EXPORT_TIMES
+    if key == "kb_fetch_interval":
+        return scrape_throttle.PAGE_INTERVAL_INIT
+    if key == "kb_batch_max_posts":
+        # 默认值唯一定义在 web/config.py（config 是 kb_export 与本模块的公共下游，
+        # 避免 settings ↔ kb_export 互相引用成环）
+        return config.KB_BATCH_MAX_POSTS
+    if key == "kb_fids":
+        return ""
+    if key == "kb_date_scope":
+        return config.KB_DATE_SCOPE_DEFAULT
+    # LLM 编译层默认值：env 覆盖代码默认（原 55：默认取独立于运行态的来源，禁取活值）。
+    # base_url / model 默认返回空串 = 「跟随 provider 自动」（kb_export 在使用点按生效 provider 解析；
+    # 页内切档而未填时不能把别的档位默认预拼进来，故不在此处按 provider 预拼死值），
+    # 页面展示文案由 spec.default_text 与快照 providers 元数据承载
+    if key == "llm_provider":
+        return os.environ.get("TXXY_LLM_PROVIDER", "").strip().lower() or config.LLM_PROVIDER_DEFAULT
+    if key == "llm_model":
+        return os.environ.get("TXXY_LLM_MODEL", "").strip()
+    if key == "llm_base_url":
+        return os.environ.get("TXXY_LLM_BASE_URL", "").strip()
     if key == "share_host":
         return config.SHARE_HOST
     if key == "enable_auto_refresh":
@@ -456,22 +567,59 @@ def snapshot() -> list[dict[str, Any]]:
         with _lock:
             overridden = key in _load()
         value = get(key, default)
-        out.append(
-            {
-                "key": key,
-                "label": spec["label"],
-                "desc": spec["desc"],
-                "scope": spec["scope"],
-                "type": spec.get("type", "int"),
-                "min": spec.get("min"),
-                "max": spec.get("max"),
-                "options": spec.get("options"),
-                "value": value,
-                "default": default,
-                "source": "file" if overridden else "default",
+        item = {
+            "key": key,
+            "label": spec["label"],
+            "desc": spec["desc"],
+            "scope": spec["scope"],
+            "type": spec.get("type", "int"),
+            "min": spec.get("min"),
+            "max": spec.get("max"),
+            "options": spec.get("options"),
+            "default_text": spec.get("default_text"),
+            "value": value,
+            "default": default,
+            "source": "file" if overridden else "default",
+        }
+        if key.startswith("llm_"):
+            # 修订 37：多后端规格随快照下发（label/base_url/models/key_env），
+            # 前端「切后端联动回填」与「模型下拉选项」的唯一数据源（禁止前端复制一份字面量）
+            item["providers"] = {
+                p: {
+                    "label": str(pspec["label"]),
+                    "base_url": str(pspec["base_url"]),
+                    "models": [str(m) for m in pspec["models"]],
+                    "key_env": config.llm_key_env(p),
+                }
+                for p, pspec in config.LLM_PROVIDER_SPECS.items()
             }
-        )
+        out.append(item)
     return out
+
+
+def _check_llm_base_url(base: str, data: dict[str, Any]) -> None:
+    """ollama 档 base_url 保存连通性实测（修订 13）：连不上拒绝保存（API 层转 400）。
+
+    档位判据用**本次 update 合并后的新键值**（data），不得经 _load() 读旧 _values 缓存——
+    同一次 PUT 内先改 llm_provider 再校验 base_url 时，旧缓存还是上一档位，会整体跳过实测
+    （实测踩中：ollama + 不可达地址被 200 放行）。禁调 get()（持锁内重入死锁，同 _clamp 约束）。
+    cloud 档不实测：key 不进页，匿名 GET 的状态码（401/404/200 因网关而异）不构成
+    可靠连通判据，实测反而制造假阴性；cloud 地址错误由首批次 llm_failed 暴露。"""
+    if not base:
+        return
+    provider = str(
+        data.get("llm_provider")
+        or os.environ.get("TXXY_LLM_PROVIDER", "").strip().lower()
+        or config.LLM_PROVIDER_DEFAULT
+    )
+    if provider != "ollama":
+        return
+    import requests  # noqa: PLC0415
+
+    try:
+        requests.get(base.rstrip("/") + "/models", timeout=3)
+    except requests.RequestException as e:
+        raise ValueError(f"Ollama 接口地址连不上（{base}）：{e}") from e
 
 
 def update(items: dict[str, Any]) -> list[dict[str, Any]]:
@@ -483,6 +631,10 @@ def update(items: dict[str, Any]) -> list[dict[str, Any]]:
             if key not in WHITELIST:
                 raise ValueError(f"不支持设置的参数: {key}")
             data[key] = _clamp(key, value)
+        # ollama base_url 保存连通性实测（修订 13）：失败抛 ValueError → 落盘前中止；
+        # 传入合并后的 data（本次新值），禁读旧缓存
+        if "llm_base_url" in items:
+            _check_llm_base_url(str(data["llm_base_url"]), data)
         SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
         write_json_atomic(SETTINGS_FILE, {"items": data}, indent=2)
         _values = data

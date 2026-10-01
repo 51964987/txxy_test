@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useRouter } from 'vue-router'
 import {
   api,
   isAborted,
   type BlacklistItem,
+  type KbLogLine,
+  type KbLogProgress,
   type ScheduleAction,
   type ScheduleStatus,
   type SettingItem,
@@ -35,7 +37,7 @@ const lastSavedText = computed(() => {
 
 /** 分组：与后端白名单顺序一致，按业务域切分（业界设置页通行做法）。
  *  desc 可选：组内各项已有自述时不再重复加组级说明（「内容资产」组即如此，2026-09-13 文案收敛） */
-const GROUPS: { title: string; desc?: string; keys: string[]; extra?: 'schedule' | 'precipitate' }[] = [
+const GROUPS: { title: string; desc?: string; keys: string[]; extra?: 'schedule' | 'precipitate' | 'kbschedule' }[] = [
   {
     title: '访问链',
     desc: '抓取 / 中继 / 下载共用的有序端点：某项连不上自动切下一项，最后一项为公网主域兜底（不能是内网地址）。保存后看板立即生效；抓取批次自下一批生效',
@@ -76,6 +78,22 @@ const GROUPS: { title: string; desc?: string; keys: string[]; extra?: 'schedule'
       'precipitate_min_replies',
       'precipitate_fids',
       'precipitate_min_free_gb',
+    ],
+  },
+  {
+    title: '知识库',
+    desc: '把已入库帖子的正文沉淀为本地 Markdown 知识库（raw 原始件 + 笔记 + 实体页）。首次建库走项目根 kb_export.py 手动分片批次，本组只管日常定时增量；时刻与抓取 / 自动下载重叠会叠加镜像链压力',
+    extra: 'kbschedule',
+    keys: [
+      'kb_export_enabled',
+      'kb_export_times',
+      'kb_fetch_interval',
+      'kb_batch_max_posts',
+      'kb_fids',
+      'kb_date_scope',
+      'llm_provider',
+      'llm_model',
+      'llm_base_url',
     ],
   },
   {
@@ -241,11 +259,18 @@ const SCHED_ACTION: Record<ScheduleAction, { text: string; type: 'success' | 'in
   skipped: { text: '已跳过', type: 'warning' },
   missed: { text: '未执行', type: 'info' },
   failed: { text: '启动失败', type: 'danger' },
+  done: { text: '已完成', type: 'success' },
+}
+
+/** 知识库任务的动作标签（done 为批次执行完毕，与 started 的「已启动」区分） */
+function kbActionTag(action: string): { text: string; type: 'success' | 'info' | 'warning' | 'danger' } {
+  return SCHED_ACTION[action as ScheduleAction] ?? { text: action, type: 'info' }
 }
 
 async function loadSchedule() {
   try {
     sched.value = await api.schedule()
+    reconcileKbJustStarted()
   } catch (e) {
     if (isAborted(e)) return
     // 状态读取失败不阻断参数编辑：置空并显示提示，下次刷新重试
@@ -431,6 +456,134 @@ async function autoDownloadNow() {
   }
 }
 
+/** 立即执行一次知识库增量：复用 /api/kb/run（与定时同一入口/筛选/状态），异步执行。
+ *  按钮状态机（穷举，规则 6）：空闲可点 / 本地刚启动（5s 轮询空窗）/ 批次运行中禁用 /
+ *  抓取批次运行中禁用（后端 409 前置拦截，原因在 tooltip 露出）。
+ *  「运行中」唯一判据 = 快照 sched.kb.running（后端 KbJob._worker.is_alive()），
+ *  前端不自行推断。 */
+const kbRunNowLoading = ref(false)
+/** 本地防重标志：POST 秒回后、下一次轮询看到 running 前的空窗期拦截重复点击；
+ *  值为点击时刻的 Date.now()（毫秒），交棒判定见 reconcileKbJustStarted */
+const kbJustStartedAt = ref<number | null>(null)
+const kbRunningNow = computed(() => Boolean(sched.value?.kb?.running) || kbJustStartedAt.value !== null)
+const kbScrapeRunning = computed(() => Boolean(sched.value?.scrape?.running))
+const kbRunDisabled = computed(() => kbRunningNow.value || kbScrapeRunning.value)
+const kbRunTip = computed(() =>
+  kbScrapeRunning.value
+    ? '抓取批次正在运行，为避免叠加镜像链压力，等抓取结束后再触发'
+    : kbRunningNow.value
+      ? '知识库增量批次执行中，点「执行日志」查看实时进度'
+      : '立即按当前筛选条件执行一次增量批次（与定时同一入口与状态），用于验证筛选与落盘效果',
+)
+/** loadSchedule 拿到快照后交棒：轮询看到 running 即解除本地防重；超 15s（3 个轮询
+ *  周期）仍未观察到也解除（秒级小批次可能在两次轮询间直接跑完）。不与 last.at 比较：
+ *  其粒度为分钟（"HH:MM"），无法区分「本次触发」与「上一轮结果」。 */
+function reconcileKbJustStarted() {
+  if (kbJustStartedAt.value === null) return
+  if (sched.value?.kb?.running || Date.now() - kbJustStartedAt.value > 15_000) {
+    kbJustStartedAt.value = null
+  }
+}
+async function kbRunNow() {
+  kbRunNowLoading.value = true
+  try {
+    await api.kbRun()
+    kbJustStartedAt.value = Date.now()
+    ElMessage.success('已启动知识库增量批次（后台执行，「执行日志」可看实时进度）')
+  } catch (e) {
+    if (isAborted(e)) return
+    ElMessage.error(`知识库增量触发失败: ${(e as Error).message}`)
+  } finally {
+    kbRunNowLoading.value = false
+    await loadSchedule() // 立刻回填「状态 / 上次结果」，不等下一次轮询
+  }
+}
+
+// ===== 执行日志抽屉：增量轮询 kb_export 进程内环形缓冲（业界 build log 通行做法：
+// after 游标 + 跟随尾部 + 上滚暂停）。仅内存切片，抽屉关闭 / 页面隐藏即暂停。 =====
+const KB_LOG_POLL_MS = 2000
+const kbLogOpen = ref(false)
+const kbLogLines = ref<KbLogLine[]>([])
+const kbLogLastSeq = ref(0)
+const kbLogProgress = ref<KbLogProgress | null>(null)
+const kbLogRunning = ref(false)
+const kbLogError = ref('')
+const kbLogFollow = ref(true) // 自动跟随尾部：用户上滚即暂停，点「回到底部」恢复
+let kbLogTimer: number | null = null
+const kbLogBox = ref<HTMLElement | null>(null)
+
+/** 进度百分比：LLM 段用 llm_idx/llm_total，抓取段用 idx/total（idx 为正在处理帖下标） */
+const kbLogPct = computed(() => {
+  const p = kbLogProgress.value
+  if (!p) return 0
+  const done = p.llm_total ? (p.llm_idx ?? 0) : p.idx + 1
+  const total = p.llm_total || p.total
+  return total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0
+})
+const kbLogStageText = computed(() => {
+  const p = kbLogProgress.value
+  if (!p) return ''
+  return p.llm_total
+    ? `${p.stage} · LLM ${p.llm_idx ?? 0}/${p.llm_total}`
+    : `${p.stage} · 第 ${p.idx + 1}/${p.total} 帖`
+})
+
+async function pollKbLogs() {
+  if (document.hidden) return
+  try {
+    const r = await api.kbLogs(kbLogLastSeq.value)
+    kbLogError.value = ''
+    kbLogRunning.value = r.running
+    kbLogProgress.value = r.progress
+    if (r.lines.length) {
+      kbLogLines.value.push(...r.lines)
+      // 与后端环形缓冲同限幅：只保留最近 800 行
+      if (kbLogLines.value.length > 800) kbLogLines.value.splice(0, kbLogLines.value.length - 800)
+      kbLogLastSeq.value = r.last_seq
+      await nextTick()
+      if (kbLogFollow.value) scrollKbLogBottom()
+    }
+  } catch {
+    // 轮询失败可见但不打断（下一 tick 自动重试）：单机接口，失败多为瞬时
+    kbLogError.value = '日志刷新失败，将自动重试'
+  }
+}
+
+function scrollKbLogBottom() {
+  const box = kbLogBox.value
+  if (box) box.scrollTop = box.scrollHeight
+}
+
+function onKbLogScroll() {
+  const box = kbLogBox.value
+  if (!box) return
+  // 距底部 < 40px 视为在底部 → 跟随；上滚即暂停跟随（业界日志终端惯例）
+  kbLogFollow.value = box.scrollHeight - box.scrollTop - box.clientHeight < 40
+}
+
+function startKbLogPolling() {
+  if (kbLogTimer !== null) return
+  void pollKbLogs()
+  kbLogTimer = window.setInterval(() => void pollKbLogs(), KB_LOG_POLL_MS)
+}
+function stopKbLogPolling() {
+  if (kbLogTimer !== null) {
+    window.clearInterval(kbLogTimer)
+    kbLogTimer = null
+  }
+}
+function openKbLog() {
+  kbLogOpen.value = true
+  startKbLogPolling()
+}
+watch(kbLogOpen, (open) => {
+  if (!open) stopKbLogPolling()
+})
+function jumpKbLogBottom() {
+  kbLogFollow.value = true
+  scrollKbLogBottom()
+}
+
 /** 逐条自动保存：改一项即立即写后端并生效（去掉了「保存设置」批提交）。
  *  单人本机场景无需「未保存草稿」概念：任何改动立刻落盘 + 推进运行态（后端 update 内部 apply_runtime）。
  *  单键保存与后端白名单单键口径一致；失败仅提示该行，不阻断其它项编辑。 */
@@ -447,8 +600,12 @@ async function saveOne(it: SettingItem, value: number | boolean | string[] | str
     if (it.key === 'enable_auto_refresh') {
       dash.setEnableAutoRefresh(Boolean(value))
     }
-    // 抓取/沉淀相关参数改动会改变「下次执行」：重取调度状态，避免页面显示与实际调度口径不一致
-    if (it.key.startsWith('scrape_schedule_') || it.key.startsWith('precipitate_')) {
+    // 抓取/沉淀/知识库相关参数改动会改变「下次执行」：重取调度状态，避免页面显示与实际调度口径不一致
+    if (
+      it.key.startsWith('scrape_schedule_') ||
+      it.key.startsWith('precipitate_') ||
+      it.key.startsWith('kb_export_')
+    ) {
       void loadSchedule()
     }
     lastSavedAt.value = Date.now()
@@ -487,6 +644,46 @@ function setBool(it: SettingItem, v: boolean | string | number) {
 }
 function setText(it: SettingItem, v: string) {
   void saveOne(it, v)
+}
+
+/** LLM 三项联动（修订 37）：后端规格（base_url/models/key_env）随快照 providers 下发，
+ *  此处不复制任何字面量；切后端 = 一次 PUT 同时回填该后端的接口地址与模型名默认值（业界同：
+ *  切档即带出该档默认三元组，用户可再手改），避免「切了后端还留着上一档的地址/模型」混档 */
+const llmProviders = computed(() => byKey('llm_provider')?.providers ?? null)
+const llmProvider = computed(() => String(byKey('llm_provider')?.value ?? ''))
+const llmSpec = computed(() => llmProviders.value?.[llmProvider.value] ?? null)
+const llmModelOptions = computed(() => llmSpec.value?.models ?? [])
+const llmDefaultBase = computed(() => llmSpec.value?.base_url ?? '')
+const llmDefaultModel = computed(() => llmSpec.value?.models[0] ?? '')
+const llmKeyEnv = computed(() => llmSpec.value?.key_env ?? '')
+
+async function setLlmProvider(v: string) {
+  const spec = llmProviders.value?.[v]
+  const payload: Record<string, string> = { llm_provider: v }
+  if (spec) {
+    payload.llm_base_url = spec.base_url
+    payload.llm_model = spec.models[0] ?? ''
+  }
+  savingMap.value = { ...savingMap.value, llm_provider: true }
+  try {
+    const r = await api.saveSettings(payload)
+    // 三个键的回显一并刷新（响应快照含保存后的最新值，含回填的地址/模型）
+    const llmKeys = ['llm_provider', 'llm_model', 'llm_base_url']
+    for (const s of r.settings) {
+      if (llmKeys.includes(s.key)) {
+        const idx = items.value.findIndex((x) => x.key === s.key)
+        if (idx >= 0) items.value[idx] = s
+      }
+    }
+    ElMessage.success('已切换 LLM 后端，接口地址与模型名已回填该后端默认值')
+  } catch (e) {
+    if (isAborted(e)) return
+    ElMessage.error(`保存「LLM 后端」失败: ${(e as Error).message}`)
+  } finally {
+    const next = { ...savingMap.value }
+    delete next.llm_provider
+    savingMap.value = next
+  }
 }
 
 async function resetOne(it: SettingItem) {
@@ -820,6 +1017,95 @@ onBeforeUnmount(() => {
               <span class="ss-hint text-muted">与定时自动下载同一筛选与磁盘守卫；触发即提交到下载中心</span>
             </div>
           </div>
+
+          <!-- 知识库增量调度状态（只读，来自 /api/schedule.kb；一期方案 §3.7-5 两级口径） -->
+          <div v-else-if="g.extra === 'kbschedule'" class="sched-status">
+            <template v-if="sched && sched.kb">
+              <div class="ss-row">
+                <span class="ss-label">状态</span>
+                <span class="ss-value">
+                  <el-tag size="small" :type="sched.kb.running ? 'primary' : sched.kb.enabled ? 'success' : 'info'">
+                    {{ sched.kb.running ? '批次执行中' : sched.kb.enabled ? '已启用' : '未启用' }}
+                  </el-tag>
+                </span>
+              </div>
+              <el-alert
+                v-if="!sched.kb.initial_done"
+                type="info"
+                :closable="false"
+                show-icon
+                title="尚未执行过全库首建，当前仅按下方筛选条件做增量沉淀"
+                description="全库首建为按需手动操作（kb_export.py 按自然月分片），见 docs/知识库一期操作手册.md"
+                class="ss-alert"
+              />
+              <el-alert
+                v-else-if="sched.kb.recovery_mode"
+                type="warning"
+                :closable="false"
+                show-icon
+                title="kb_state 处于恢复重建状态：--reconvert 不可用"
+                description="生成 hash 不可重建，首轮覆盖须用 --force（重抓 + 重转）"
+                class="ss-alert"
+              />
+              <div class="ss-row">
+                <span class="ss-label">下次执行</span>
+                <span class="ss-value">{{ sched.kb.next_run_at ?? '未启用（无计划时刻）' }}</span>
+              </div>
+              <div class="ss-row">
+                <span class="ss-label">今日已处理</span>
+                <span class="ss-value">{{ sched.kb.today_done.length ? sched.kb.today_done.join('、') : '—' }}</span>
+              </div>
+              <div class="ss-row">
+                <span class="ss-label">上次结果</span>
+                <span class="ss-value">
+                  <template v-if="sched.kb.last">
+                    <el-tag size="small" :type="kbActionTag(sched.kb.last.action).type">
+                      {{ kbActionTag(sched.kb.last.action).text }}
+                    </el-tag>
+                    <span class="text-muted">{{ sched.kb.last.at }} · {{ sched.kb.last.reason }}</span>
+                  </template>
+                  <span v-else class="text-muted">暂无增量记录</span>
+                </span>
+              </div>
+              <div class="ss-row">
+                <span class="ss-label">进度与积压</span>
+                <span class="ss-value">
+                  已沉淀 {{ sched.kb.done }} 帖
+                  <template v-if="sched.kb.backlog != null"> · 待处理积压 {{ sched.kb.backlog }} 帖</template>
+                  <template v-if="sched.kb.llm_backlog > 0"> · LLM 段积压 {{ sched.kb.llm_backlog }}</template>
+                  <template v-if="sched.kb.permanent > 0"> · 永久失败 {{ sched.kb.permanent }}</template>
+                </span>
+              </div>
+              <div class="ss-row">
+                <span class="ss-label">调度线程</span>
+                <span
+                  class="ss-value"
+                  :class="tickStale(sched.kb) ? '' : 'text-muted'"
+                  :style="tickStale(sched.kb) ? { color: 'var(--el-color-danger)', fontWeight: '600' } : {}"
+                >
+                  {{ sched.kb.last_tick ? `最近判定 ${sched.kb.last_tick}（每 ${sched.kb.tick_seconds} 秒一次）` : '尚未运行' }}
+                  {{ tickStale(sched.kb) ? '· 心跳停滞，调度可能已停止' : '' }}
+                </span>
+              </div>
+            </template>
+            <div v-else class="text-muted">状态读取失败，稍后自动重试</div>
+            <div class="ss-actions">
+              <el-tooltip :content="kbRunTip" placement="top">
+                <span class="tip-wrap">
+                  <el-button
+                    size="small"
+                    :loading="kbRunningNow"
+                    :disabled="kbRunDisabled"
+                    @click="kbRunNow"
+                  >
+                    {{ kbRunningNow ? '执行中…' : '立即执行增量' }}
+                  </el-button>
+                </span>
+              </el-tooltip>
+              <el-button size="small" @click="openKbLog">执行日志</el-button>
+              <span class="ss-hint text-muted">后台线程执行；运行中按钮禁用，重复点击会被拒绝，实时进度见「执行日志」</span>
+            </div>
+          </div>
           <div class="setting-list">
             <div
               v-for="it in groupItems(g.keys)"
@@ -869,6 +1155,25 @@ onBeforeUnmount(() => {
                   </div>
                   <div class="sr-default text-muted">默认：{{ arrayLabels(it, it.default as string[]) }}</div>
                 </div>
+                <!-- LLM 后端：切换即联动回填接口地址与模型名默认值（一次 PUT，见 setLlmProvider） -->
+                <template v-else-if="it.key === 'llm_provider'">
+                  <el-select
+                    :model-value="String(valueOf(it))"
+                    :size="isMobile ? 'small' : 'default'"
+                    class="sr-input"
+                    @change="(v: string) => setLlmProvider(v)"
+                  >
+                    <el-option
+                      v-for="opt in (it.options ?? [])"
+                      :key="opt.value"
+                      :label="opt.label"
+                      :value="opt.value"
+                    />
+                  </el-select>
+                  <div class="sr-default text-muted">
+                    默认：{{ optionLabel(it, String(it.default)) }}<template v-if="llmKeyEnv"> · 密钥取环境变量 {{ llmKeyEnv }}</template><template v-else> · 本地服务无需密钥</template>
+                  </div>
+                </template>
                 <template v-else-if="it.type === 'enum'">
                   <el-select
                     :model-value="String(valueOf(it))"
@@ -945,6 +1250,38 @@ onBeforeUnmount(() => {
                     <span class="sr-default text-muted">默认：{{ (it.default as string[]).join(' → ') }}</span>
                   </div>
                 </div>
+                <!-- LLM 模型名：可选当前后端预置模型，也允许直接输入任意模型名（ollama 本地档无预置） -->
+                <template v-else-if="it.key === 'llm_model'">
+                  <el-select
+                    :model-value="String(valueOf(it))"
+                    filterable
+                    allow-create
+                    default-first-option
+                    :size="isMobile ? 'small' : 'default'"
+                    placeholder="选择或输入模型名"
+                    class="sr-input"
+                    @change="(v: string) => setText(it, v)"
+                  >
+                    <el-option v-for="m in llmModelOptions" :key="m" :label="m" :value="m" />
+                  </el-select>
+                  <div class="sr-default text-muted">
+                    默认：{{ llmDefaultModel || '未配置（LLM 段跳过）' }}
+                  </div>
+                </template>
+                <!-- LLM 接口地址：占位与「默认」行跟随当前后端的官方默认（随快照 providers 下发） -->
+                <template v-else-if="it.key === 'llm_base_url'">
+                  <el-input
+                    :model-value="String(valueOf(it))"
+                    clearable
+                    :placeholder="llmDefaultBase ? `留空自动：${llmDefaultBase}` : 'https://…（自定义后端必填）'"
+                    class="sr-input"
+                    @input="(v: string) => (it.value = v)"
+                    @change="(v: string) => setText(it, v)"
+                  />
+                  <div class="sr-default text-muted">
+                    默认：{{ llmDefaultBase || '自动（跟随所选后端）' }}
+                  </div>
+                </template>
                 <template v-else-if="it.type === 'text'">
                   <el-input
                     :model-value="String(valueOf(it))"
@@ -955,7 +1292,7 @@ onBeforeUnmount(() => {
                     @change="(v: string) => setText(it, v)"
                   />
                   <div class="sr-default text-muted">
-                    默认：{{ it.default ? String(it.default) : '自动（取访问地址）' }}
+                    默认：{{ it.defaultText ?? (it.default ? String(it.default) : '自动（取访问地址）') }}
                   </div>
                 </template>
                 <template v-else>
@@ -1065,6 +1402,31 @@ onBeforeUnmount(() => {
       </template>
     </div>
   </div>
+
+  <!-- 知识库批次执行日志抽屉：after 游标增量轮询 + 自动跟随尾部（上滚暂停）。
+       日志内容 = kb_export 进程内环形缓冲，与文件日志 / web_*.log 同源同前缀 -->
+  <el-drawer v-model="kbLogOpen" title="知识库批次执行日志" :size="isMobile ? '100%' : '560px'" :append-to-body="true">
+    <div class="kb-log-head">
+      <el-tag size="small" :type="kbLogRunning ? 'primary' : 'info'">
+        {{ kbLogRunning ? '批次执行中' : '空闲' }}
+      </el-tag>
+      <template v-if="kbLogProgress">
+        <span class="text-muted">{{ kbLogStageText }}</span>
+        <el-progress :percentage="kbLogPct" :stroke-width="8" class="kb-log-bar" />
+      </template>
+    </div>
+    <div ref="kbLogBox" class="kb-log-box" @scroll.passive="onKbLogScroll">
+      <div v-if="!kbLogLines.length" class="text-muted kb-log-empty">
+        暂无日志：批次启动后此处实时输出逐帖进度（保留最近 800 行）
+      </div>
+      <div v-for="l in kbLogLines" :key="l.seq" class="kb-log-line">{{ l.text }}</div>
+    </div>
+    <div class="kb-log-foot text-muted">
+      <span v-if="!kbLogFollow" class="kb-log-jump" @click="jumpKbLogBottom">↓ 回到底部（已暂停跟随）</span>
+      <span v-else-if="kbLogError">{{ kbLogError }}</span>
+      <span v-else>自动跟随最新输出{{ kbLogRunning ? '' : '（空闲时展示最近一次批次日志）' }}</span>
+    </div>
+  </el-drawer>
 </template>
 
 <style scoped>
@@ -1234,6 +1596,59 @@ onBeforeUnmount(() => {
 
 .ss-hint {
   font-size: 12px;
+}
+
+/* 知识库执行日志抽屉：进度头部 / 日志终端 / 跟随状态栏（样式唯一来源，供抽屉复用） */
+.kb-log-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+  /* 文字行锁单行：阶段文案 + 进度条同行展示不换行 */
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.kb-log-bar {
+  flex: 1;
+  min-width: 0;
+}
+
+.kb-log-box {
+  height: calc(100% - 72px);
+  overflow-y: auto;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 6px;
+  background: var(--el-fill-color-darker, #1e1e1e);
+  color: var(--el-text-color-regular, #d4d4d4);
+  font-family: Consolas, 'Courier New', monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  padding: 8px 10px;
+}
+
+.kb-log-line {
+  word-break: break-all;
+  /* 单行不强制 nowrap：日志含长标题，允许折行保证完整性 */
+}
+
+.kb-log-empty {
+  padding: 16px 0;
+  text-align: center;
+  color: inherit;
+  opacity: 0.7;
+}
+
+.kb-log-foot {
+  margin-top: 8px;
+  font-size: 12px;
+  text-align: center;
+}
+
+.kb-log-jump {
+  color: var(--el-color-primary);
+  cursor: pointer;
+  font-weight: 600;
 }
 
 /* 禁用按钮上的 tooltip 需要一层可命中的包裹元素（disabled 的 button 不派发鼠标事件） */

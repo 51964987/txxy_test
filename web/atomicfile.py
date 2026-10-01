@@ -11,11 +11,43 @@
 import json
 import os
 import shutil
+import time
 from pathlib import Path
 from typing import Any
 
 # 小于该字节数的文件视为「空对象」，不值得备份
 _BACKUP_MIN_SIZE = 2
+
+# os.replace 撞上目标被 Obsidian / 编辑器瞬时占用的短重试参数（修订 25 拍板：3 次 × 0.5s）。
+# 短重试只针对 PermissionError（Windows 文件占用），其余异常照旧直接向上抛。
+_REPLACE_RETRIES = 3
+_REPLACE_RETRY_DELAY = 0.5
+
+
+def _replace_with_retry(tmp: Path, path: Path) -> None:
+    """os.replace 的占用短重试包装（唯一实现，JSON / 文本 / 二进制三个入口共用）。
+
+    Windows 下 Obsidian 等编辑器可能短暂持有目标文件句柄，首次 replace 抛
+    PermissionError 属瞬时冲突——按 3 次 × 0.5s 重试后仍失败才向上抛，
+    调用方计数进批次汇总（kb_export 的写盘护栏语义）。
+    """
+    for attempt in range(1, _REPLACE_RETRIES + 1):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            if attempt == _REPLACE_RETRIES:
+                raise
+            time.sleep(_REPLACE_RETRY_DELAY)
+
+
+def _backup_existing(path: Path, backup: bool) -> None:
+    """写盘前把现有非空文件轮转为 <原名>.bak（backup=True 时）。"""
+    if backup and path.exists() and path.stat().st_size > _BACKUP_MIN_SIZE:
+        try:
+            shutil.copyfile(path, path.with_suffix(path.suffix + ".bak"))
+        except OSError:
+            pass  # 备份失败不阻塞主写入，下一轮会再尝试
 
 
 def write_json_atomic(
@@ -32,12 +64,42 @@ def write_json_atomic(
       （曾发生：服务异常重启时持久化文件被写空，导致任务历史丢失）
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    if backup and path.exists() and path.stat().st_size > _BACKUP_MIN_SIZE:
-        try:
-            shutil.copyfile(path, path.with_suffix(path.suffix + ".bak"))
-        except OSError:
-            pass  # 备份失败不阻塞主写入，下一轮会再尝试
+    _backup_existing(path, backup)
     tmp = path.with_suffix(path.suffix + ".tmp")
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(obj, f, ensure_ascii=False, indent=indent)
-    os.replace(tmp, path)
+    _replace_with_retry(tmp, path)
+
+
+def write_text_atomic(
+    path: Path,
+    text: str,
+    *,
+    encoding: str = "utf-8",
+    backup: bool = False,
+) -> None:
+    """原子写入文本文件（修订 25 泛化入口）：kb_export 落 `.md` 笔记等纯文本用。
+
+    与 write_json_atomic 同一套「tmp + replace」骨架，禁止另写第二份 tmp+replace；
+    占用冲突走 _replace_with_retry 短重试。
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _backup_existing(path, backup)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with open(tmp, "w", encoding=encoding, newline="") as f:
+        f.write(text)
+    _replace_with_retry(tmp, path)
+
+
+def write_bytes_atomic(path: Path, data: bytes, *, backup: bool = False) -> None:
+    """原子写入二进制文件（修订 26）：kb 原始件 `<标题>.html` 按**字节**存盘专用。
+
+    禁止把非 UTF-8 页面先解码成文本再落盘——那样落盘即转码，
+    「重转时按记录编码解码」将对已转码文件用错编码。占用冲突走短重试。
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _backup_existing(path, backup)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with open(tmp, "wb") as f:
+        f.write(data)
+    _replace_with_retry(tmp, path)
