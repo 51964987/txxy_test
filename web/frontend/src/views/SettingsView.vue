@@ -1,17 +1,16 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useRouter } from 'vue-router'
 import {
   api,
   isAborted,
   type BlacklistItem,
-  type KbLogLine,
-  type KbLogProgress,
   type ScheduleAction,
   type ScheduleStatus,
   type SettingItem,
 } from '../api'
+import FollowLogDrawer from '../components/FollowLogDrawer.vue'
 import { useAppStore } from '../stores/app'
 import { useDashboardStore } from '../stores/dashboard'
 
@@ -499,89 +498,37 @@ async function kbRunNow() {
   }
 }
 
-// ===== 执行日志抽屉：增量轮询 kb_export 进程内环形缓冲（业界 build log 通行做法：
-// after 游标 + 跟随尾部 + 上滚暂停）。仅内存切片，抽屉关闭 / 页面隐藏即暂停。 =====
-const KB_LOG_POLL_MS = 2000
+// ===== 执行日志抽屉：共用 FollowLogDrawer 组件（kb 批次日志与 /kb 页 RAG 重建日志
+// 同一交互形态——after 游标增量轮询 + 跟随尾部 + 上滚暂停），此处只做本页数据映射。 =====
 const kbLogOpen = ref(false)
-const kbLogLines = ref<KbLogLine[]>([])
-const kbLogLastSeq = ref(0)
-const kbLogProgress = ref<KbLogProgress | null>(null)
-const kbLogRunning = ref(false)
-const kbLogError = ref('')
-const kbLogFollow = ref(true) // 自动跟随尾部：用户上滚即暂停，点「回到底部」恢复
-let kbLogTimer: number | null = null
-const kbLogBox = ref<HTMLElement | null>(null)
 
-/** 进度百分比：LLM 段用 llm_idx/llm_total，抓取段用 idx/total（idx 为正在处理帖下标） */
-const kbLogPct = computed(() => {
-  const p = kbLogProgress.value
-  if (!p) return 0
-  const done = p.llm_total ? (p.llm_idx ?? 0) : p.idx + 1
-  const total = p.llm_total || p.total
-  return total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0
-})
-const kbLogStageText = computed(() => {
-  const p = kbLogProgress.value
-  if (!p) return ''
-  return p.llm_total
-    ? `${p.stage} · LLM ${p.llm_idx ?? 0}/${p.llm_total}`
-    : `${p.stage} · 第 ${p.idx + 1}/${p.total} 帖`
-})
-
-async function pollKbLogs() {
-  if (document.hidden) return
-  try {
-    const r = await api.kbLogs(kbLogLastSeq.value)
-    kbLogError.value = ''
-    kbLogRunning.value = r.running
-    kbLogProgress.value = r.progress
-    if (r.lines.length) {
-      kbLogLines.value.push(...r.lines)
-      // 与后端环形缓冲同限幅：只保留最近 800 行
-      if (kbLogLines.value.length > 800) kbLogLines.value.splice(0, kbLogLines.value.length - 800)
-      kbLogLastSeq.value = r.last_seq
-      await nextTick()
-      if (kbLogFollow.value) scrollKbLogBottom()
-    }
-  } catch {
-    // 轮询失败可见但不打断（下一 tick 自动重试）：单机接口，失败多为瞬时
-    kbLogError.value = '日志刷新失败，将自动重试'
-  }
-}
-
-function scrollKbLogBottom() {
-  const box = kbLogBox.value
-  if (box) box.scrollTop = box.scrollHeight
-}
-
-function onKbLogScroll() {
-  const box = kbLogBox.value
-  if (!box) return
-  // 距底部 < 40px 视为在底部 → 跟随；上滚即暂停跟随（业界日志终端惯例）
-  kbLogFollow.value = box.scrollHeight - box.scrollTop - box.clientHeight < 40
-}
-
-function startKbLogPolling() {
-  if (kbLogTimer !== null) return
-  void pollKbLogs()
-  kbLogTimer = window.setInterval(() => void pollKbLogs(), KB_LOG_POLL_MS)
-}
-function stopKbLogPolling() {
-  if (kbLogTimer !== null) {
-    window.clearInterval(kbLogTimer)
-    kbLogTimer = null
-  }
-}
 function openKbLog() {
   kbLogOpen.value = true
-  startKbLogPolling()
 }
-watch(kbLogOpen, (open) => {
-  if (!open) stopKbLogPolling()
-})
-function jumpKbLogBottom() {
-  kbLogFollow.value = true
-  scrollKbLogBottom()
+
+/** kb 批次日志 → 共用抽屉契约：进度 LLM 段优先（llm_idx/llm_total），抓取段 idx 为正在处理帖下标 */
+async function loadKbLogs(after: number) {
+  const r = await api.kbLogs(after)
+  const p = r.progress
+  const llmMode = Boolean(p?.llm_total)
+  const pct = p
+    ? llmMode
+      ? ((p.llm_idx ?? 0) / (p.llm_total || 1)) * 100
+      : p.total
+        ? ((p.idx + 1) / p.total) * 100
+        : 0
+    : null
+  return {
+    running: r.running,
+    lines: r.lines,
+    last_seq: r.last_seq,
+    progressText: p
+      ? llmMode
+        ? `${p.stage} · LLM ${p.llm_idx ?? 0}/${p.llm_total}`
+        : `${p.stage} · 第 ${p.idx + 1}/${p.total} 帖`
+      : null,
+    progressPct: pct === null ? null : Math.min(100, Math.round(pct)),
+  }
 }
 
 /** 逐条自动保存：改一项即立即写后端并生效（去掉了「保存设置」批提交）。
@@ -1405,28 +1352,14 @@ onBeforeUnmount(() => {
 
   <!-- 知识库批次执行日志抽屉：after 游标增量轮询 + 自动跟随尾部（上滚暂停）。
        日志内容 = kb_export 进程内环形缓冲，与文件日志 / web_*.log 同源同前缀 -->
-  <el-drawer v-model="kbLogOpen" title="知识库批次执行日志" :size="isMobile ? '100%' : '560px'" :append-to-body="true">
-    <div class="kb-log-head">
-      <el-tag size="small" :type="kbLogRunning ? 'primary' : 'info'">
-        {{ kbLogRunning ? '批次执行中' : '空闲' }}
-      </el-tag>
-      <template v-if="kbLogProgress">
-        <span class="text-muted">{{ kbLogStageText }}</span>
-        <el-progress :percentage="kbLogPct" :stroke-width="8" class="kb-log-bar" />
-      </template>
-    </div>
-    <div ref="kbLogBox" class="kb-log-box" @scroll.passive="onKbLogScroll">
-      <div v-if="!kbLogLines.length" class="text-muted kb-log-empty">
-        暂无日志：批次启动后此处实时输出逐帖进度（保留最近 800 行）
-      </div>
-      <div v-for="l in kbLogLines" :key="l.seq" class="kb-log-line">{{ l.text }}</div>
-    </div>
-    <div class="kb-log-foot text-muted">
-      <span v-if="!kbLogFollow" class="kb-log-jump" @click="jumpKbLogBottom">↓ 回到底部（已暂停跟随）</span>
-      <span v-else-if="kbLogError">{{ kbLogError }}</span>
-      <span v-else>自动跟随最新输出{{ kbLogRunning ? '' : '（空闲时展示最近一次批次日志）' }}</span>
-    </div>
-  </el-drawer>
+  <FollowLogDrawer
+    v-model="kbLogOpen"
+    title="知识库批次执行日志"
+    :size="isMobile ? '100%' : '560px'"
+    :load="loadKbLogs"
+    empty-text="暂无日志：批次启动后此处实时输出逐帖进度（保留最近 800 行）"
+    idle-hint="（空闲时展示最近一次批次日志）"
+  />
 </template>
 
 <style scoped>
@@ -1598,58 +1531,7 @@ onBeforeUnmount(() => {
   font-size: 12px;
 }
 
-/* 知识库执行日志抽屉：进度头部 / 日志终端 / 跟随状态栏（样式唯一来源，供抽屉复用） */
-.kb-log-head {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 8px;
-  /* 文字行锁单行：阶段文案 + 进度条同行展示不换行 */
-  white-space: nowrap;
-  min-width: 0;
-}
-
-.kb-log-bar {
-  flex: 1;
-  min-width: 0;
-}
-
-.kb-log-box {
-  height: calc(100% - 72px);
-  overflow-y: auto;
-  border: 1px solid var(--el-border-color-lighter);
-  border-radius: 6px;
-  background: var(--el-fill-color-darker, #1e1e1e);
-  color: var(--el-text-color-regular, #d4d4d4);
-  font-family: Consolas, 'Courier New', monospace;
-  font-size: 12px;
-  line-height: 1.6;
-  padding: 8px 10px;
-}
-
-.kb-log-line {
-  word-break: break-all;
-  /* 单行不强制 nowrap：日志含长标题，允许折行保证完整性 */
-}
-
-.kb-log-empty {
-  padding: 16px 0;
-  text-align: center;
-  color: inherit;
-  opacity: 0.7;
-}
-
-.kb-log-foot {
-  margin-top: 8px;
-  font-size: 12px;
-  text-align: center;
-}
-
-.kb-log-jump {
-  color: var(--el-color-primary);
-  cursor: pointer;
-  font-weight: 600;
-}
+/* 知识库执行日志抽屉样式已抽到 components/FollowLogDrawer.vue（kb 批次 / RAG 重建共用，样式唯一来源） */
 
 /* 禁用按钮上的 tooltip 需要一层可命中的包裹元素（disabled 的 button 不派发鼠标事件） */
 .tip-wrap {

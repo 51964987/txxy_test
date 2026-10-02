@@ -64,4 +64,7 @@ alwaysApply: true
 - **接口一致性**：后端新接口加在 `api.py` 并用 `db.cached` 包裹统计查询；前端在 `src/api/index.ts` 加同名方法；错误处理统一 `HTTPException(detail)` + 前端 `ElMessage.error`，禁止另造 `{ok:false,msg}` 形态或裸吞错。
 - **状态管理**：跨页状态归并 `useAppStore` + `useDashboardStore`，禁新建分散 store。
 - **禁止清单**：引入项目未用新依赖（React/Tailwind/Redux 等）、Web 写库、改动既有路由路径与 history 模式、`<script setup>` 外使用 Options API、随意新增顶层目录。
-- **外部 HTML 转 Markdown 必须降级无协议相对链接（原 73）**：trafilatura / markdownify 会把源页装饰性锚（search.php?authorid=...、ead.php?tid=...&toread=N 等）原样转成 \[文本](相对URL)\，Obsidian 对无协议链接目标按库内路径解析 → 图谱「未解析」灰节点；转换产出必须经唯一后处理 \_demote_relative_links\（保留 http(s)/mailto/#，图片 \![]()\ 不动）降级为纯文本，存量文件批量清理须字节级读写保留原行尾。详见 \docs/lessons-learned.md\ 原 73。
+- **外部 HTML 转 Markdown 必须降级无协议相对链接（原 73）**：trafilatura / markdownify 会把源页装饰性锚（search.php?authorid=...、
+ead.php?tid=...&toread=N 等）原样转成 \[文本](相对URL)\，Obsidian 对无协议链接目标按库内路径解析 → 图谱「未解析」灰节点；转换产出必须经唯一后处理 \_demote_relative_links\（保留 http(s)/mailto/#，图片 \![]()\ 不动）降级为纯文本，存量文件批量清理须字节级读写保留原行尾。详见 \docs/lessons-learned.md\ 原 73。
+- **派生索引库落地：语料范围 e2e 双向断言、后台重建线程失败必须有可见出口（原 74）**：按文档类型分支的写入口（FTS 行 / 节点 / 边表各一套进与不进口径）必须配「正向（应进的可搜）+ 反向（不应进的独有锚点词不可搜）」两条端到端断言，禁止只测能搜到；派生索引库连接前显式创建父目录（全新部署目录缺失 → unable to open database file 被后台线程兜底吞掉、状态永停 empty），后台线程失败必须映射到用户可见状态（状态接口字段 / 503 detail），禁止只写日志。详见 docs/lessons-learned.md 原 74。
+- **向量扩展 KNN 语法先实测取证；失败态根因不得被恢复路径覆盖（原 75）**：sqlite-vec 的 KNN 必须在 vec0 虚表上显式带 `k = ?` 约束（JOIN 语境下外层 LIMIT 不被识别，实测报 "A LIMIT or 'k = ?' constraint is required"），用两步查询（vec0 取主键+distance 再回元数据表）；接入向量扩展先跑最小 KNN 实测脚本再定查询形态（原 64 实例）。后台恢复线程把内存态对齐到库态时，error 态根因必须保留（配置未修复 / 未人工重建前禁止回落默认态），503 detail 优先透出根因。详见 docs/lessons-learned.md 原 75。

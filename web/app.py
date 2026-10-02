@@ -30,6 +30,8 @@ import config
 import scheduler
 import settings
 from api import router as api_router
+from kb import router as kb_router  # 知识库二期：/api/kb/search|graph|status
+from kb_rag import router as kb_rag_router  # 知识库三期：/api/kb/ask|rag/status|rag/rebuild
 from mirror import router as mirror_router
 
 app = FastAPI(
@@ -71,6 +73,9 @@ async def request_monitor(request: Request, call_next: RequestResponseEndpoint) 
 # 文本类响应（JSON / CSV 导出等）>1KB 自动 gzip，浏览器自动解压
 app.add_middleware(GZipMiddleware, minimum_size=1024)
 app.include_router(api_router, prefix="/api")
+# 知识库接口（/api/kb/*，web/kb.py + web/kb_rag.py）：独立 router，prefix 与其内部路径拼合
+app.include_router(kb_router, prefix="/api/kb")
+app.include_router(kb_rag_router, prefix="/api/kb")
 # 帖子链接的同源中继（/mirror）：必须注册在下面 SPA 的兜底路由之前，
 # 否则 /mirror/... 会被兜底路由当成前端路由、返回 index.html
 app.include_router(mirror_router)
@@ -92,6 +97,32 @@ def ensure_blacklist_schema() -> None:
         blacklist.ensure_schema()
     except Exception as e:  # 黑名单缺失不应阻断主服务启动
         _monitor_logger.warning("建立链接黑名单 schema 失败（大屏过滤将不生效）: %s", e)
+
+
+@app.on_event("startup")
+def start_kb_index() -> None:
+    """启动知识库索引后台预热线程（web/kb.py，二期）。
+
+    失败不阻断启动：索引不可用时 /api/kb/* 返回 503 明确 detail（修订 17 降级口径）。"""
+    try:
+        import kb as kb_module
+
+        kb_module.start_background()
+    except Exception as e:  # noqa: BLE001
+        _monitor_logger.warning("知识库索引预热线程启动失败: %s", e)
+
+
+@app.on_event("startup")
+def start_kb_rag() -> None:
+    """启动 RAG 向量库后台线程（web/kb_rag.py，三期）。
+
+    失败不阻断启动：向量库不可用时 /api/kb/ask 返回 503 明确 detail。"""
+    try:
+        import kb_rag as kb_rag_module
+
+        kb_rag_module.start_background()
+    except Exception as e:  # noqa: BLE001
+        _monitor_logger.warning("RAG 向量库后台线程启动失败: %s", e)
 
 
 @app.on_event("startup")

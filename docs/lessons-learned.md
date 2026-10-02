@@ -534,3 +534,14 @@ txxy_test/                  # 抓取脚本在项目根：scraper.py / run_batch.
     - **触发场景**：① 转换器（trafilatura / markdownify 等）把源页 `<a href>` 原样转成 Markdown 链接，源页含站内装饰性锚（论坛徽章 `search.php?authorid=N&digest=1`、帖头导航 `read.php?tid=N&toread=N`、面包屑 `index.php` 等）；② 产物给 Obsidian / 其它把 Markdown 链接目标当库内路径解析的消费者——无协议目标解析不到即成图谱灰节点（节点名 = 目标串），同目标被多篇引用还会聚出多条入边的假「枢纽」。
     - **强制动作**：① 转换产出必须过唯一后处理：普通链接 `[文本](目标)` 目标不以 `http(s)://` / `mailto:` / `#` 开头一律降级为纯文本（保留链接文字），图片 `![]()` 不动；帖间互链等真实关联由专门的物化机制（本项目 wikilink 互链）承担，不依赖源页锚；② 存量批量清理脚本必须字节级读写（`read_bytes`/`write_bytes`）保留原行尾，先干跑列出命中样本人工确认无误伤再实写，改完按同一判据复扫断言清零。
     - **本项目实例**：`kb_export.extract_markdown` 补 `_demote_relative_links`（修订 40）；存量实测 157 篇命中 38 篇 / 71 处（全是徽章 / 帖头导航 / 广告跳转锚，外链与图片零误伤），清理后全 vault 残留 0，真实 raw 走新转换路径实测 3 篇残留 0。
+
+74. **派生索引库落地：语料范围必须用 e2e 双向断言、后台重建线程失败必须有可见出口**（2026-10-02 确立，源于知识库二期 `web/kb.py` 隔离实测抓出两个静态检查全绿的缺陷）：
+    - **触发场景**：① 写路径按「文档类型」分支落库时——FTS 行 / 节点行 / 边表各有一套「进与不进」口径（如「语料仅 sources、实体页与 concept 页只进图谱节点」），每类写入口都可能有越界写入，代码 Review 难以保证；② 派生索引库（可重建的 SQLite / 索引文件）首次落盘——父目录（`kb_state/` 全新部署）不存在时 `sqlite3.connect` 抛 `unable to open database file`，重建线程的兜底 `except` 把它吞成一行日志，状态永停 `empty` 且无 503 区分度。
+    - **强制动作**：① 语料 / 数据范围口径必须有**正向 + 反向**两条 e2e 断言（正向：sources 可搜；反向：entities / concepts 的独有锚点词不可搜），禁止只测「能搜到」；② 派生库连接前显式 `mkdir(parents=True, exist_ok=True)`；后台线程的失败必须映射到**用户可见状态**（状态接口字段 / 503 detail），禁止只写日志。
+    - **本项目实例**：`web/kb.py _write_doc` 初版对三类页全写 FTS 行（违反方案 §3.5 修订 15「语料仅 sources」，U3b/U3c 双向用例抓出后修复）；`_connect` 补目录创建（U2 状态永停 `empty`、`kb_fts.sqlite` 缺失定位）；③**重启恢复路径**（2026-10-02 生产实例重启实测坐实）：重启后签名未变化且索引健康时无任何重建发生，状态机缺「健康即就绪」置位 → 永停 `empty`、搜索恒 503——修复为健康校验通过后显式置 ready；教训：状态机枚举「按状态分支的每一处」时必须把「什么也不发生的重启恢复路径」也代进去（原 61/66 同源）。
+
+75. **外部向量扩展的 KNN 语法必须实测取证（vec0 显式 `k = ?` 约束）；失败态的根因展示不得被「恢复路径」覆盖回默认态**（2026-10-02 确立，源于知识库三期 RAG `web/kb_rag.py` 隔离实测）：
+    - **触发场景**：① 引入 sqlite-vec / pgvector 等向量扩展做 KNN 检索，凭直觉写 `WHERE embedding MATCH ? ORDER BY distance LIMIT k`（尤其再套 JOIN / 子查询包装时）；② 状态机存在「后台恢复线程每周期把内存态对齐到库态」的路径（原 74「健康即就绪」置位），而另一条路径（重建失败、配置缺失）往内存写 `error + detail`——恢复线程无库可对齐时会把 error 覆盖回 empty，用户可见根因丢失。
+    - **强制动作**：① sqlite-vec 的 KNN 查询必须在 vec0 虚表上**显式带 `k = ?` 约束**（实测：JOIN 语境下外层 `LIMIT` 不被识别，报 `A LIMIT or 'k = ?' constraint is required on vec0 knn queries`）——用两步查询（vec0 表 `k = ?` 取主键 + distance，再回元数据表 JOIN）；接入任何向量扩展先跑最小 KNN 实测脚本再定查询形态（原 64「外部组件用法实测取证」在向量扩展上的实例）；② 恢复线程对齐内存态时，`error` 态与空库并存时必须**保留 error 根因**（除非配置已修复或人工重建），禁止无条件回落默认态——根因可见性（原 62）优先于状态美观。
+    - **本项目实例**：`web/kb_rag.py _knn` 初版 JOIN + LIMIT 实测 503（e2e B5 坐实）后改两步查询；`_tick_once` 初版「stored is None → set empty」把 rebuild 失败的 error 根因在下一 tick 覆盖掉（e2e E3 坐实）后改为 error 态保留；`_require_ready` 补「内存 error 态优先透出根因」分支（e2e E4 坐实 detail 丢根因）。隔离 e2e 23 用例全 PASS 后回归三处。
+

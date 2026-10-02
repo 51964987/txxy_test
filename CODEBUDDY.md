@@ -10,7 +10,7 @@
 ## 三个前提（决策背景事实）
 1. **单人自用、本机运行**：接口无鉴权，路径硬编码，依赖本机 1024 镜像（非标准 HTTP 代理，只能替换 host 访问）。
 2. **数据是核心资产，且跨环境搬迁**（支持离线镜像交付）。
-3. **Web 端不写 SQLite，但会写文件系统状态**（任务 JSON / 回收站索引 / NEW 快照）；数据写入只发生在项目根目录独立脚本 `scraper.py`，Web 进程以只读模式打开库（`PRAGMA query_only=ON`）。
+3. **Web 端不写 SQLite，但会写文件系统状态**（任务 JSON / 回收站索引 / NEW 快照）；数据写入只发生在项目根目录独立脚本 `scraper.py`，Web 进程以只读模式打开库（`PRAGMA query_only=ON`）。**唯一例外**：`outputs/kb_state/kb_fts.sqlite`（二期，`web/kb.py`）与 `outputs/kb_state/kb_vec.sqlite`（三期 RAG 向量库，2026-10-02，`web/kb_rag.py`）是 web 进程**独占写**、可随时整库重建的知识库派生索引库，不属业务库；kb_export 属主的 kb_state 状态文件（progress/meta/magnet/concept/llm_todo）web 进程不得写。
 
 # 技术栈
 - 后端：Python3 + **FastAPI**；SQLite（`db/posts.db`，WAL）；统计接口经 `db.cached(key)` 做 **5s TTL** 内存缓存。
@@ -35,13 +35,15 @@ txxy_test/                  # 抓取脚本在项目根：scraper.py / run_batch.
     ├── ratelimit.py  # 接口限流（固定窗口，/posts/export、/resources 挂载，超限 429）
     ├── atomicfile.py # JSON 原子落盘（临时文件 + 替换，可开 .bak 轮转）
     ├── scheduler.py  # 定时抓取调度（60s tick 线程 + 幂等状态落盘 + 复用 runs.start_run）
+    ├── kb.py         # 知识库搜索与图谱（二期 2026-10-02：FTS5+jieba 持久化索引、只读 vault，/api/kb/*）
+    ├── kb_rag.py     # 知识库 RAG 问答（三期 2026-10-02：sqlite-vec 向量库 + LLM 生成，/api/kb/ask 与 /api/kb/rag/*）
     ├── runs.py / resources.py / download_tasks.py  # 运行记录 / 资源扫描 / 下载中心队列
     └── frontend/src/
         ├── api/ stores/ router/ layout/ components/ views/ utils/ composables/
-        └── views/    # Dashboard / Posts / Runs / Resources / Downloads / Trash / Settings 七个页面
+        └── views/    # Dashboard / Posts / Runs / Resources / Downloads / Trash / Kb / Settings 八个页面
 ```
 
-前端路由为 `/`、`/posts`、`/runs`、`/resources`、`/downloads`、`/trash`、`/settings` 七条。
+前端路由为 `/`、`/posts`、`/runs`、`/resources`、`/downloads`、`/trash`、`/kb`、`/settings` 八条。
 
 # 已有共享实现索引（唯一实现位置清单）
 
@@ -73,3 +75,5 @@ txxy_test/                  # 抓取脚本在项目根：scraper.py / run_batch.
 | 布尔环境变量解析 | `web/config.py: _env_bool()` | 布尔配置解析入口 |
 | 定时抓取调度 | `web/scheduler.py: JobScheduler` | 应用内调度（60s tick 守护线程，任务注册模式 `ScheduledJob`/`ScrapeJob`/`PrecipitateJob`）：复用 `runs.start_run`、幂等键落盘、错过不补跑（`ScrapeScheduler` 为旧名） |
 | 错误提示 | `web/app.py` + 前端 `ElMessage.error` | 后端统一 `detail`，前端统一解析 |
+| 知识库 FTS 索引与分词 | `web/kb.py`（二期 2026-10-02） | `segment()`（jieba 预分词，索引与查询同一实现）与 `build_match_query()`（token 引号转义）唯一实现；索引持久化 `outputs/kb_state/kb_fts.sqlite`（web 独占写的可重建派生库）；互链表预提取（sources+entities+concepts 三目录）；图谱节点上限 500 / 边随节点集裁剪 / 度数上限 120 常量唯一定义于此 |
+| 知识库 RAG 问答与 embedding 配置 | `web/kb_rag.py`（三期 2026-10-02） | 向量库 `outputs/kb_state/kb_vec.sqlite`（web 独占写可重建派生库，sqlite-vec vec0 虚表，**KNN 必须在 vec0 表上显式 `k = ?` 约束、JOIN 语境下外层 LIMIT 不被识别**——原 75）；分块 / 嵌入 / 生成 / 状态机（empty/ready/rebuilding/mismatch/error）唯一实现；embedding 配置默认值与 `embed_id()` 四元组标识唯一定义 `web/config.py`（env-only：TXXY_EMBED_*，密钥复用 `{PROVIDER}_API_KEY`）；向量语料 = wiki/sources（复用 kb.parse_doc，`_iter_md_files(subs)` 参数化取 ("sources",)） |

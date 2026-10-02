@@ -655,6 +655,134 @@ export interface KbLogsResult {
   progress: KbLogProgress | null
 }
 
+// ==================== 知识库二期（web/kb.py，方案 §3.5） ====================
+
+/** 全文搜索单条结果（字段与后端 kb_fts unindexed 元数据列同源，修订 33） */
+export interface KbSearchItem {
+  /** vault 相对路径（wiki/sources/<版块>/<文件>.md），「复制 vault 路径」用 */
+  rel: string
+  title: string
+  /** 帖子入库相对路径（/htm_data/...），跳原帖经 postUrl.ts 同源中继 */
+  url: string
+  date: string
+  fid: string
+  fid_name: string
+  /** 纯文本摘要（后端原文定位取窗；前端禁 v-html，只用文本插值 + tokens 切分高亮） */
+  snippet: string
+  score: number
+}
+
+/** 全文搜索响应（BM25 排序；tokens 供前端高亮切分，与索引分词同一 segment() 口径） */
+export interface KbSearchResp {
+  total: number
+  items: KbSearchItem[]
+  tokens: string[]
+  /** 关键词无有效分词时的提示（非空 = 未执行检索） */
+  hint?: string
+}
+
+/** 图谱节点（三类：source=笔记 / concept=概念页 / entity=实体页，修订 34 措辞） */
+export interface KbGraphNode {
+  id: string
+  name: string
+  kind: 'source' | 'concept' | 'entity'
+  /** 实体页子目录（authors / sections / derived） */
+  sub?: string
+  url?: string
+  date?: string
+  fid?: string
+  degree: number
+}
+
+/** 图谱响应：边集已随节点集同源裁剪 + 单节点度数上限（修订 32），truncated 需明示 */
+export interface KbGraphResp {
+  nodes: KbGraphNode[]
+  edges: { source: string; target: string }[]
+  truncated: boolean
+  total_nodes: number
+  node_cap: number
+  degree_cap: number
+}
+
+/** 索引状态（GET /api/kb/status：重建进度页面可见读端，原 62） */
+export interface KbIndexStatus {
+  state: 'empty' | 'ready' | 'rebuilding'
+  progress: { done: number; total: number } | null
+  pending_swap: boolean
+  signature_age_sec: number | null
+  jieba_version: string
+  built_at: string | null
+  docs: number
+  nodes: number
+  edges: number
+}
+
+// ==================== 知识库三期 RAG（web/kb_rag.py，方案 §3.6） ====================
+
+/** RAG 状态五分支（穷举，与后端 STATUSES 同源）：mismatch = embedding 配置变化待重建 */
+export type KbRagState = 'empty' | 'ready' | 'rebuilding' | 'mismatch' | 'error'
+
+/** embedding 生效配置（只读展示：env → 代码默认，页内不可改，方案 §3.8-5） */
+export interface KbRagEmbedConfig {
+  provider: string
+  model: string
+  base_url: string
+  dimensions: number
+  ready: boolean
+  reason: string
+  source: string
+}
+
+/** 生成后端生效配置（复用设置页「知识库」组的 LLM 三元组，只读展示） */
+export interface KbRagGenerationConfig {
+  provider: string
+  model: string
+  base_url: string
+  source: string
+}
+
+/** RAG 状态（GET /api/kb/rag/status：进度页面可见读端，廉价——不扫盘不调外部 API） */
+export interface KbRagStatus {
+  state: KbRagState
+  detail: string
+  progress: { done: number; total: number } | null
+  rebuild_queued: boolean
+  pending_swap: boolean
+  chunks: number
+  built_at: string | null
+  embed_id: string | null
+  embed: KbRagEmbedConfig
+  generation: KbRagGenerationConfig
+}
+
+/** 引用条目（向量召回片段；rel/url 可回原帖与 vault） */
+export interface KbCitation {
+  rel: string
+  title: string
+  url: string
+  date: string
+  fid: string
+  fid_name: string
+  snippet: string
+  score: number
+}
+
+/** RAG 问答响应（非流式；answer 纯文本，前端文本插值渲染——禁 v-html，修订 16） */
+export interface KbAskResp {
+  answer: string
+  model: string
+  usage_tokens: number
+  citations: KbCitation[]
+}
+
+/** RAG 重建日志（GET /api/kb/rag/logs?after=：环形缓冲增量 + 运行态 + 重嵌进度；机理同 kb 批次日志） */
+export interface KbRagLogsResult {
+  running: boolean
+  lines: KbLogLine[]
+  last_seq: number
+  progress: { done: number; total: number } | null
+}
+
 export interface PostsPage {
   total: number
   page: number
@@ -973,6 +1101,24 @@ export const api = {
   kbRun: () => post<{ started: boolean }>('/kb/run'),
   /** 知识库批次运行现场：after 之后的增量日志行 + 结构化进度 + 运行态（日志抽屉 2s 轮询） */
   kbLogs: (after: number) => get<KbLogsResult>(`/kb/logs?after=${after}`),
+  /** 知识库全文搜索（BM25 + 原文摘要，二期 §3.5） */
+  kbSearch: (q: string, fid?: string, limit = 20) =>
+    get<KbSearchResp>('/kb/search', { q, fid, limit }),
+  /** 知识库图谱（节点三类 + 预提取互链边；limit = 节点上限，center = 下钻中心）。
+   *  全库重建后首次请求 / 大图组装可能超 10s：不设短超时，避免误报失败 */
+  kbGraph: (fid?: string, limit = 500, center?: string) =>
+    request<KbGraphResp>('/kb/graph', { fid, limit, center }, { timeout: 30000, dedupe: false }),
+  /** 知识库索引状态（重建进度 / 文档数 / 边数，/kb 页顶部状态条） */
+  kbIndexStatus: () => get<KbIndexStatus>('/kb/status'),
+  /** RAG 问答（非流式：嵌入 + 生成链路，后端限流 6 次/分；生成耗时可达数十秒，放宽超时） */
+  kbAsk: (question: string, topK = 8) =>
+    post<KbAskResp>('/kb/ask', { question, top_k: topK }),
+  /** RAG 状态（状态五分支 + 重嵌进度 + embed/generation 生效配置只读展示） */
+  kbRagStatus: () => get<KbRagStatus>('/kb/rag/status'),
+  /** 触发全量重嵌（后台执行；重嵌中 / kb 批次活跃 → 409） */
+  kbRagRebuild: () => post<{ queued: boolean }>('/kb/rag/rebuild'),
+  /** RAG 重建执行日志（after 游标增量轮询，2s 周期；机理同 kbLogs） */
+  kbRagLogs: (after: number) => get<KbRagLogsResult>(`/kb/rag/logs?after=${after}`),
   saveSettings: (items: Record<string, number | boolean | string[] | string>) =>
     put<{ ok: boolean; settings: SettingItem[] }>('/settings', { items }),
   resetSettings: (keys: string[] = []) =>

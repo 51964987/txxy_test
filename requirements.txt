@@ -15,3 +15,13 @@ lxml_html_clean>=0.1.0
 markdownify>=0.13.0
 # frontmatter YAML 序列化（禁止字符串手拼：标题/作者含 YAML 特殊字符会解析坏）
 PyYAML>=6.0
+# ---- 知识库搜索（web/kb.py 二期，方案 §3.5） ----
+# FTS5 中文 jieba 预分词：**锁定版本**（内置词典随包版本漂移会使持久化索引与升级后的
+# 查询分词不一致、召回静默下降；版本号随 kb_fts.sqlite 落盘，不一致整库重建，修订 14）
+jieba==0.42.1
+# ---- 知识库 RAG 问答（web/kb_rag.py 三期，方案 §3.6） ----
+# sqlite-vec：SQLite 向量扩展（单文件库，延续 SQLite 路线）；锁定版本（vec0 虚表行为随
+# 版本演进，向量库 dim/embed_id 任一变化整库重嵌，不兼容旧库格式）。
+# 前置项已实测（2026-10-02）：本机 Python sqlite3 3.42.0 enable_load_extension 可用，
+# vec0 虚表创建 + KNN 查询全链路通过（方案 §四-2 销项）
+sqlite-vec==0.1.9

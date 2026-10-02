@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useAppStore } from '../stores/app'
 import {
   Clock,
+  Collection,
   Delete,
   Document,
   Download,
@@ -33,6 +34,7 @@ const MENU_ITEMS: MenuItem[] = [
   { path: '/resources', title: '资源管理', icon: FolderOpened },
   { path: '/downloads', title: '下载中心', icon: Download },
   { path: '/trash', title: '回收管理', icon: Delete },
+  { path: '/kb', title: '知识库', icon: Collection },
   { path: '/settings', title: '参数设置', icon: Setting },
 ]
 

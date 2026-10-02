@@ -41,6 +41,12 @@ const router = createRouter({
       meta: { title: '回收管理' },
     },
     {
+      path: '/kb',
+      name: 'kb',
+      component: () => import('../views/KbView.vue'),
+      meta: { title: '知识库' },
+    },
+    {
       path: '/settings',
       name: 'settings',
       component: () => import('../views/SettingsView.vue'),

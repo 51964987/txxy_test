@@ -360,6 +360,81 @@ KB_DATE_SCOPES = ["all", "today", "yesterday", "3d", "7d"]
 KB_DATE_SCOPE_DEFAULT = "all"  # 与原 kb_only_today 代码默认（不限）同语义；「今天」由页内覆盖承担
 
 
+# ---- RAG 问答 embedding 配置（三期，方案 §3.6 / §3.8-5）----
+# **env-only**：embed_provider / embed_model / embed_base_url 不进设置页白名单（改动走
+# env + 重启——页内一键改会触发整库重嵌，方案 §3.8-5 拍板）；生效值经 /api/kb/rag/status
+# 只读展示（来源链：环境变量 → 代码默认）。密钥复用 LLM 的 {PROVIDER 大写}_API_KEY 解析
+# （GLM_API_KEY / CUSTOM_API_KEY；Ollama 无需），绝不入 web_settings.json / 快照。
+# 各档官方端点取证（2026-10-02）：
+#   Ollama：docs.ollama.com/api/openai-compatibility 明列「POST /v1/embeddings」支持，
+#           请求字段 model + input（字符串 / 字符串数组），OpenAI 兼容；
+#   GLM：docs.bigmodel.cn embedding-3「POST https://open.bigmodel.cn/api/paas/v4/embeddings」，
+#           OpenAI 兼容，input ≤64 条、单条 ≤3072 Tokens，dimensions 可选 256–2048
+#           （**不传默认 2048**——dimensions 必须纳入 embed_id，否则维度漂移令新旧向量混存）；
+#   DeepSeek：官方文档无 embeddings 端点，不设档。
+EMBED_PROVIDER_SPECS: dict[str, dict[str, Any]] = {
+    "ollama": {
+        "label": "本地 Ollama",
+        "base_url": "http://127.0.0.1:11434/v1",
+        "models": ["bge-m3"],  # Ollama 官方 library 内置 embedding 模型
+    },
+    "glm": {
+        "label": "GLM / 智谱（云 API）",
+        "base_url": "https://open.bigmodel.cn/api/paas/v4",
+        "models": ["embedding-3"],
+    },
+    "custom": {
+        "label": "自定义（OpenAI 兼容）",
+        "base_url": "",  # 必填：环境变量自填地址
+        "models": [],
+    },
+}
+EMBED_PROVIDER_DEFAULT = "glm"      # 云 = 默认质量档（§3.8-2：Ollama 为离线兜底 + 免费试跑）
+EMBED_MODEL_DEFAULT = ""            # 空 = 未配置（RAG 降级拒答并给明确 reason）
+EMBED_DIMENSIONS_DEFAULT = 0        # 0 = 不传 dimensions（跟随服务端默认）；>0 显式传入
+
+
+def embed_config() -> tuple[str, str, str, int]:
+    """embedding 四元组（provider, model, base_url, dimensions）：env > 代码默认（原 31 链）。
+    embed 是 env-only 配置，没有页内覆盖层；provider 存量脏值回落默认档。"""
+    provider = os.environ.get("TXXY_EMBED_PROVIDER", "").strip().lower() or EMBED_PROVIDER_DEFAULT
+    if provider not in EMBED_PROVIDER_SPECS:
+        provider = EMBED_PROVIDER_DEFAULT
+    model = os.environ.get("TXXY_EMBED_MODEL", "").strip()
+    if not model:
+        models = EMBED_PROVIDER_SPECS[provider].get("models") or []
+        model = str(models[0]) if models else EMBED_MODEL_DEFAULT
+    base = os.environ.get("TXXY_EMBED_BASE_URL", "").strip()
+    if not base:
+        base = str(EMBED_PROVIDER_SPECS[provider].get("base_url") or "")
+    try:
+        dims = int(os.environ.get("TXXY_EMBED_DIMENSIONS", "0").strip() or "0")
+    except ValueError:
+        dims = 0
+    return provider, model, base, max(0, dims)
+
+
+def embed_id() -> str:
+    """embedding 模型标识（向量库 meta 落盘用，方案 §3.8-2「单选 + 禁止混存」）：
+    四元组全量参与——任一变化（含 dimensions）都要求整库重嵌，标识不一致拒答。"""
+    provider, model, base, dims = embed_config()
+    return f"{provider}|{model}|{base}|{dims}"
+
+
+def embed_ready() -> tuple[bool, str]:
+    """embedding 后端可用性：(True, "") 或 (False, 机器可读原因)。key 复用 LLM 档解析。"""
+    provider, model, base, _dims = embed_config()
+    if not model:
+        return False, "embedding 模型未配置（TXXY_EMBED_MODEL 或代码默认缺失）"
+    if provider == "custom" and not os.environ.get("TXXY_EMBED_BASE_URL", "").strip():
+        return False, "custom 档必须显式设置 TXXY_EMBED_BASE_URL"
+    if not base:
+        return False, "embedding base_url 为空（TXXY_EMBED_BASE_URL）"
+    if provider != "ollama" and not llm_api_key(provider):
+        return False, f"{llm_key_env(provider)} 未设置（{provider} 档；密钥从环境变量读取）"
+    return True, ""
+
+
 def kb_date_window(scope: str, today: str) -> tuple[str | None, str | None]:
     """kb_date_scope → 发布日期闭区间 [lo, hi]（与 posts.date 同为 YYYY-MM-DD 字符串，可直接比较）。
     today = 服务本地时区的当天（YYYY-MM-DD）。未知值一律回落「不限」（all），不抛错。"""
